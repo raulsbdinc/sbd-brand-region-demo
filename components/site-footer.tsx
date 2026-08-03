@@ -1,3 +1,4 @@
+import { CountryFlag } from "@/components/country-flag"
 import { SITE_BRAND_INFO, SITE_CONTENT, SITE_COUNTRY } from "@/lib/site"
 
 // Static storefront footer columns. Labels only — this is a demonstration
@@ -26,7 +27,8 @@ export function SiteFooter() {
               {SITE_CONTENT.footerTagline}
             </p>
             <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-foreground">
-              <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 font-semibold">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 font-semibold">
+                <CountryFlag country={SITE_COUNTRY.id} />
                 {SITE_COUNTRY.code}
               </span>
               {SITE_CONTENT.marketLine}

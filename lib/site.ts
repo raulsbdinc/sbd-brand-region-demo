@@ -131,3 +131,15 @@ export const SITE_CONTENT: StorefrontContent = storefrontContent(
   SITE_BRAND,
   SITE_MARKET,
 )
+
+// Header category nav, chosen per brand (a brand-fact table like BRAND_VOICE,
+// never hardcoded to one brand). These are plausible top-level departments for
+// each brand's catalogue — enough to read as a real storefront to an executive
+// audience, replacing the old "For Position Only" placeholder.
+const BRAND_NAV: Record<BrandId, string[]> = {
+  dewalt: ["Power Tools", "Hand Tools", "Accessories", "Storage"],
+  craftsman: ["Power Tools", "Hand Tools", "Lawn & Garden", "Tool Storage"],
+}
+
+/** The header category list for this deployment's brand. */
+export const SITE_NAV: string[] = BRAND_NAV[SITE_BRAND]

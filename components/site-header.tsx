@@ -1,14 +1,14 @@
 "use client"
 
-import { useState } from "react"
 import useSWR from "swr"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { LogOut, ShoppingCart, UserRound } from "lucide-react"
 import { useApp } from "@/components/app-providers"
 import { BrandWordmark } from "@/components/brand-wordmark"
+import { CountryFlag } from "@/components/country-flag"
 import { SignInDrawer } from "@/components/sign-in-drawer"
-import { SITE_BRAND_INFO, SITE_COUNTRY } from "@/lib/site"
+import { SITE_BRAND_INFO, SITE_COUNTRY, SITE_NAV } from "@/lib/site"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,8 +19,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-const NAV_ITEMS = ["Power Tools", "Accessories", "For Position Only"]
-
 interface RealUserResponse {
   user: { name: string; email: string | null; picture: string | null } | null
 }
@@ -29,9 +27,9 @@ const fetcher = (url: string) =>
   fetch(url).then((r) => r.json() as Promise<RealUserResponse>)
 
 export function SiteHeader() {
-  const { session, logout, authConfigured } = useApp()
+  const { session, logout, authConfigured, signInOpen, openSignIn, closeSignIn } =
+    useApp()
   const router = useRouter()
-  const [signInOpen, setSignInOpen] = useState(false)
 
   // When there's no client-side mock session, the user may still hold a REAL
   // Auth0 session from a promoted flow (social / password). Detect it so the
@@ -57,6 +55,7 @@ export function SiteHeader() {
         {/* Market indicator: makes DeWalt France / DeWalt Germany / Craftsman
             France unmistakable at a glance. Driven by SITE_MARKET. */}
         <span className="ml-1 inline-flex items-center gap-1.5 rounded-full border border-[var(--brand-ink-foreground)]/25 px-2.5 py-1 text-xs font-medium text-[var(--brand-ink-foreground)]/80">
+          <CountryFlag country={SITE_COUNTRY.id} />
           <span className="font-semibold text-[var(--brand-ink-foreground)]">
             {SITE_COUNTRY.code}
           </span>
@@ -64,7 +63,7 @@ export function SiteHeader() {
         </span>
 
         <nav className="ml-2 hidden items-center gap-4 text-sm font-medium text-[var(--brand-ink-foreground)]/80 md:flex">
-          {NAV_ITEMS.map((item) => (
+          {SITE_NAV.map((item) => (
             <span key={item} className="cursor-default">
               {item}
             </span>
@@ -169,7 +168,7 @@ export function SiteHeader() {
           ) : (
             <button
               type="button"
-              onClick={() => setSignInOpen(true)}
+              onClick={() => openSignIn()}
               title="Sign in"
               className="flex items-center gap-2 rounded-md p-2 text-[var(--brand-ink-foreground)]/80 transition-colors hover:bg-[var(--brand-ink-foreground)]/10 hover:text-[var(--brand-ink-foreground)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
             >
@@ -180,7 +179,7 @@ export function SiteHeader() {
         </div>
       </div>
 
-      <SignInDrawer open={signInOpen} onClose={() => setSignInOpen(false)} />
+      <SignInDrawer open={signInOpen} onClose={closeSignIn} />
     </header>
   )
 }

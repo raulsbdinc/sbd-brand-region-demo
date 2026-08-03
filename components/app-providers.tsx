@@ -23,6 +23,16 @@ interface AppState {
   setCountry: (c: CountryId) => void
   session: Session | null
   setSession: (s: Session | null) => void
+  /**
+   * Whether the storefront sign-in drawer is open. Lifted here (rather than
+   * held locally in SiteHeader) so any signed-out entry point — the hero CTA,
+   * an Add-to-cart button, the welcome-page guard — can open the branded drawer
+   * instead of navigating to the old /signin route. SiteHeader still renders the
+   * drawer itself; these just flip the shared flag.
+   */
+  signInOpen: boolean
+  openSignIn: () => void
+  closeSignIn: () => void
   tokenInspectorOpen: boolean
   setTokenInspectorOpen: (o: boolean) => void
   activeFlow: MethodId | null
@@ -60,6 +70,7 @@ export function AppProviders({
   const [brand, setBrand] = useState<BrandId>(SITE_BRAND)
   const [country, setCountry] = useState<CountryId>(SITE_MARKET)
   const [session, setSession] = useState<Session | null>(null)
+  const [signInOpen, setSignInOpen] = useState(false)
   const [tokenInspectorOpen, setTokenInspectorOpen] = useState(false)
   const [activeFlow, setActiveFlow] = useState<MethodId | null>(null)
   const router = useRouter()
@@ -91,6 +102,9 @@ export function AppProviders({
       setCountry,
       session,
       setSession,
+      signInOpen,
+      openSignIn: () => setSignInOpen(true),
+      closeSignIn: () => setSignInOpen(false),
       tokenInspectorOpen,
       setTokenInspectorOpen,
       activeFlow,
@@ -99,7 +113,7 @@ export function AppProviders({
       logout,
       authConfigured,
     }),
-    [brand, country, session, tokenInspectorOpen, activeFlow, logout, authConfigured],
+    [brand, country, session, signInOpen, tokenInspectorOpen, activeFlow, logout, authConfigured],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

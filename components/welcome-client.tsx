@@ -15,12 +15,18 @@ import { Button } from "@/components/ui/button"
 // client-side mock session produced by the simulated flows (passkey, magic
 // link, email code, SSO, QR) and shows the metrics + token inspector demo.
 export function WelcomeClient() {
-  const { session, setTokenInspectorOpen, logout } = useApp()
+  const { session, setTokenInspectorOpen, logout, openSignIn } = useApp()
   const router = useRouter()
 
   useEffect(() => {
-    if (!session) router.replace("/signin")
-  }, [session, router])
+    // No mock session: land on the branded storefront with the sign-in drawer
+    // open, rather than the old /signin showcase. The drawer flag lives in
+    // context, so it survives this client navigation and opens once home mounts.
+    if (!session) {
+      openSignIn()
+      router.replace("/")
+    }
+  }, [session, router, openSignIn])
 
   if (!session) return null
 

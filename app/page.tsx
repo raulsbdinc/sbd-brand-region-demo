@@ -9,8 +9,12 @@ import { SITE_CONTENT, formatPrice } from "@/lib/site"
 import { Button } from "@/components/ui/button"
 
 export default function HomePage() {
-  const { session } = useApp()
+  const { session, openSignIn } = useApp()
   const router = useRouter()
+
+  // Signed-out entry points open the branded drawer in place; signed-in ones
+  // go to the account/session page. Never route to the old /signin showcase.
+  const enter = () => (session ? router.push("/welcome") : openSignIn())
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 pb-16 sm:px-6">
@@ -32,7 +36,7 @@ export default function HomePage() {
               <Button
                 size="lg"
                 className="h-12 px-6 text-base font-semibold"
-                onClick={() => router.push(session ? "/welcome" : "/signin")}
+                onClick={enter}
               >
                 {session ? "Go to your account" : "Sign in or create account"}
                 <ArrowRight className="size-5" />
@@ -90,7 +94,7 @@ export default function HomePage() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => router.push(session ? "/welcome" : "/signin")}
+                    onClick={enter}
                   >
                     Add to cart
                   </Button>
