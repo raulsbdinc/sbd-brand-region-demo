@@ -326,6 +326,12 @@ inspector and the footer links to the comparison pages. The routes still exist
 and still work; they are simply no longer linked. **`/welcome` is untouched on
 purpose**, because its decoded ID token panel is what proves the demo on stage.
 
+Every signed-out entry point — the hero button, each Add to cart, and the
+`/welcome` guard — now opens the branded drawer in place rather than navigating
+to `/signin`. That page is the old unbranded proof of concept, and one stray
+click during the demo would have put it on screen instead of the Polaris panel.
+The drawer's open state lives in `app-providers` so any component can raise it.
+
 ## Presentation decisions
 
 **Copy stays in English on all three sites**, including France and Germany. The
