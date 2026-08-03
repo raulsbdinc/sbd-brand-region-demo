@@ -7,8 +7,8 @@ import { useRouter } from "next/navigation"
 import { LogOut, ShoppingCart, UserRound } from "lucide-react"
 import { useApp } from "@/components/app-providers"
 import { BrandWordmark } from "@/components/brand-wordmark"
-import { PocNav } from "@/components/poc-nav"
 import { SignInDrawer } from "@/components/sign-in-drawer"
+import { SITE_BRAND_INFO, SITE_COUNTRY } from "@/lib/site"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,8 +51,17 @@ export function SiteHeader() {
           className="flex items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
         >
           <BrandWordmark onDark />
-          <span className="sr-only">Go to storefront home</span>
+          <span className="sr-only">{`${SITE_BRAND_INFO.name} ${SITE_COUNTRY.name} storefront home`}</span>
         </Link>
+
+        {/* Market indicator: makes DeWalt France / DeWalt Germany / Craftsman
+            France unmistakable at a glance. Driven by SITE_MARKET. */}
+        <span className="ml-1 inline-flex items-center gap-1.5 rounded-full border border-[var(--brand-ink-foreground)]/25 px-2.5 py-1 text-xs font-medium text-[var(--brand-ink-foreground)]/80">
+          <span className="font-semibold text-[var(--brand-ink-foreground)]">
+            {SITE_COUNTRY.code}
+          </span>
+          <span className="hidden sm:inline">{SITE_COUNTRY.name}</span>
+        </span>
 
         <nav className="ml-2 hidden items-center gap-4 text-sm font-medium text-[var(--brand-ink-foreground)]/80 md:flex">
           {NAV_ITEMS.map((item) => (
@@ -60,8 +69,6 @@ export function SiteHeader() {
               {item}
             </span>
           ))}
-          <span className="h-4 w-px bg-[var(--brand-ink-foreground)]/20" aria-hidden="true" />
-          <PocNav />
         </nav>
 
         <div className="ml-auto flex items-center gap-2">

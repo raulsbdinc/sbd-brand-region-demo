@@ -6,7 +6,6 @@ import { BRANDS } from "@/lib/brands"
 import { SiteHeader } from "@/components/site-header"
 import { SiteFooter } from "@/components/site-footer"
 import { DeviceFrame } from "@/components/device-frame"
-import { TokenInspector } from "@/components/token-inspector"
 import { ToastProvider } from "@/components/ui/toast"
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -27,7 +26,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SiteHeader />
         <DeviceFrame>{children}</DeviceFrame>
         <SiteFooter />
-        <TokenInspector />
       </ToastProvider>
     </div>
   )

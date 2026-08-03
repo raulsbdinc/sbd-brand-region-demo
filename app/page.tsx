@@ -1,18 +1,16 @@
 "use client"
 
 import Image from "next/image"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react"
 import { useApp } from "@/components/app-providers"
-import { BRANDS } from "@/lib/brands"
 import { PRODUCTS } from "@/lib/products"
+import { SITE_CONTENT, formatPrice } from "@/lib/site"
 import { Button } from "@/components/ui/button"
 
 export default function HomePage() {
-  const { brand, session } = useApp()
+  const { session } = useApp()
   const router = useRouter()
-  const b = BRANDS[brand]
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 pb-16 sm:px-6">
@@ -22,15 +20,13 @@ export default function HomePage() {
           <div className="p-8 sm:p-12">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
               <Sparkles className="size-3.5 text-primary" />
-              {b.category}
+              {SITE_CONTENT.eyebrow}
             </span>
             <h1 className="mt-4 text-balance text-4xl font-extrabold tracking-tight sm:text-5xl">
-              Gear up with {b.name}.
+              {SITE_CONTENT.headline}
             </h1>
             <p className="mt-4 max-w-md text-pretty leading-relaxed text-muted-foreground">
-              Explore a sample cordless lineup and try the account journeys. The
-              products, prices, cart, orders, registrations, and pro pricing are
-              part of the demo only.
+              {SITE_CONTENT.subcopy}
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <Button
@@ -41,12 +37,6 @@ export default function HomePage() {
                 {session ? "Go to your account" : "Sign in or create account"}
                 <ArrowRight className="size-5" />
               </Button>
-              <Link
-                href="/journeys"
-                className="text-sm font-semibold text-foreground underline-offset-4 hover:underline"
-              >
-                Compare sign-in methods
-              </Link>
             </div>
           </div>
           <div className="relative aspect-[4/3] w-full">
@@ -65,9 +55,8 @@ export default function HomePage() {
       {/* Trust strip */}
       <div className="mt-4 flex items-center gap-2 rounded-xl border border-dashed border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
         <ShieldCheck className="size-4 text-primary" />
-        This is a demo storefront. Products and shopping actions are not real. Some
-        sign-in paths use Auth0 when this deployment is configured; the rest are
-        clearly marked demos.
+        Demonstration storefront. Products, prices, and checkout are for
+        illustration; account sign-in is live.
       </div>
 
       {/* Products */}
@@ -97,7 +86,7 @@ export default function HomePage() {
                   {p.blurb}
                 </p>
                 <div className="mt-4 flex items-center justify-between">
-                  <span className="text-lg font-bold text-foreground">${p.price}</span>
+                  <span className="text-lg font-bold text-foreground">{formatPrice(p.price)}</span>
                   <Button
                     variant="secondary"
                     size="sm"
