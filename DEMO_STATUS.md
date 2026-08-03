@@ -279,12 +279,20 @@ is the safety net for that inference.
 ## Not yet configured
 
 **Phone passcodes.** `phone_otp` sits alongside `email_otp` on `sbd-eu` and needs
-no new connection — only an SMS provider on the tenant.
-`POST /branding/phone/providers` previously returned 409 because an unbound
-`Custom Phone Provider` Action from the earlier POC occupied the slot; the
-providers list now reads empty, so it may be creatable. Any provider (Twilio,
-Vonage, MessageBird, Infobip) needs an account. Email passcodes carry this half
-of the demo meanwhile.
+no new connection — only an SMS provider on the tenant. That is the blocker.
+
+`POST /branding/phone/providers` returns **409 "Notification Operation
+Conflicted"** no matter what is sent. Ruled out as causes on 3 August, so do not
+re-investigate these: the providers list is empty; there is no `sms`-strategy
+connection; `/guardian/factors/phone/providers` and `/guardian/factors/sms/
+providers` both 404; the Guardian `sms` factor is disabled; and the unbound
+`Custom Phone Provider` Action that was suspected of holding the slot has been
+deleted, which changed nothing.
+
+The remaining likely explanation is that phone provider management is restricted
+on this `cic-demo-platform` tenant, which would make it an Auth0 support question
+rather than something to solve by API. Email passcodes carry the "different login
+methods" half of the demo meanwhile.
 
 ## Credentials
 
