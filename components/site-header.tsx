@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import useSWR from "swr"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -7,6 +8,13 @@ import { LogOut, ShoppingCart, UserRound } from "lucide-react"
 import { useApp } from "@/components/app-providers"
 import { BrandWordmark } from "@/components/brand-wordmark"
 import { PocNav } from "@/components/poc-nav"
+import { SignInDrawer } from "@/components/sign-in-drawer"
+import {
+  PASSWORD_CONNECTION,
+  buildAuthLoginUrl,
+  startAuthRedirect,
+} from "@/lib/auth0-connections"
+import { looksLikeEmail } from "@/lib/auth-service"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,6 +37,22 @@ const fetcher = (url: string) =>
 export function SiteHeader() {
   const { session, logout, authConfigured } = useApp()
   const router = useRouter()
+  const [signInOpen, setSignInOpen] = useState(false)
+
+  // The drawer stays presentational; auth logic lives here. This replicates the
+  // existing password flow: redirect to Auth0 Universal Login against this
+  // deployment's database connection, pre-filling the typed email. (The password
+  // is intentionally unused for now — it's reserved for the embedded credential
+  // exchange coming in the next step.)
+  function handleSignInSubmit(email: string, _password: string) {
+    startAuthRedirect(
+      buildAuthLoginUrl({
+        connection: PASSWORD_CONNECTION,
+        returnTo: "/welcome",
+        loginHint: looksLikeEmail(email) ? email : undefined,
+      }),
+    )
+  }
 
   // When there's no client-side mock session, the user may still hold a REAL
   // Auth0 session from a promoted flow (social / password). Detect it so the
@@ -159,7 +183,7 @@ export function SiteHeader() {
           ) : (
             <button
               type="button"
-              onClick={() => router.push("/signin")}
+              onClick={() => setSignInOpen(true)}
               title="Sign in"
               className="flex items-center gap-2 rounded-md p-2 text-[var(--brand-ink-foreground)]/80 transition-colors hover:bg-[var(--brand-ink-foreground)]/10 hover:text-[var(--brand-ink-foreground)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
             >
@@ -169,6 +193,12 @@ export function SiteHeader() {
           )}
         </div>
       </div>
+
+      <SignInDrawer
+        open={signInOpen}
+        onClose={() => setSignInOpen(false)}
+        onSubmit={handleSignInSubmit}
+      />
     </header>
   )
 }

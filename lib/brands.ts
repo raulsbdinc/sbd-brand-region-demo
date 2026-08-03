@@ -34,6 +34,21 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-border": "#e4e4e7",
       "--brand-foreground-strong": "#18181b",
       "--brand-muted-foreground": "#5c5c66",
+      // Sign-in surface facts, measured off the live DeWalt site. Display face
+      // is Archivo Expanded (Archivo + wdth, stretched 125% — see app/layout).
+      "--brand-display-font": "var(--font-archivo), 'Archivo Fallback', sans-serif",
+      "--brand-display-stretch": "125%",
+      "--brand-display-case": "uppercase",
+      "--brand-display-tracking": "-0.0146em",
+      "--brand-heading-size": "24px",
+      "--brand-heading-line": "28px",
+      "--brand-button-radius": "0px",
+      "--brand-button-size": "12px",
+      "--brand-input-border": "#d7d5d5",
+      "--brand-label-color": "#231e20",
+      "--brand-label-muted": "#646062",
+      "--brand-description-color": "#413d3f",
+      "--brand-button-text": "#231e20",
     },
   },
   craftsman: {
@@ -51,6 +66,23 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-border": "#ced4d4",
       "--brand-foreground-strong": "#181a1b",
       "--brand-muted-foreground": "#768084",
+      // Sign-in surface facts, measured off the live Craftsman site.
+      // NOTE: Craftsman's real display face is GT America, which is commercially
+      // licensed and unavailable to us — this substitutes Inter. It is NOT the
+      // real Craftsman typeface; do not mistake it for GT America.
+      "--brand-display-font": "var(--font-inter), 'Inter Fallback', sans-serif",
+      "--brand-display-stretch": "normal",
+      "--brand-display-case": "none",
+      "--brand-display-tracking": "-0.0034em",
+      "--brand-heading-size": "30px",
+      "--brand-heading-line": "34px",
+      "--brand-button-radius": "9999px",
+      "--brand-button-size": "14px",
+      "--brand-input-border": "#ced4d4",
+      "--brand-label-color": "#181a1b",
+      "--brand-label-muted": "#768084",
+      "--brand-description-color": "#53585a",
+      "--brand-button-text": "#ffffff",
     },
   },
 }

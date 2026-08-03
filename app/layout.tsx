@@ -1,12 +1,21 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist_Mono, Inter, Archivo } from 'next/font/google'
 import './globals.css'
 import { AppProviders } from '@/components/app-providers'
 import { AppShell } from '@/components/app-shell'
 import { isAuthConfigured } from '@/lib/auth0'
 
-const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
+// Body font for both brands.
+const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
+// DeWalt's display face is Archivo Expanded. We load Archivo as a variable font
+// including the width (wdth) axis; the drawer applies font-stretch: 125% via the
+// --brand-display-stretch token to reach the "Expanded" cut.
+const archivo = Archivo({
+  variable: '--font-archivo',
+  subsets: ['latin'],
+  axes: ['wdth'],
+})
 const geistMono = Geist_Mono({
   variable: '--font-geist-mono',
   subsets: ['latin'],
@@ -100,7 +109,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} bg-background`}
+      className={`${inter.variable} ${archivo.variable} ${geistMono.variable} bg-background`}
     >
       <body className="font-sans antialiased">
         <AppProviders authConfigured={isAuthConfigured()}>
