@@ -313,6 +313,26 @@ on this `cic-demo-platform` tenant, which would make it an Auth0 support questio
 rather than something to solve by API. Email passcodes carry the "different login
 methods" half of the demo meanwhile.
 
+## Presentation decisions
+
+**Copy stays in English on all three sites**, including France and Germany. The
+audience is English-speaking and legibility beats authenticity. The market is
+signalled instead by a country label in the header, euro pricing, and a market
+line in the footer. Localised copy is an easy later change if anyone wants it.
+
+**The cross-brand line in the drawer is static.** Every visitor sees that their
+SBD account spans brands; it is never a lookup against the typed email. Checking
+whether an address exists *before* authentication is precisely the user
+enumeration hole that Auth0's own passcode challenge endpoint goes out of its way
+to avoid, and reintroducing it in a demo shown to people evaluating a CIAM
+platform would be an odd thing to be caught doing.
+
+A stronger version of that beat is available later and worth considering: record
+each brand a user signs into in `user_metadata`, then have `/welcome` on the
+second site say "this is the same SBD account you use on DeWalt France". It runs
+after authentication, so it leaks nothing, and it demonstrates the shared
+directory concretely rather than asserting it.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only
