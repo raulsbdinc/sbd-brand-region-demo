@@ -111,6 +111,25 @@ are live on the shared connection. Note the field names: **`connection`** and
 **`email`**, not `realm` and `username` — the challenge endpoint and the token
 endpoint disagree about this, and the error messages are unhelpful.
 
+Then rehearsed end to end in a browser against the deployed sites. Signed into
+DeWalt France through the drawer; landed on `/welcome` having never left the
+domain. Visited Craftsman France, which sent us to sign in rather than honouring
+the existing session. Signed in there with **the same email and the same
+password**, and landed on its own `/welcome`.
+
+`/welcome` prints the decoded ID token, which makes it the demo's proof surface:
+put the two screens side by side and the `aud` differs while the `sub` is
+identical — `auth0|6a70d2138df7fe04e81e6c61` on both. That is the entire
+argument, visible on screen, without anyone having to trust a diagram.
+
+The boundary was also probed harder than a browser can. Handing DeWalt France's
+`__session` cookie directly to the other two sites leaves both unauthenticated,
+because each Vercel project holds a different `AUTH0_SECRET` and the payload will
+not decrypt. So the isolation does not rest on cookie scoping alone.
+
+Failure paths return 401 with no cookie for both a wrong password and an unknown
+address, and the two are indistinguishable from the outside.
+
 ## The two login paths
 
 Both are embedded: the user stays inside our Polaris-style drawer and never sees
