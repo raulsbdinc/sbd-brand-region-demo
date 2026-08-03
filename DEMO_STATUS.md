@@ -79,11 +79,62 @@ identities (`dewalt-fr`, `dewalt-de`, `craftsman-fr`). Verified: each site
 accepts only its own password and rejects the other two, yet all three land on
 that one primary user.
 
+### Passcode login (email OTP on the database connections)
+
+The passcode demo does **not** use a separate passwordless connection. Auth0
+supports one-time codes directly on a database connection, so the same
+`dewalt-fr` / `dewalt-de` / `craftsman-fr` connections that hold each site's
+password also issue its passcodes. That means no second identity per person and
+nothing extra for the linking Action to merge.
+
+This matters for how the demo looks: it is an API flow, not a redirect, so the
+passcode step happens **inside our own branded drawer**. The Auth0 Next.js SDK
+mounts it natively at `POST /auth/passwordless/otp/challenge` and
+`POST /auth/passwordless/otp/token`, and the second call sets the session
+cookie, so we never hand the user to Auth0's hosted pages.
+
+Two tenant-level switches were needed:
+
+1. **Identifier First** turned on at `PATCH /prompts`
+   (`{"identifier_first": true}`). Without it Auth0 refuses to enable OTP on a
+   database connection: *"OTP based authentication is only supported when
+   Identifier First is enabled on your tenant."* This is tenant-wide and also
+   changes the hosted login screen used by the older CIAM POC.
+2. **Email OTP** turned on per connection. The connection needs email marked as
+   an identifier **and** `verification_method: "otp"`; without the latter the
+   API rejects it with *"Email OTP cannot be used as authentication method when
+   email verification_method is not OTP."* The working shape is:
+
+   ```json
+   { "options": {
+       "attributes": { "email": {
+         "identifier": { "active": true },
+         "profile_required": true,
+         "verification_method": "otp",
+         "signup": { "status": "required", "verification": { "active": false } } } },
+       "authentication_methods": {
+         "password": { "enabled": true },
+         "email_otp": { "enabled": true } } } }
+   ```
+
+Rehearsed on DeWalt France: the challenge returned an `auth_session`, the code
+that arrived by email exchanged for tokens, and the resulting `sub` was
+`auth0|6a70c1e3a5f3541586760c6a` — the same primary user the passwords resolve
+to. Passcode and password land on one account.
+
+Auth0 lists this as Early Access; it is already switched on for this tenant.
+
 ### Not yet configured
 
-SMS passwordless. `POST /branding/phone/providers` returns 409 — an unbound
-`Custom Phone Provider` Action already exists in the tenant from the earlier
-POC. Email OTP works and carries the passcode half of the demo; SMS is deferred.
+**Phone passcodes.** `phone_otp` sits alongside `email_otp` on the same three
+connections and needs no new connection — only an SMS provider on the tenant.
+That is the blocker: `POST /branding/phone/providers` returns 409 because an
+unbound `Custom Phone Provider` Action left over from the earlier POC already
+occupies the slot. Email passcodes carry this half of the demo meanwhile.
+
+**Embedded password.** The SDK has no supported way to create a session from a
+password exchange, so password sign-in still redirects to Auth0's hosted login.
+Only the passcode path can stay inside the branded drawer.
 
 ## Vercel
 
