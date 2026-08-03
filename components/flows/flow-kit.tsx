@@ -2,8 +2,7 @@
 
 import type { ReactNode } from "react"
 import { motion } from "motion/react"
-import Link from "next/link"
-import { AlertTriangle, ArrowRight } from "lucide-react"
+import { AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 /** Centered, comfortably-spaced column used by every flow screen. */
@@ -104,13 +103,6 @@ export function FlowNotConfigured({
                 </span>{" "}
                 to the project, then redeploy.
               </p>
-              <Link
-                href="/docs"
-                className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-foreground underline-offset-4 hover:underline"
-              >
-                See the setup steps in the docs
-                <ArrowRight className="size-4" />
-              </Link>
             </div>
           </div>
         </div>

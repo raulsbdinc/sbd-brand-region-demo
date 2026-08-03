@@ -1,10 +1,8 @@
-import Link from "next/link"
 import {
   ShieldCheck,
   BadgeCheck,
   ExternalLink,
   AlertTriangle,
-  ArrowRight,
   LogOut,
 } from "lucide-react"
 import { auth0, isAuthConfigured } from "@/lib/auth0"
@@ -70,13 +68,6 @@ function ConfigNeeded() {
               "The Auth0 environment variables are missing, so the live flow can't run. Add AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, and AUTH0_SECRET to the project, then redeploy."
             }
           </p>
-          <Link
-            href="/docs"
-            className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-foreground underline-offset-4 hover:underline"
-          >
-            See the setup steps in the docs
-            <ArrowRight className="size-4" />
-          </Link>
         </div>
       </div>
     </div>

@@ -7,7 +7,6 @@ import { LogOut, ShoppingCart, UserRound } from "lucide-react"
 import { useApp } from "@/components/app-providers"
 import { BrandWordmark } from "@/components/brand-wordmark"
 import { PocNav } from "@/components/poc-nav"
-import { RegionSwitcher } from "@/components/region-switcher"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,7 +62,6 @@ export function SiteHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
-          <RegionSwitcher />
           <button
             type="button"
             title="Cart (placeholder)"
@@ -95,9 +93,6 @@ export function SiteHeader() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => router.push("/account")}>
                   Account
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push("/passport")}>
-                  SBD Passport
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push("/welcome")}>
                   Session details
@@ -145,9 +140,6 @@ export function SiteHeader() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => router.push("/account")}>
                   Account
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push("/passport")}>
-                  SBD Passport
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push("/welcome")}>
                   Session details

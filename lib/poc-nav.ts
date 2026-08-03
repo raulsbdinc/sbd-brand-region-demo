@@ -14,14 +14,6 @@ export interface PocNavGroup {
 
 export const POC_NAV_GROUPS: PocNavGroup[] = [
   {
-    label: "Evaluate",
-    links: [
-      { href: "/evaluation", label: "CIAM Evaluation" },
-      { href: "/operations", label: "CIAM Operations" },
-      { href: "/architecture", label: "Architecture" },
-    ],
-  },
-  {
     label: "Sign-in methods",
     links: [
       { href: "/register", label: "Registration journeys" },
@@ -33,7 +25,6 @@ export const POC_NAV_GROUPS: PocNavGroup[] = [
   {
     label: "Reference",
     links: [
-      { href: "/docs", label: "Docs" },
       { href: "/changelog", label: "Changelog" },
     ],
   },
