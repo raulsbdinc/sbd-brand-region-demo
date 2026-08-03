@@ -167,9 +167,9 @@ at the verify step. The UI must account for that.
 
 Auth0 lists this as Early Access; it is already switched on for this tenant.
 
-### Password — works, but leans on a `/testing` export
+### Password — built and working, leaning on a `/testing` export
 
-Decided 3 August: build it, so the password path also stays in the drawer.
+Live in `app/api/signin/password/route.ts`.
 
 How it works. The browser posts credentials to **our own** Next.js route, same
 origin, so there is no CORS and no third-party cookie involved. Our server then
@@ -293,6 +293,24 @@ The remaining likely explanation is that phone provider management is restricted
 on this `cic-demo-platform` tenant, which would make it an Auth0 support question
 rather than something to solve by API. Email passcodes carry the "different login
 methods" half of the demo meanwhile.
+
+## Working with the v0 chat
+
+All application code is written and tested in the v0 chat; this side only
+orchestrates and handles Auth0, Vercel and git. Two failure modes have already
+cost time, so check for both.
+
+**Work done in v0's sandbox terminal is not a tracked file edit.** A whole task
+once reported success, built green, and pushed a commit with **zero file
+changes** — the edits had been made with shell commands rather than the file
+tools. Always confirm the pushed diff is non-empty and lists the files you
+expect, rather than trusting the summary.
+
+**v0 reuses one branch name.** Merging a v0 pull request with `--delete-branch`
+and then letting v0 push again leaves the new commit on a branch that GitHub
+subsequently removes, silently closing the pull request and orphaning the work.
+The commit survives and can be grafted onto `main` through the Git Data API, but
+it is easier to avoid: leave v0's branch alone after merging.
 
 ## Credentials
 
