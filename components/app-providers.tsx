@@ -10,6 +10,7 @@ import {
 } from "react"
 import { useRouter } from "next/navigation"
 import { BRANDS, COUNTRIES } from "@/lib/brands"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { buildLogoutUrl } from "@/lib/logout"
 import type { BrandId, CountryId, MethodId, Session } from "@/lib/types"
 
@@ -53,10 +54,11 @@ export function AppProviders({
   children: ReactNode
   authConfigured?: boolean
 }) {
-  // Brand + country form the simulated tenant (e.g. "DeWalt UK"), switched
-  // live via the tenant switcher in the header.
-  const [brand, setBrand] = useState<BrandId>("dewalt")
-  const [country, setCountry] = useState<CountryId>("us")
+  // Brand + country form this deployment's fixed tenant (e.g. "DeWalt FR").
+  // Each Vercel project is pinned to one brand-region via env vars, so these
+  // are seeded from SITE_BRAND / SITE_MARKET and never switched at runtime.
+  const [brand, setBrand] = useState<BrandId>(SITE_BRAND)
+  const [country, setCountry] = useState<CountryId>(SITE_MARKET)
   const [session, setSession] = useState<Session | null>(null)
   const [tokenInspectorOpen, setTokenInspectorOpen] = useState(false)
   const [activeFlow, setActiveFlow] = useState<MethodId | null>(null)

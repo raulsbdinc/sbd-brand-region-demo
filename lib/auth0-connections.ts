@@ -12,6 +12,7 @@
 // user lands directly on the right screen instead of the generic picker.
 
 import type { SocialProvider } from "./types"
+import { SITE_CONNECTION } from "./site"
 
 /**
  * Auth0 connection names for each social provider.
@@ -31,11 +32,17 @@ export const SOCIAL_CONNECTIONS: Record<SocialProvider, string> = {
 }
 
 /**
- * The database connection backing the "Classic password" flow. This is the
- * default name Auth0 gives the username/password database connection; override
- * here if the tenant uses a different one.
+ * The database connection backing the "Classic password" flow for THIS
+ * deployment. Each brand-region site is a separate Vercel project with its own
+ * Auth0 database connection, so this is initialised per-deployment from
+ * SITE_CONNECTION (NEXT_PUBLIC_AUTH0_CONNECTION — e.g. "dewalt-fr",
+ * "craftsman-fr"), falling back to Auth0's default "Username-Password-
+ * Authentication" when the env var is missing. This is the mechanism that gives
+ * each brand-region site its own password store: both consumers
+ * (components/flows/password-flow.tsx and app/api/recovery/route.ts) import this
+ * constant, so they authenticate against the right connection automatically.
  */
-export const PASSWORD_CONNECTION = "Username-Password-Authentication"
+export const PASSWORD_CONNECTION = SITE_CONNECTION
 
 /**
  * The passwordless email connection backing BOTH the "Email code" and "Magic

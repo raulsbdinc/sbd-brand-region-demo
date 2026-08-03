@@ -1,7 +1,6 @@
-// The POC is locked to a single brand: DeWalt. The brand model is kept (as a
-// one-entry set) so the theme tokens, wordmark, and metadata preference still
-// resolve through one code path — but there is no brand switching.
-export type BrandId = "dewalt"
+// Each deployment is pinned to one brand via NEXT_PUBLIC_BRAND (see lib/site.ts);
+// the brand model supplies that brand's theme tokens, wordmark, and metadata.
+export type BrandId = "dewalt" | "craftsman"
 
 export type CountryId = "us" | "uk" | "ca" | "fr" | "de" | "au"
 

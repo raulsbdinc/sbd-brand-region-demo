@@ -13,9 +13,10 @@ export interface Brand {
 }
 
 /**
- * Brand skin. The POC is locked to DeWalt, so there is a single brand whose
- * tokens theme the whole app. Kept as a record (not inlined) so the wordmark,
- * theme tokens, and metadata preference all keep resolving through one path.
+ * Brand skins. The repo builds several single-brand deployments off one
+ * codebase — each Vercel project pins itself to one brand via NEXT_PUBLIC_BRAND
+ * (resolved in lib/site.ts). Every brand's tokens, wordmark, and metadata
+ * resolve through this record, so the active brand themes the whole app.
  */
 export const BRANDS: Record<BrandId, Brand> = {
   dewalt: {
@@ -35,10 +36,27 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-muted-foreground": "#5c5c66",
     },
   },
+  craftsman: {
+    id: "craftsman",
+    name: "Craftsman",
+    wordmark: "CRAFTSMAN",
+    category: "Trusted tools for every job",
+    vars: {
+      "--brand": "#D6001C",
+      "--brand-foreground": "#ffffff",
+      "--brand-ink": "#181a1b",
+      "--brand-ink-foreground": "#ffffff",
+      "--brand-surface": "#ffffff",
+      "--brand-surface-muted": "#eff5f5",
+      "--brand-border": "#ced4d4",
+      "--brand-foreground-strong": "#181a1b",
+      "--brand-muted-foreground": "#768084",
+    },
+  },
 }
 
-/** Ordered list of brands. The POC ships a single brand: DeWalt. */
-export const BRAND_ORDER: BrandId[] = ["dewalt"]
+/** Ordered list of brands the repo can be deployed as. */
+export const BRAND_ORDER: BrandId[] = ["dewalt", "craftsman"]
 
 export interface Country {
   id: CountryId
