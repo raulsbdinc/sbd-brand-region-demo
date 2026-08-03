@@ -62,6 +62,12 @@ Each app carries `authorization_code`, `refresh_token`, `implicit`,
 grants are needed; enabling only one produces *"Grant type ... not allowed for
 the client"*.
 
+Each app also has `token_endpoint_auth_method: client_secret_post` and
+`is_token_endpoint_ip_header_trusted: true`, so the `auth0-forwarded-for` header
+is honoured on `/oauth/token`. The two must be set **together**: Auth0 rejects
+the trust flag on a client that does not authenticate, with *"can only be set
+true on clients that require authentication"*.
+
 ### Database connection
 
 **`sbd-eu` — `con_MtETCCoRdTvrTgZY`**, enabled on all three applications plus the
@@ -182,9 +188,19 @@ producing a cookie the SDK reads back as an ordinary session. So it is the SDK's
 own crypto rather than something hand-rolled — but it is a supported export put
 to an unsupported use.
 
-Two things to watch: the `SessionData` shape could shift between SDK versions,
-and we fake `internal.sid`, which is what backchannel logout keys on. Neither
-matters for a proof of concept.
+Three things to watch, none of which matters for a proof of concept: the
+`SessionData` shape could shift between SDK versions; we fake `internal.sid`,
+which is what backchannel logout keys on; and `generateSessionCookie` hardcodes a
+**one hour** expiry regardless of any configured session duration, so the cookie
+`maxAge` should be set to match rather than letting the two disagree.
+
+Mechanics worth not rediscovering. The session cookie is named **`__session`**.
+The SDK splits anything over **3500 bytes** into `__session.0`, `__session.1` and
+so on, and reassembles them on read — so a session that crosses that line and is
+written as one cookie will simply not be read back. With `openid profile email`
+and no refresh token the tokens measure roughly 730 and 620 characters, which
+lands the encrypted cookie near 1.5 KB, comfortably clear of the threshold.
+Asking for `offline_access` would add a refresh token and narrow that margin.
 
 Checked so they do not bite later:
 
@@ -195,7 +211,7 @@ Checked so they do not bite later:
 - Brute-force protection blocks after **10 attempts per identifier and IP**, and
   suspicious-IP throttling allows 100 pre-login attempts. Send
   `auth0-forwarded-for` with the real visitor IP, or Vercel's server IP absorbs
-  the whole count for every user.
+  the whole count for every user. Verified accepted on this tenant.
 - **Auth0 Organizations are incompatible with Resource Owner Password.** So
   branding the hosted login via per-organization branding and doing embedded
   password login are mutually exclusive. We chose embedded.
