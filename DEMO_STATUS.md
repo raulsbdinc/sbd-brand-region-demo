@@ -313,6 +313,19 @@ on this `cic-demo-platform` tenant, which would make it an Auth0 support questio
 rather than something to solve by API. Email passcodes carry the "different login
 methods" half of the demo meanwhile.
 
+## The storefront shells
+
+Each site now reads as its brand and market: a country badge in the header, a
+hero written in the brand's voice naming the market, euro pricing formatted for
+the market's locale, and a brand footer. All of it derives from `SITE_BRAND` and
+`SITE_MARKET` through `storefrontContent()` in `lib/site.ts`, so one build serves
+all three and nothing hardcodes DeWalt or France.
+
+The POC scaffolding is gone from the visible path — the evaluation nav, the token
+inspector and the footer links to the comparison pages. The routes still exist
+and still work; they are simply no longer linked. **`/welcome` is untouched on
+purpose**, because its decoded ID token panel is what proves the demo on stage.
+
 ## Presentation decisions
 
 **Copy stays in English on all three sites**, including France and Germany. The
