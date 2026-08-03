@@ -57,18 +57,23 @@ Callback and logout URLs on each: its own Vercel domain plus
 **The callback path is `/auth/callback`, not `/api/auth/callback`.** This is the
 single most common cause of login failure in this codebase.
 
-Each app needs the `password` **and** `password-realm` grants for embedded login.
-Enabling only one produces *"Grant type ... not allowed for the client"*. These
-were removed after an earlier test and must be re-added.
+Each app carries `authorization_code`, `refresh_token`, `implicit`,
+`passwordless/otp`, **and both** `password` and `password-realm`. Both password
+grants are needed; enabling only one produces *"Grant type ... not allowed for
+the client"*.
 
-### Database connections
+### Database connection
 
-Target state is **one shared connection** enabled on all three applications, so
-there is one user record and one password across the three sites.
+**`sbd-eu` — `con_MtETCCoRdTvrTgZY`**, enabled on all three applications plus the
+`Demo Automation M2M` client. One connection means one user record and one
+password across the three sites, with no linking required.
 
-Superseded state, being torn down: `dewalt-fr` (`con_47SpxTfS2YeWCAmc`),
+The name carries the story: a single EU directory serving DeWalt France, DeWalt
+Germany and Craftsman France, because France and Germany share a compliance zone.
+
+Superseded and **deleted** on 3 August: `dewalt-fr` (`con_47SpxTfS2YeWCAmc`),
 `dewalt-de` (`con_rGDHijRVGeKL6HYz`), `craftsman-fr` (`con_xNOjfFUBxcP9UGt4`),
-one per app.
+one per app, together with the users inside them.
 
 Two things to know when editing connections:
 
@@ -79,14 +84,26 @@ Two things to know when editing connections:
 - Client-to-connection bindings are edited at `PATCH /connections/{id}/clients`.
   The older `enabled_clients` property on `PATCH /connections/{id}` is rejected.
 
-### Post-login Action
+### Post-login Actions
 
-`Link demo identities by verified email` —
-`861345ba-c0dc-4c79-bb33-4513834411c3`, bound to `post-login`.
+**None bound.** `Link demo identities by verified email` merged accounts sharing
+a verified email so per-brand identities resolved to one user; a single shared
+connection made it redundant, and it was unbound and deleted on 3 August.
 
-**Being retired.** It merged accounts sharing a verified email so that per-brand
-identities resolved to one user. A single shared connection makes it redundant.
-It is guarded by client ID, so it never touched the older CIAM POC.
+`Treasure Data Push` exists in the tenant from the older POC but is not bound to
+`post-login`. Leave it alone.
+
+### Verified on 3 August
+
+`password-realm` against `sbd-eu` with the one demo password, run against each of
+the three client IDs in turn, returned three ID tokens with three different `aud`
+values and **one identical `sub`** — `auth0|6a70d2138df7fe04e81e6c61`. That is
+the demo's central claim proven at the protocol level, below any UI.
+
+`POST /otp/challenge` on `sbd-eu` returns an `auth_session`, so email passcodes
+are live on the shared connection. Note the field names: **`connection`** and
+**`email`**, not `realm` and `username` — the challenge endpoint and the token
+endpoint disagree about this, and the error messages are unhelpful.
 
 ## The two login paths
 
@@ -213,16 +230,15 @@ The `sbd-demo-` prefix avoids colliding with the SBD team's existing `dewalt-de`
 | --- | --- | --- | --- |
 | `NEXT_PUBLIC_BRAND` | `dewalt` | `dewalt` | `craftsman` |
 | `NEXT_PUBLIC_MARKET` | `fr` | `de` | `fr` |
-| `NEXT_PUBLIC_AUTH0_CONNECTION` | shared connection name | | |
-| `AUTH0_CONNECTION` | shared connection name | | |
+| `NEXT_PUBLIC_AUTH0_CONNECTION` | `sbd-eu` | `sbd-eu` | `sbd-eu` |
+| `AUTH0_CONNECTION` | `sbd-eu` | `sbd-eu` | `sbd-eu` |
 | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` | per app | | |
 | `AUTH0_DOMAIN` | tenant, above | | |
 | `AUTH0_SECRET` | per project | | |
 
 `AUTH0_CONNECTION` and its `NEXT_PUBLIC_` twin hold the same value. The public one
 exists because the connection name is read in a client component; the server one
-because API routes read it too. Both were per-brand and become the shared
-connection name.
+because API routes read it too. Both were per-brand until 3 August.
 
 `APP_BASE_URL` is intentionally unset so the SDK infers the base URL from the
 request host, keeping preview deployments working. Auth0's allowed callback list
@@ -246,8 +262,8 @@ is the safety net for that inference.
 
 ## Not yet configured
 
-**Phone passcodes.** `phone_otp` sits alongside `email_otp` on the same
-connection and needs no new connection — only an SMS provider on the tenant.
+**Phone passcodes.** `phone_otp` sits alongside `email_otp` on `sbd-eu` and needs
+no new connection — only an SMS provider on the tenant.
 `POST /branding/phone/providers` previously returned 409 because an unbound
 `Custom Phone Provider` Action from the earlier POC occupied the slot; the
 providers list now reads empty, so it may be creatable. Any provider (Twilio,
