@@ -17,13 +17,6 @@ import { looksLikeEmail } from "@/lib/auth-service"
 interface SignInDrawerProps {
   open: boolean
   onClose: () => void
-  /**
-   * Receives the typed email + password. All password-flow auth logic lives in
-   * the caller so the drawer stays presentational — the password submit path is
-   * behind this one prop. (The passcode path is self-contained below: it talks
-   * to the Auth0 SDK's embedded OTP routes and never leaves this panel.)
-   */
-  onSubmit: (email: string, password: string) => void
 }
 
 // Shared styling for the primary CTA so the passcode "Verify" button is styled
@@ -48,7 +41,7 @@ function maskEmail(value: string): string {
 // Every brand difference (display font, case, tracking, heading size, button
 // radius, input underline, muted label colour, …) flows in from Brand.vars,
 // applied by AppShell on the brand root — there is no per-brand branching here.
-export function SignInDrawer({ open, onClose, onSubmit }: SignInDrawerProps) {
+export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   const brand = useBrand()
   const router = useRouter()
   // `mounted` keeps the panel in the DOM through the exit animation; `shown`
@@ -58,6 +51,10 @@ export function SignInDrawer({ open, onClose, onSubmit }: SignInDrawerProps) {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
+  // Inline error + in-flight flag for the embedded password submit, styled
+  // exactly like the passcode errors below.
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [signingIn, setSigningIn] = useState(false)
 
   // Which body the same drawer is showing. "passcode" is a state of this drawer,
   // not a separate screen — the heading, description and tokens are unchanged.
@@ -95,6 +92,8 @@ export function SignInDrawer({ open, onClose, onSubmit }: SignInDrawerProps) {
     if (open) return
     setStep("password")
     setRequestError(null)
+    setPasswordError(null)
+    setSigningIn(false)
     setOtp("")
     setOtpError(null)
     setAuthSession("")
@@ -165,9 +164,35 @@ export function SignInDrawer({ open, onClose, onSubmit }: SignInDrawerProps) {
 
   if (!mounted) return null
 
-  function handlePasswordSubmit(e: FormEvent) {
+  // Embedded password sign-in: POST to our server route, which does the
+  // server-to-server password-realm exchange and sets the __session cookie.
+  // On success we navigate into the app; on any failure we show one generic
+  // inline error (same style as the passcode errors) and stay in the drawer.
+  async function handlePasswordSubmit(e: FormEvent) {
     e.preventDefault()
-    onSubmit(email, password)
+    if (signingIn) return
+    if (!email || !password) {
+      setPasswordError("That email or password isn't right.")
+      return
+    }
+    setSigningIn(true)
+    setPasswordError(null)
+    try {
+      const res = await fetch("/api/signin/password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
+      if (!res.ok) {
+        setPasswordError("That email or password isn't right.")
+        setSigningIn(false)
+        return
+      }
+      router.push("/welcome")
+    } catch {
+      setPasswordError("That email or password isn't right.")
+      setSigningIn(false)
+    }
   }
 
   // Send an OTP to the typed email, then swap to the passcode step. Requires a
@@ -282,7 +307,10 @@ export function SignInDrawer({ open, onClose, onSubmit }: SignInDrawerProps) {
                 autoComplete="current-password"
                 placeholder="Enter password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  if (passwordError) setPasswordError(null)
+                }}
                 className={`${INPUT_CLASS} pl-0 pr-9`}
               />
               <button
@@ -321,15 +349,19 @@ export function SignInDrawer({ open, onClose, onSubmit }: SignInDrawerProps) {
           </button>
         </div>
 
-        {requestError && (
+        {(passwordError || requestError) && (
           <p role="alert" className={alertClass}>
-            {requestError}
+            {passwordError ?? requestError}
           </p>
         )}
 
-        <button type="submit" className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}>
+        <button
+          type="submit"
+          disabled={signingIn}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
           <UserRound className="size-4" />
-          Sign in
+          {signingIn ? "Signing in…" : "Sign in"}
         </button>
 
         <button

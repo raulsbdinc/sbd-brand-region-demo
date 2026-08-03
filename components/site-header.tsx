@@ -10,12 +10,6 @@ import { BrandWordmark } from "@/components/brand-wordmark"
 import { PocNav } from "@/components/poc-nav"
 import { SignInDrawer } from "@/components/sign-in-drawer"
 import {
-  PASSWORD_CONNECTION,
-  buildAuthLoginUrl,
-  startAuthRedirect,
-} from "@/lib/auth0-connections"
-import { looksLikeEmail } from "@/lib/auth-service"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -38,21 +32,6 @@ export function SiteHeader() {
   const { session, logout, authConfigured } = useApp()
   const router = useRouter()
   const [signInOpen, setSignInOpen] = useState(false)
-
-  // The drawer stays presentational; auth logic lives here. This replicates the
-  // existing password flow: redirect to Auth0 Universal Login against this
-  // deployment's database connection, pre-filling the typed email. (The password
-  // is intentionally unused for now — it's reserved for the embedded credential
-  // exchange coming in the next step.)
-  function handleSignInSubmit(email: string, _password: string) {
-    startAuthRedirect(
-      buildAuthLoginUrl({
-        connection: PASSWORD_CONNECTION,
-        returnTo: "/welcome",
-        loginHint: looksLikeEmail(email) ? email : undefined,
-      }),
-    )
-  }
 
   // When there's no client-side mock session, the user may still hold a REAL
   // Auth0 session from a promoted flow (social / password). Detect it so the
@@ -194,11 +173,7 @@ export function SiteHeader() {
         </div>
       </div>
 
-      <SignInDrawer
-        open={signInOpen}
-        onClose={() => setSignInOpen(false)}
-        onSubmit={handleSignInSubmit}
-      />
+      <SignInDrawer open={signInOpen} onClose={() => setSignInOpen(false)} />
     </header>
   )
 }
