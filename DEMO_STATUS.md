@@ -333,6 +333,15 @@ audience is English-speaking and legibility beats authenticity. The market is
 signalled instead by a country label in the header, euro pricing, and a market
 line in the footer. Localised copy is an easy later change if anyone wants it.
 
+**The market is signalled with a small SVG flag, never an emoji one.** Windows
+Chrome renders regional-indicator emoji as two letters rather than a flag, so
+`🇫🇷` would show up as "FR" on the demo machine. Flags come from the MIT-licensed
+`country-flag-icons` package and are mapped for every country in `COUNTRIES`, not
+just the two we ship, so a future DeWalt UK or DeWalt US site gets one
+automatically instead of silently losing it. The flag sits inside the existing
+country pill in the header and the footer, and is `aria-hidden` because the
+country name is already beside it as text.
+
 **The cross-brand line in the drawer is static.** Every visitor sees that their
 SBD account spans brands; it is never a lookup against the typed email. Checking
 whether an address exists *before* authentication is precisely the user
@@ -363,6 +372,19 @@ and then letting v0 push again leaves the new commit on a branch that GitHub
 subsequently removes, silently closing the pull request and orphaning the work.
 The commit survives and can be grafted onto `main` through the Git Data API, but
 it is easier to avoid: leave v0's branch alone after merging.
+
+**v0's workspace does not follow `main`.** It stays on whatever commit it last
+worked from, so once anything is merged outside the chat — including a merge of
+v0's own pull request — its next branch is built on a stale base. This produced
+a pull request that re-applied already-merged work *and* silently reverted
+embedded password sign-in, because v0's copy of `site-header.tsx` predated it.
+The diff looked plausible; only reading the file caught it.
+
+So before merging anything from v0, check that the change does not resurrect
+something already removed. The cheapest guard is to ask v0 to reset onto
+`origin/main` first and confirm named markers exist in its tree — a file that
+should be there, a prop that should be gone — and to stop rather than push if
+any marker is missing.
 
 ## Credentials
 
