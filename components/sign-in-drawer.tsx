@@ -28,6 +28,12 @@ const PRIMARY_BUTTON_CLASS =
 const INPUT_CLASS =
   "h-[50px] w-full rounded-none border-b bg-transparent py-[15.5px] text-[16px] outline-none [border-bottom-color:var(--brand-input-border)] [color:var(--brand-label-color)] focus:[border-bottom-color:var(--brand-label-color)]"
 
+// The connection's password policy, shown as static helper text on the create
+// step and reused verbatim as the weak-password error, so nobody fails this
+// live. Mirrors the tenant policy exactly (>=8 chars, >=3 of the 4 char types).
+const PASSWORD_REQUIREMENTS =
+  "At least 8 characters, including at least 3 of: lower case, upper case, numbers, and special characters."
+
 /** Mask a local part for display: `jane@x.com` -> `j•••@x.com`. */
 function maskEmail(value: string): string {
   const [local, domain] = value.split("@")
@@ -54,9 +60,19 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [signingIn, setSigningIn] = useState(false)
 
-  // Which body the same drawer is showing. "passcode" is a state of this drawer,
-  // not a separate screen — the heading, description and tokens are unchanged.
-  const [step, setStep] = useState<"password" | "passcode">("password")
+  // Which body the same drawer is showing. "passcode" and "create" are states
+  // of this same drawer, not separate screens — the heading, description and
+  // tokens are unchanged.
+  const [step, setStep] = useState<"password" | "passcode" | "create">(
+    "password",
+  )
+  // Create-account step state. Reuses the shared `email`/`password`/
+  // `showPassword` above so whatever the user typed carries between steps.
+  // `createExists` drives the hedged "you may already have an account" block;
+  // `createError` is the requirements/weak-password/generic inline error.
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [createExists, setCreateExists] = useState(false)
   // Error shown on the password step when requesting a code (e.g. bad email).
   const [requestError, setRequestError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -95,6 +111,9 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setOtp("")
     setOtpError(null)
     setAuthSession("")
+    setCreating(false)
+    setCreateError(null)
+    setCreateExists(false)
   }, [open])
 
   // Lock body scroll while the drawer occupies the DOM.
@@ -269,6 +288,99 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setOtpError(null)
   }
 
+  // Switch to the create-account step, preserving whatever email/password the
+  // user has already typed and starting with a clean error state.
+  function goToCreate() {
+    setStep("create")
+    setCreateError(null)
+    setCreateExists(false)
+  }
+
+  // Return from the create step to the sign-in step with the email preserved,
+  // so "Try signing in instead" flows straight into a sign-in attempt.
+  function backToSignInFromCreate() {
+    setStep("password")
+    setCreateError(null)
+    setCreateExists(false)
+  }
+
+  // Create the account via our server route, then — on success — reuse the
+  // EXISTING sign-in route to mint the session (never duplicated here) and
+  // navigate exactly like the password path. Every failure clears the in-flight
+  // flag so no button is left spinning, and the typed email/password are kept.
+  async function handleCreateSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (creating) return
+    if (!looksLikeEmail(email)) {
+      setCreateError("Enter a valid email address first.")
+      return
+    }
+    if (!password) {
+      setCreateError(PASSWORD_REQUIREMENTS)
+      return
+    }
+    setCreating(true)
+    setCreateError(null)
+    setCreateExists(false)
+    try {
+      const res = await fetch("/api/signup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { status?: string }
+
+      if (data.status === "created") {
+        // Reuse the existing password sign-in route to establish the session.
+        try {
+          const signIn = await fetch("/api/signin/password", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          })
+          if (signIn.ok) {
+            // Same full document navigation as the password path: tears the
+            // drawer down and re-renders against the just-set __session cookie.
+            window.location.assign("/welcome")
+            return
+          }
+        } catch {
+          // Fall through to the sign-in fallback below.
+        }
+        // Follow-on sign-in failed for any reason: drop to the sign-in step with
+        // the email preserved and the generic sign-in error.
+        setStep("password")
+        setPasswordError("That email or password isn't right.")
+        setCreating(false)
+        return
+      }
+
+      if (data.status === "weak_password") {
+        setCreateError(PASSWORD_REQUIREMENTS)
+        setCreating(false)
+        return
+      }
+
+      if (data.status === "exists_or_invalid") {
+        // Hedged only — never asserts the address is registered.
+        setCreateExists(true)
+        setCreating(false)
+        return
+      }
+
+      // status === "error" or anything unexpected.
+      setCreateError(
+        "Something went wrong creating your account. Please try again.",
+      )
+      setCreating(false)
+    } catch {
+      setCreateError(
+        "Something went wrong creating your account. Please try again.",
+      )
+      setCreating(false)
+    }
+  }
+
   const labelClass =
     "font-sans text-[14px] font-[600] [color:var(--brand-label-color)]"
   const requiredClass = "font-[500] [color:var(--brand-label-muted)]"
@@ -372,6 +484,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
 
         <button
           type="button"
+          onClick={goToCreate}
           className="mt-2 flex h-8 w-full items-center justify-center gap-1 bg-transparent font-[700] [color:var(--brand-label-color)] [font-family:var(--brand-display-font)] [font-size:var(--brand-button-size)] [font-stretch:var(--brand-display-stretch)] [text-transform:var(--brand-display-case)] outline-none hover:underline focus-visible:underline"
         >
           Create an account
@@ -379,7 +492,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
         </button>
       </form>
     )
-  } else {
+  } else if (step === "passcode") {
     body = (
       <form onSubmit={handleVerify} className="mt-6">
         <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
@@ -442,6 +555,110 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
           className="mt-2 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline"
         >
           Back to password sign in
+        </button>
+      </form>
+    )
+  } else {
+    body = (
+      <form onSubmit={handleCreateSubmit} className="mt-6">
+        <div className="flex flex-col gap-8">
+          {/* Email */}
+          <div className="flex flex-col">
+            <label htmlFor="create-email" className={labelClass}>
+              Email Address
+              <span className={requiredClass}>(Required)</span>
+            </label>
+            <input
+              id="create-email"
+              type="email"
+              autoComplete="email"
+              placeholder="Enter email address"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value)
+                if (createError) setCreateError(null)
+                if (createExists) setCreateExists(false)
+              }}
+              className={`${INPUT_CLASS} px-0`}
+            />
+          </div>
+
+          {/* Password, with the policy shown up front as static helper text */}
+          <div className="flex flex-col">
+            <label htmlFor="create-password" className={labelClass}>
+              Password
+              <span className={requiredClass}>(Required)</span>
+            </label>
+            <p className="mt-1 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-label-muted)]">
+              {PASSWORD_REQUIREMENTS}
+            </p>
+            <div className="relative mt-1">
+              <input
+                id="create-password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                placeholder="Create a password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  if (createError) setCreateError(null)
+                }}
+                className={`${INPUT_CLASS} pl-0 pr-9`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                className="absolute right-0 top-1/2 -translate-y-1/2 p-1 [color:var(--brand-label-muted)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+              >
+                {showPassword ? (
+                  <EyeOff className="size-5" />
+                ) : (
+                  <Eye className="size-5" />
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {createExists ? (
+          <div className="mt-6">
+            <p role="alert" className={alertClass}>
+              {
+                "You may already have an SBD account with this address. One SBD account works across DeWalt, Craftsman and our other brands, so try signing in instead."
+              }
+            </p>
+            <button
+              type="button"
+              onClick={backToSignInFromCreate}
+              className="mt-4 font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-color)] outline-none hover:underline focus-visible:underline"
+            >
+              Try signing in instead
+            </button>
+          </div>
+        ) : (
+          createError && (
+            <p role="alert" className={alertClass}>
+              {createError}
+            </p>
+          )
+        )}
+
+        <button
+          type="submit"
+          disabled={creating}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
+          {creating ? "Creating account…" : "Create account"}
+        </button>
+
+        <button
+          type="button"
+          onClick={backToSignInFromCreate}
+          className="mt-2 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline"
+        >
+          Back to sign in
         </button>
       </form>
     )
