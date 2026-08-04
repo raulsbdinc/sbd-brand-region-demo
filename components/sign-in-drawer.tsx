@@ -7,7 +7,6 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react"
-import { useRouter } from "next/navigation"
 import { ChevronRight, Eye, EyeOff, UserRound, X } from "lucide-react"
 import { passwordless } from "@auth0/nextjs-auth0/client"
 import { useBrand } from "@/components/app-providers"
@@ -43,7 +42,6 @@ function maskEmail(value: string): string {
 // applied by AppShell on the brand root — there is no per-brand branching here.
 export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   const brand = useBrand()
-  const router = useRouter()
   // `mounted` keeps the panel in the DOM through the exit animation; `shown`
   // drives the enter/exit transform + scrim fade.
   const [mounted, setMounted] = useState(false)
@@ -188,7 +186,13 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
         setSigningIn(false)
         return
       }
-      router.push("/welcome")
+      // Full document navigation (not router.push): a client-side push keeps
+      // this drawer mounted across the route change, so its open + in-flight
+      // "Signing in…" state would persist over the welcome page until a manual
+      // reload. A hard navigation tears the drawer down and re-renders the
+      // server components against the __session cookie that was just set, so
+      // the welcome route paints with the new session on first paint.
+      window.location.assign("/welcome")
     } catch {
       setPasswordError("That email or password isn't right.")
       setSigningIn(false)
@@ -250,7 +254,9 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setOtpError(null)
     try {
       await passwordless.loginWithOtp({ authSession, otp: code })
-      router.push("/welcome")
+      // Full document navigation, same reasoning as the password path above:
+      // tear the drawer down and re-render against the just-set session cookie.
+      window.location.assign("/welcome")
     } catch {
       setOtpError("That code isn't right, or it's expired.")
       setVerifying(false)
