@@ -92,8 +92,38 @@ Two things to know when editing connections:
 
 ### Post-login Actions
 
-**None bound.** `Link demo identities by verified email` merged accounts sharing
-a verified email so per-brand identities resolved to one user; a single shared
+**One Action bound.** `Recognise SBD sites across brands`
+(`8cd199c3-bb9a-435e-8390-8f9f4efed0e3`) is deployed and bound to the Login flow,
+and is the only Action currently bound. It is scoped by client id to the three
+demo applications and returns immediately for any other client, so the older CIAM
+proof of concept in this tenant is untouched.
+
+What it writes. On every successful login it appends the current site to
+`app_metadata.sbd_sites` on the user record — a map of site id to ISO timestamp,
+with ids `dewalt-fr`, `dewalt-de` and `craftsman-fr`. That directory entry is the
+source of truth the recognition beat reads back from; nothing is inferred from
+the browser.
+
+What it emits on the ID token. Note the deliberate namespace split — the
+recognition claim is under `sbd.demo`, the identity claims under `sbd.com` —
+matching what `lib/claims.ts` already expected.
+
+- `https://sbd.demo/other_sites` — the array of the *other* demo sites the
+  account has signed into, most recent first, each with `id`, `label` and
+  `lastSignIn`. An empty array on the account's first site. Consumed by
+  `extractOtherSites` in `lib/claims.ts` and rendered by
+  `components/cross-brand-recognition.tsx` on the welcome route.
+- `https://sbd.com/muid` — the Auth0 `user_id`.
+- `https://sbd.com/idp` — the connection name, `sbd-eu`.
+- `https://sbd.com/auth_method` — a friendly label derived from the login method,
+  currently `Password` for the embedded password path.
+
+The three `sbd.com` claims exist so the existing "SBD identity context" card on
+the welcome page populates instead of showing its "Action not deployed"
+placeholder in front of an audience.
+
+Superseded. `Link demo identities by verified email` merged accounts sharing a
+verified email so per-brand identities resolved to one user; a single shared
 connection made it redundant, and it was unbound and deleted on 3 August.
 
 `Treasure Data Push` exists in the tenant from the older POC but is not bound to
@@ -293,7 +323,19 @@ is the safety net for that inference.
   the `wdth` axis at `font-stretch: 125%`. Craftsman's real face is **GT
   America**, which is commercially licensed and unavailable, so Inter stands in.
 - `components/sign-in-drawer.tsx` is the Polaris-style panel, with a password
-  state and a passcode state.
+  state and a passcode state. On a **successful** sign-in both paths — password
+  and email passcode — do a full document navigation to `/welcome` rather than a
+  client-side router push (PR 11). A soft push left the drawer mounted across the
+  route change with its "Signing in..." spinner stuck over the welcome page until
+  a manual reload; a hard load tears the drawer down and re-renders the server
+  components against the freshly set `__session` cookie. The failure path is
+  unchanged — a wrong password keeps the drawer open, clears the spinner, and
+  shows the generic error.
+- `lib/claims.ts` decodes the ID token claims the post-login Action emits:
+  `extractOtherSites` reads the `sbd.demo/other_sites` array and
+  `extractSbdClaims` the `sbd.com` identity trio. The former feeds the "Welcome
+  back to SBD." panel in `components/cross-brand-recognition.tsx` on the welcome
+  route; the latter feeds the "SBD identity context" card.
 
 ## Not yet configured
 
@@ -355,11 +397,36 @@ enumeration hole that Auth0's own passcode challenge endpoint goes out of its wa
 to avoid, and reintroducing it in a demo shown to people evaluating a CIAM
 platform would be an odd thing to be caught doing.
 
-A stronger version of that beat is available later and worth considering: record
-each brand a user signs into in `user_metadata`, then have `/welcome` on the
-second site say "this is the same SBD account you use on DeWalt France". It runs
-after authentication, so it leaks nothing, and it demonstrates the shared
-directory concretely rather than asserting it.
+**The stronger version of that beat is now built, and it is deliberately
+post-login.** The `Recognise SBD sites across brands` Action records each site in
+`app_metadata.sbd_sites` (see Post-login Actions), and the welcome route renders
+a "Welcome back to SBD." panel naming the sites the same account has already used.
+It runs *after* authentication, so the fact comes from the directory itself and
+the panel proves the shared account rather than asserting it. Answering "do you
+already have an SBD account?" from a typed email *before* authentication would be
+user enumeration — indefensible in a demo of a CIAM platform — which is the whole
+reason the beat is post-login and not pre-login. The static drawer line above is
+unaffected: it is still shown to everyone, with no lookup.
+
+Verified live on the deployed URLs after both merges. Signing in on DeWalt France
+shows no panel; signing in next on Craftsman France lands on the welcome route
+showing "Welcome back to SBD." naming DeWalt France with a locale-formatted last
+sign-in; and DeWalt Germany then names both, most recent first. The directory id
+is identical on all three.
+
+### Rehearsal hazards
+
+Two things will otherwise surprise someone on the day, so clear both before
+presenting:
+
+- **The panel only appears once an account has signed into a *second* site.**
+  Rehearsing leaves history behind in `app_metadata.sbd_sites`, so the *first*
+  site of a live run would wrongly show the panel. Reset `app_metadata.sbd_sites`
+  back to an empty object on the demo user via the Management API before
+  presenting.
+- **Browser sessions from an earlier day can survive and predate the Action**, so
+  the welcome page shows the "Action not deployed" placeholder and no recognition.
+  Sign out of all three sites before rehearsing or presenting.
 
 ## Working with the v0 chat
 
