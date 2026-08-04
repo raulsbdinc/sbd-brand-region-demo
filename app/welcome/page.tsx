@@ -9,7 +9,8 @@ import {
   UserCog,
 } from "lucide-react"
 import { auth0, isAuthConfigured } from "@/lib/auth0"
-import { extractSbdClaims } from "@/lib/claims"
+import { extractSbdClaims, extractOtherSites } from "@/lib/claims"
+import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { WelcomeClient } from "@/components/welcome-client"
 import { ProgressiveProfileGate } from "@/components/progressive-profile-gate"
 import { InspectTokensButton } from "@/components/inspect-tokens-button"
@@ -59,6 +60,11 @@ function RealWelcome({ user }: { user: Record<string, unknown> }) {
   // hint instead of empty values.
   const claims = extractSbdClaims(user)
 
+  // Other demo sites this same account has already signed into (most recent
+  // first). Empty on a user's first site — the recognition panel renders
+  // nothing in that case.
+  const otherSites = extractOtherSites(user)
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
       <div className="flex flex-col items-center text-center">
@@ -85,6 +91,10 @@ function RealWelcome({ user }: { user: Record<string, unknown> }) {
           You&apos;re signed in with a genuine, signed session from Auth0 / Okta.
         </p>
       </div>
+
+      {/* Cross-brand recognition — the first thing a person sees after signing
+          in on a second brand. Renders nothing on a user's first site. */}
+      <CrossBrandRecognition sites={otherSites} />
 
       {/* Account summary */}
       <div className="mt-8 rounded-2xl border border-primary/40 bg-primary/5 p-5">
