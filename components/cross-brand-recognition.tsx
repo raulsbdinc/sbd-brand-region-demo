@@ -86,10 +86,18 @@ export function CrossBrandRecognition({ sites }: { sites: OtherSite[] }) {
             Welcome back to SBD.
           </h2>
           <p className="mt-2 text-pretty text-base leading-relaxed text-foreground">
-            You&apos;ve signed into this same account on <SiteChips sites={sites} />.
-            Each SBD site keeps its own sign-in, which is why we asked you again
-            here, but it&apos;s one account, one password, one record in the
-            directory.
+            You&apos;ve signed into this same account on{" "}
+            <SiteChips sites={sites} />
+            {/* Pull the sentence-ending period back over the last chip's px-2
+                right padding so the punctuation sits tight against the pill
+                instead of floating a pad-width away ("France ." -> "France.").
+                The matching right margin re-opens the normal word space before
+                the next sentence that the negative left margin would otherwise
+                swallow. This lives on the punctuation, not on SiteChip, so the
+                chip styling and the join logic are untouched. */}
+            <span className="-ml-2 mr-2">.</span>Each SBD site keeps its own
+            sign-in, which is why we asked you again here, but it&apos;s one
+            account, one password, one record in the directory.
           </p>
 
           <ul className="mt-4 flex flex-col gap-1 text-sm text-muted-foreground">

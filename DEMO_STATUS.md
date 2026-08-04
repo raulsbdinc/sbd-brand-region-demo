@@ -274,6 +274,60 @@ Checked so they do not bite later:
 - **Organizations branding.** Per-org logo and colours work on New Universal
   Login without a custom domain, but rule out embedded password login.
 
+## Account creation
+
+The three sites share the one `sbd-eu` connection, so an email address is unique
+across all of them at the directory level. An address already registered on
+DeWalt France **cannot be registered again** on DeWalt Germany or on Craftsman
+France — one record per email, not one per brand. This is the same
+single-connection fact that gives "same user, same password"; it simply shows
+its other face at sign-up.
+
+What the tenant returns. The signup endpoint answers an already-registered
+address with a deliberately generic **400 `invalid_signup`, "Invalid sign up"**,
+byte-identical across all three brands. It never confirms that the address
+exists. This is built-in Auth0 behaviour: the tenant flags were checked and there
+is no toggle that makes the response more specific, so the genericness is not
+something to "fix". A password that fails the connection's strength policy
+returns a distinct **400 `invalid_password`, `PasswordStrengthError`**, carrying a
+readable policy string. That policy is **at least 8 characters and at least 3 of
+the 4 character types** — lower case, upper case, numbers, special characters.
+
+What we built (PR 13). The drawer's "Create an account" button was a **dead
+control until PR 13** — it rendered but did nothing. It is now wired to a create
+step in `components/sign-in-drawer.tsx`, backed by `app/api/signup/route.ts`,
+which maps the tenant's responses to a small contract — `created`,
+`exists_or_invalid`, `weak_password`, `error` — and never forwards the connection
+name or any other tenant detail to the browser. On `created` the drawer reuses
+the **existing** password sign-in route (`app/api/signin/password/route.ts`) to
+mint the session rather than duplicating that logic, then does the **same full
+document navigation to `/welcome`** as the sign-in paths, for the same reason
+(PR 11): a hard load tears the drawer down and re-renders against the freshly set
+`__session` cookie.
+
+**The `exists_or_invalid` message is the most sensitive string in the app.** On
+that status the drawer shows a deliberately hedged line — that the visitor *may*
+already have an SBD account with this address — and offers a route back to
+signing in. It never asserts that the address is registered, because doing so
+would turn the tenant's generic response into the exact pre-authentication
+enumeration signal the rest of this demo goes out of its way not to leak (see the
+passcode challenge, and the static drawer line). **Do not tighten this wording
+into a confirmation.**
+
+Verified live on the deployed sites, without creating any user. The existing demo
+address returns `exists_or_invalid` on both Craftsman France and DeWalt Germany —
+the already-registered path — and a brand-new address paired with a weak password
+returns `weak_password` rather than `exists_or_invalid`, confirming the strength
+check is reached and the two failure classes stay distinct.
+
+**The product point for Michael and Xavier.** One directory means a customer
+**cannot hold separate DeWalt and Craftsman accounts on the same email**. That is
+the flip side of "same user, same password", and it is a product decision, not a
+technical limit. A customer who wants a separate identity simply registers with a
+different email — at which point they become a separate person, a separate record
+and a separate monthly active user, and the cross-brand recognition panel will
+not fire for them.
+
 ## Vercel
 
 Three projects, all building from `main` of this repository, differing **only by

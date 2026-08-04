@@ -699,11 +699,13 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
           id="sign-in-drawer-title"
           className="pr-10 font-[900] text-black [font-family:var(--brand-display-font)] [font-size:var(--brand-heading-size)] [font-stretch:var(--brand-display-stretch)] [letter-spacing:var(--brand-display-tracking)] [line-height:var(--brand-heading-line)] [text-transform:var(--brand-display-case)]"
         >
-          Sign in
+          {step === "create" ? "Create an account" : "Sign in"}
         </h2>
 
         <p className="mt-2 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
-          {`Sign in to your ${brand.name} account to manage your profile, register your tools, and track your orders.`}
+          {step === "create"
+            ? `Create your ${brand.name} account to manage your profile, register your tools, and track your orders.`
+            : `Sign in to your ${brand.name} account to manage your profile, register your tools, and track your orders.`}
         </p>
 
         {/* Static cross-brand notice, shown to every visitor. Deliberately NOT
