@@ -166,19 +166,19 @@ const BRAND_HERO: Record<BrandId, BrandHero> = {
   dewalt: {
     default: {
       src: "/heroes/dewalt-france.jpg",
-      alt: "DeWalt XR cordless tool range",
+      alt: "DeWalt McLaren F1 Team 18V XR special edition tools lit against a dark backdrop",
     },
     byMarket: {
       de: {
         src: "/heroes/dewalt-germany.jpg",
-        alt: "DeWalt PowerShift cordless construction system",
+        alt: "Close-up of a DeWalt 18V XR POWERSTACK battery",
       },
     },
   },
   stanley: {
     default: {
       src: "/heroes/stanley-france.webp",
-      alt: "Stanley V20 cordless tool range",
+      alt: "Stanley hand tools — a saw, chisels and a hammer — laid out on a workbench",
     },
   },
   // Not a shipping storefront in this demo; reuses the DeWalt hero as a safe
@@ -187,7 +187,7 @@ const BRAND_HERO: Record<BrandId, BrandHero> = {
   craftsman: {
     default: {
       src: "/heroes/dewalt-france.jpg",
-      alt: "Cordless tool range",
+      alt: "DeWalt McLaren F1 Team 18V XR special edition tools lit against a dark backdrop",
     },
   },
 }
