@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react"
 import { useApp } from "@/components/app-providers"
 import { PRODUCTS } from "@/lib/products"
-import { SITE_CONTENT, formatPrice } from "@/lib/site"
+import { SITE_CONTENT, SITE_HERO, formatPrice } from "@/lib/site"
 import { Button } from "@/components/ui/button"
 
 export default function HomePage() {
@@ -45,8 +45,8 @@ export default function HomePage() {
           </div>
           <div className="relative aspect-[4/3] w-full">
             <Image
-              src="/products/hero-tools.png"
-              alt="Cordless power tools lineup"
+              src={SITE_HERO.src}
+              alt={SITE_HERO.alt}
               fill
               priority
               sizes="(min-width: 1024px) 50vw, 100vw"
@@ -75,7 +75,7 @@ export default function HomePage() {
               key={p.id}
               className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card"
             >
-              <div className="relative aspect-square bg-[var(--brand-surface-muted)]">
+              <div className="relative aspect-square bg-white">
                 <Image
                   src={p.image}
                   alt={p.name}
@@ -85,7 +85,10 @@ export default function HomePage() {
                 />
               </div>
               <div className="flex flex-1 flex-col p-5">
-                <h3 className="font-semibold text-foreground">{p.name}</h3>
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {p.model}
+                </span>
+                <h3 className="mt-1 font-semibold text-foreground">{p.name}</h3>
                 <p className="mt-1 flex-1 text-sm leading-relaxed text-muted-foreground">
                   {p.blurb}
                 </p>

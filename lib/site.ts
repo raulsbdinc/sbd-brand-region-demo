@@ -138,6 +138,73 @@ export const SITE_CONTENT: StorefrontContent = storefrontContent(
   SITE_MARKET,
 )
 
+export interface HeroImage {
+  /** Local path under public/ — downloaded brand campaign photography. */
+  src: string
+  /** Descriptive alt for the campaign shot. */
+  alt: string
+}
+
+// HERO PHOTOGRAPHY, per brand AND per market
+// ==========================================
+// Campaign photography from the brands' own asset libraries, downloaded into
+// public/heroes/ (never hotlinked). Keyed by brand like every other brand-fact
+// table, with per-market overrides: the two DeWalt markets deliberately get
+// DIFFERENT shots because the real brands run different regional campaigns —
+// and on a projector, a different hero is the clearest signal to the audience
+// that the presenter has moved to another site (the flag and market line are
+// easy to miss). Every shot is free of burned-in text so the headline sits on
+// top cleanly.
+interface BrandHero {
+  /** Used for any market without its own override. */
+  default: HeroImage
+  /** Market-specific overrides, e.g. a separate German campaign shot. */
+  byMarket?: Partial<Record<CountryId, HeroImage>>
+}
+
+const BRAND_HERO: Record<BrandId, BrandHero> = {
+  dewalt: {
+    default: {
+      src: "/heroes/dewalt-france.jpg",
+      alt: "DeWalt XR cordless tool range",
+    },
+    byMarket: {
+      de: {
+        src: "/heroes/dewalt-germany.jpg",
+        alt: "DeWalt PowerShift cordless construction system",
+      },
+    },
+  },
+  stanley: {
+    default: {
+      src: "/heroes/stanley-france.webp",
+      alt: "Stanley V20 cordless tool range",
+    },
+  },
+  // Not a shipping storefront in this demo; reuses the DeWalt hero as a safe
+  // stand-in so the lookup is never undefined. No Craftsman campaign art exists
+  // in the repo.
+  craftsman: {
+    default: {
+      src: "/heroes/dewalt-france.jpg",
+      alt: "Cordless tool range",
+    },
+  },
+}
+
+/**
+ * Resolve the hero image for any brand + market. Pure and dependency-free.
+ * Prefers a market-specific shot, then the brand default — so every combination
+ * the repo ships as resolves to a real, text-free campaign photo.
+ */
+export function heroImage(brand: BrandId, market: CountryId): HeroImage {
+  const hero = BRAND_HERO[brand] ?? BRAND_HERO.dewalt
+  return hero.byMarket?.[market] ?? hero.default
+}
+
+/** The resolved hero for this deployment's fixed brand + market. */
+export const SITE_HERO: HeroImage = heroImage(SITE_BRAND, SITE_MARKET)
+
 // Header category nav, chosen per brand (a brand-fact table like BRAND_VOICE,
 // never hardcoded to one brand). These are plausible top-level departments for
 // each brand's catalogue — enough to read as a real storefront to an executive
