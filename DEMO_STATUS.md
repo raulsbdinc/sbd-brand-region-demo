@@ -429,12 +429,40 @@ is the safety net for that inference.
   real sites — display font, letter case, tracking, heading size, button radius
   and fill, input underline colour — is a token in `Brand.vars`, which `AppShell`
   applies to the root. The drawer has no per-brand branching.
-- Fonts: DeWalt's face is **Archivo Expanded**, loaded as variable Archivo with
-  the `wdth` axis at `font-stretch: 125%`. Craftsman's real face is **GT
-  America**, which is commercially licensed and unavailable, so Inter stands in.
-  Stanley's display face is **Open Sans Condensed Bold**, loaded as variable Open
-  Sans with the `wdth` axis at `font-stretch: 75%` — the same technique as DeWalt.
-  Unlike Craftsman, this is the real typeface, not a stand-in.
+- Fonts: the brand display face is driven entirely by each brand's
+  `--brand-display-*` tokens — family, `font-stretch`, letter case, tracking, and
+  (as of 5 August) a new `--brand-display-weight`. DeWalt's face is **Archivo
+  Expanded**, loaded as variable Archivo with the `wdth` axis at
+  `font-stretch: 125%`, weight 900, uppercase. Stanley's is **Open Sans Condensed
+  Bold**, variable Open Sans with the `wdth` axis at `font-stretch: 75%`, weight
+  700, uppercase — the same technique as DeWalt, and unlike Craftsman the real
+  typeface. Craftsman's real face is **GT America**, commercially licensed and
+  unavailable, so Inter stands in at weight 800; Craftsman is not deployed. These
+  were checked against the live properties, not assumed: `dewalt.com` (the Polaris
+  property the drawer was measured from) and `stanleyoutillage.fr` both set their
+  hero and section headings in the display face with Inter reserved for body copy,
+  and both use ONE display face across the storefront **and** the sign-in panel.
+  Note that `dewalt.fr` is a **different** property entirely — Oswald plus Roboto,
+  no Archivo anywhere — so do not "correct" our type against it.
+  - Until 5 August the display face was used in exactly one place, the sign-in
+    drawer; every heading on the storefront, welcome and account routes was Inter,
+    so outside the sign-in panel the three sites differed only in colour. Shipped
+    that day: a `.brand-display` class in `app/globals.css` that pulls family,
+    stretch, case, tracking and weight from the active brand's tokens, applied to
+    five headings — the storefront hero and "Featured tools", the welcome route
+    `h1`, the cross-brand recognition `h2`, and the account route `h1`. It is
+    deliberately **not** applied to product names, the small uppercase eyebrow
+    labels, the footer column headings, or any body copy, because those are Inter
+    on the real sites too.
+  - Two implementation notes, both of which cost time to find. First, the class is
+    deliberately left OUT of any Tailwind layer, so it beats Tailwind's layered
+    utilities without a specificity fight; the conflicting weight and tracking
+    utilities were also removed at each call site rather than relying on source
+    order to win. Second, the comment above the rule must not contain the
+    two-character sequence that closes a CSS comment (a star followed by a slash) —
+    easy to write by accident when listing token names with a wildcard, and it
+    ends the comment early and silently mis-parses the rule below, so the class
+    never reaches the compiled CSS.
 - `components/sign-in-drawer.tsx` is the Polaris-style panel, with a password
   state and a passcode state. On a **successful** sign-in both paths — password
   and email passcode — do a full document navigation to `/welcome` rather than a
@@ -556,7 +584,11 @@ Stanley is a yellow bar carrying a black wordmark. So `stanley`'s `--brand-ink` 
 yellow rather than the near-black the other two brands use. This is deliberate and
 it earns its keep on stage — with two of the three sites now being yellow brands,
 the inverted bar is what makes "you are on a different brand now" read instantly
-from the back of a room.
+from the back of a room. And now that the display face carries across the whole
+storefront (shipped the same day — see the Fonts note above), it does even more
+separating work than the header inversion: DeWalt's headings are wide and
+expanded, Stanley's are narrow and condensed, so the two are unmistakable side by
+side even though both are yellow.
 
 **Two new tokens.** `--brand-wordmark-bg` and `--brand-wordmark-fg` were added
 because the wordmark chip used to derive its colour from `--brand`, which breaks
