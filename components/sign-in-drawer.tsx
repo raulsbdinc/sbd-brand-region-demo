@@ -8,9 +8,7 @@ import {
   type ReactNode,
 } from "react"
 import { ChevronRight, Eye, EyeOff, UserRound, X } from "lucide-react"
-import { passwordless } from "@auth0/nextjs-auth0/client"
 import { useBrand } from "@/components/app-providers"
-import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
 
 interface SignInDrawerProps {
@@ -76,10 +74,10 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   // Error shown on the password step when requesting a code (e.g. bad email).
   const [requestError, setRequestError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
-  // Passcode-step state. `authSession` is an opaque handle from the challenge
-  // endpoint — kept only in memory for the in-flight verify, never logged or
-  // persisted.
-  const [authSession, setAuthSession] = useState("")
+  // Passcode-step state. The opaque challenge handle is no longer held in the
+  // client at all — the server keeps which flow ran, the address and any
+  // auth_session in a short-lived httpOnly handoff cookie, so the browser never
+  // learns whether the address is a database user or a linked alternate.
   const [otp, setOtp] = useState("")
   const [otpError, setOtpError] = useState<string | null>(null)
   const [verifying, setVerifying] = useState(false)
@@ -110,7 +108,6 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setSigningIn(false)
     setOtp("")
     setOtpError(null)
-    setAuthSession("")
     setCreating(false)
     setCreateError(null)
     setCreateExists(false)
@@ -218,16 +215,18 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     }
   }
 
-  // Send an OTP to the typed email, then swap to the passcode step. Requires a
-  // syntactically valid email before touching the network.
-  async function sendChallenge(): Promise<boolean> {
-    const { authSession: session } = await passwordless.challengeWithEmail({
-      email,
-      connection: PASSWORD_CONNECTION,
-      allowSignup: false,
+  // Ask the server to send a passcode. The server alone resolves whether this
+  // address is a database user or a linked alternate and sends the code the
+  // matching way — the response is the same either way, so nothing here (or in
+  // the network tab) reveals which flow ran. Throws on a transport error so the
+  // callers can show their existing retry copy.
+  async function sendChallenge(): Promise<void> {
+    const res = await fetch("/api/signin/passcode/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
     })
-    setAuthSession(session)
-    return Boolean(session)
+    if (!res.ok) throw new Error("start failed")
   }
 
   async function handleRequestCode() {
@@ -261,10 +260,12 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     }
   }
 
-  // Exchange the code for a session. loginWithOtp sets the session cookie
-  // itself, so success just navigates into the app. A wrong/unknown email only
-  // fails here (the challenge always returns a valid-looking session), so we
-  // surface both cases with the same message and stay on the passcode step.
+  // Exchange the code for a session via the server verify route, which reads the
+  // handoff cookie, runs the matching flow, applies the passwordless account
+  // guard, and sets the __session cookie itself. Success just navigates into the
+  // app. Wrong code, unknown address and unlinked address all come back as the
+  // same 401 with one generic message, so we stay on the passcode step and never
+  // distinguish them.
   async function handleVerify(e: FormEvent) {
     e.preventDefault()
     const code = otp.trim()
@@ -272,7 +273,16 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setVerifying(true)
     setOtpError(null)
     try {
-      await passwordless.loginWithOtp({ authSession, otp: code })
+      const res = await fetch("/api/signin/passcode/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code }),
+      })
+      if (!res.ok) {
+        setOtpError("That code isn't right, or it's expired.")
+        setVerifying(false)
+        return
+      }
       // Full document navigation, same reasoning as the password path above:
       // tear the drawer down and re-render against the just-set session cookie.
       window.location.assign("/welcome")
