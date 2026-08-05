@@ -9,6 +9,8 @@ import {
 } from "react"
 import { ChevronRight, Eye, EyeOff, UserRound, X } from "lucide-react"
 import { useBrand } from "@/components/app-providers"
+import { GoogleMark } from "@/components/google-mark"
+import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
 
 interface SignInDrawerProps {
@@ -21,6 +23,12 @@ interface SignInDrawerProps {
 // brand token, so both brands theme both buttons through one definition.
 const PRIMARY_BUTTON_CLASS =
   "flex h-8 w-full items-center justify-center gap-2 font-[700] [background-color:var(--brand)] [border-radius:var(--brand-button-radius)] [color:var(--brand-button-text)] [font-family:var(--brand-display-font)] [font-size:var(--brand-button-size)] [font-stretch:var(--brand-display-stretch)] [text-transform:var(--brand-display-case)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2 disabled:opacity-60"
+
+// Secondary CTA: same size/shape/typography as the primary button but with a
+// transparent fill and a hairline border, so "Continue with Google" reads as a
+// clearly subordinate alternative rather than a second brand-coloured action.
+const SECONDARY_BUTTON_CLASS =
+  "flex h-8 w-full items-center justify-center gap-2 border bg-transparent font-[700] [border-color:var(--brand-input-border)] [border-radius:var(--brand-button-radius)] [color:var(--brand-label-color)] [font-family:var(--brand-display-font)] [font-size:var(--brand-button-size)] [font-stretch:var(--brand-display-stretch)] [text-transform:var(--brand-display-case)] outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
 
 // Underline-only input shared by every field (email, password, passcode).
 const INPUT_CLASS =
@@ -490,6 +498,20 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
         >
           <UserRound className="size-4" />
           {signingIn ? "Signing in…" : "Sign in"}
+        </button>
+
+        {/* Alternate way in: hand off to Auth0 with the Google connection
+            pre-selected. This is a full-page navigation (not fetch) so the
+            browser follows Auth0's redirect chain. prompt=login is deliberate —
+            see GOOGLE_SIGNIN_PATH — so every brand re-challenges even when a
+            Google session already exists, which is the whole point of the demo. */}
+        <button
+          type="button"
+          onClick={() => window.location.assign(GOOGLE_SIGNIN_PATH)}
+          className={`mt-3 ${SECONDARY_BUTTON_CLASS}`}
+        >
+          <GoogleMark className="size-4" />
+          Continue with Google
         </button>
 
         <button

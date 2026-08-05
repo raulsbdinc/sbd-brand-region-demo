@@ -48,6 +48,8 @@ import {
 import { cn } from "@/lib/utils"
 import { OtpInput } from "@/components/flows/otp-input"
 import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
+import { GoogleMark } from "@/components/google-mark"
+import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import type { OtherSite } from "@/lib/claims"
 import {
   ADDRESS_LOCALITY_ORDER,
@@ -479,7 +481,7 @@ function DetailsSection({
 interface Identity {
   provider: string
   user_id: string
-  profileData?: { email?: string }
+  profileData?: { email?: string; name?: string }
 }
 
 interface AlternateEmail {
@@ -2188,6 +2190,108 @@ function BackupCodes({ live }: { live: boolean }) {
   )
 }
 
+// Row 4 — Google. State comes from the account's linked identities: a
+// "google-oauth2" identity means Google is connected. Connecting is a full
+// redirect to Auth0 (see GOOGLE_SIGNIN_PATH); a verified-email Google sign-in
+// is attached to any existing password account server-side by an Auth0 Action,
+// so there is no link endpoint to call from here. Disconnecting is a plain
+// server call, guarded so the account can never be left with no way in.
+function GoogleSignIn({ live }: { live: boolean }) {
+  const { data, error, mutate } = useSWR<{
+    configured: boolean
+    identities: Identity[]
+  }>(live ? "/api/account/identities" : null, fetcher)
+
+  if (error) warnUnavailable("Google sign-in", (error as { status?: number }).status)
+
+  const identities = data?.identities ?? []
+  const google = identities.find((id) => id.provider === "google-oauth2")
+  const connectedLabel =
+    google?.profileData?.email ?? google?.profileData?.name ?? google?.user_id
+  // Safety net: never let the disconnect leave the account with nothing to sign
+  // in with. In practice the password identity is always present, so this only
+  // trips in the unlikely case Google is the single remaining identity.
+  const isOnlyWayIn = Boolean(google) && identities.length <= 1
+
+  const [busy, setBusy] = useState(false)
+  const [rowError, setRowError] = useState<string | null>(null)
+
+  async function disconnect() {
+    if (!google || isOnlyWayIn) return
+    setBusy(true)
+    setRowError(null)
+    try {
+      const res = await fetch(
+        `/api/account/identities?provider=google-oauth2&user_id=${encodeURIComponent(google.user_id)}`,
+        { method: "DELETE" },
+      )
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setRowError(json.error ?? "We couldn't disconnect Google just now. Please try again.")
+      }
+      await mutate()
+    } catch {
+      setRowError("Something went wrong. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!live) return null
+
+  return (
+    <MethodRow
+      icon={<GoogleMark className="size-4" />}
+      name="Google"
+      line={
+        google
+          ? `Connected as ${connectedLabel}.`
+          : "Use your Google account to sign in. We'll connect it to this account, so it stays one profile."
+      }
+      right={google ? <ActiveTag /> : null}
+    >
+      <div className="mt-3">
+        {google ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive"
+            disabled={busy || isOnlyWayIn}
+            onClick={disconnect}
+          >
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
+            Disconnect
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.location.assign(GOOGLE_SIGNIN_PATH)}
+          >
+            <GoogleMark className="size-4" />
+            Connect Google
+          </Button>
+        )}
+        {isOnlyWayIn ? (
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            This is currently your only way to sign in, so it can&apos;t be
+            removed. Add your password or another way in first.
+          </p>
+        ) : null}
+        {rowError ? (
+          <div className="mt-2">
+            <Note tone="error">{rowError}</Note>
+          </div>
+        ) : null}
+      </div>
+    </MethodRow>
+  )
+}
+
 function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section
@@ -2248,16 +2352,19 @@ function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: st
             right={alternateCount > 0 ? <ActiveTag /> : null}
           />
 
-          {/* 4 — Authenticator app (existing inline enrolment) */}
+          {/* 4 — Google (linked identity; connect / disconnect) */}
+          <GoogleSignIn live={live} />
+
+          {/* 5 — Authenticator app (existing inline enrolment) */}
           <AuthenticatorApp live={live} />
 
-          {/* 5 — Email security code (new) */}
+          {/* 6 — Email security code (new) */}
           <EmailSecurityCode live={live} />
 
-          {/* 6 — Backup codes (new) */}
+          {/* 7 — Backup codes (new) */}
           <BackupCodes live={live} />
 
-          {/* 7 — Passkey (not actionable, explainer only) */}
+          {/* 8 — Passkey (not actionable, explainer only) */}
           <MethodRow
             icon={<Fingerprint className="size-4" />}
             name="Passkey (Face ID, fingerprint or device PIN)"
@@ -2274,7 +2381,7 @@ function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: st
             }
           />
 
-          {/* 8 — Text-message passcode (not actionable, explainer only) */}
+          {/* 9 — Text-message passcode (not actionable, explainer only) */}
           <MethodRow
             icon={<MessageSquare className="size-4" />}
             name="Text-message passcode"

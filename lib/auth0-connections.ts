@@ -15,6 +15,24 @@ import type { SocialProvider } from "./types"
 import { SITE_CONNECTION } from "./site"
 
 /**
+ * The one-click "Continue with Google" / "Connect Google" navigation target,
+ * shared by the sign-in drawer and the customer profile so both stay identical.
+ *
+ * `prompt=login` is REQUIRED here, not cosmetic. Once a visitor signs in with
+ * Google on one brand (say DeWalt France), Auth0 holds an IdP session for them.
+ * Without `prompt=login`, clicking Google on another brand (Stanley France)
+ * would sign them straight in with no interaction at all — which directly
+ * contradicts the thing this demo exists to show: that each brand challenges
+ * you again even though it is one underlying account. With it, Auth0
+ * re-challenges on every site. `returnTo` lands the finished login back on the
+ * customer profile. (A verified-email Google sign-in is attached to any
+ * existing password account server-side by an Auth0 Action, so this path never
+ * needs to call a link endpoint.)
+ */
+export const GOOGLE_SIGNIN_PATH =
+  "/auth/login?connection=google-oauth2&prompt=login&returnTo=/profile"
+
+/**
  * Auth0 connection names for each social provider.
  *
  * These are the default upstream connection identifiers Auth0 uses. If the SBD
