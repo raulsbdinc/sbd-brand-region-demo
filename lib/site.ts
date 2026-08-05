@@ -103,6 +103,12 @@ const BRAND_VOICE: Record<BrandId, Omit<StorefrontContent, "eyebrow" | "marketLi
       "Discover the Craftsman range built for pros and homeowners across {market}, priced for your region.",
     footerTagline: "Reliable tools for every job around the home and beyond.",
   },
+  stanley: {
+    headline: "The tools that measure up, in {market}.",
+    subcopy:
+      "Explore the Stanley hand tool, storage and measuring range trusted by professionals across {market}, priced for your region.",
+    footerTagline: "Over 175 years of tools built to build, fix and protect.",
+  },
 }
 
 /**
@@ -139,6 +145,7 @@ export const SITE_CONTENT: StorefrontContent = storefrontContent(
 const BRAND_NAV: Record<BrandId, string[]> = {
   dewalt: ["Power Tools", "Hand Tools", "Accessories", "Storage"],
   craftsman: ["Power Tools", "Hand Tools", "Lawn & Garden", "Tool Storage"],
+  stanley: ["Hand Tools", "Power Tools", "Storage & Organisation", "Measuring & Marking"],
 }
 
 /** The header category list for this deployment's brand. */

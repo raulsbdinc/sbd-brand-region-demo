@@ -1,6 +1,6 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
-import { Geist_Mono, Inter, Archivo } from 'next/font/google'
+import { Geist_Mono, Inter, Archivo, Open_Sans } from 'next/font/google'
 import './globals.css'
 import { AppProviders } from '@/components/app-providers'
 import { AppShell } from '@/components/app-shell'
@@ -13,6 +13,15 @@ const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
 // --brand-display-stretch token to reach the "Expanded" cut.
 const archivo = Archivo({
   variable: '--font-archivo',
+  subsets: ['latin'],
+  axes: ['wdth'],
+})
+// Stanley's display face is Open Sans Condensed Bold. We load Open Sans as a
+// variable font including the width (wdth) axis; the drawer applies
+// font-stretch: 75% via the --brand-display-stretch token to reach the
+// "Condensed" cut — the same technique used for DeWalt's Archivo Expanded (125%).
+const openSans = Open_Sans({
+  variable: '--font-open-sans',
   subsets: ['latin'],
   axes: ['wdth'],
 })
@@ -109,7 +118,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${archivo.variable} ${geistMono.variable} bg-background`}
+      className={`${inter.variable} ${archivo.variable} ${openSans.variable} ${geistMono.variable} bg-background`}
     >
       <body className="font-sans antialiased">
         <AppProviders authConfigured={isAuthConfigured()}>

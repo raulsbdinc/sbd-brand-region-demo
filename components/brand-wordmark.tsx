@@ -21,7 +21,13 @@ export function BrandWordmark({
       className={cn(
         "inline-flex items-center rounded-sm px-2 py-1 text-sm font-extrabold tracking-tight tabular-nums",
         onDark
-          ? "bg-[var(--brand)] text-[var(--brand-foreground)]"
+          ? // Use the dedicated wordmark tokens, not --brand, so the chip works
+            // when a brand's bar and accent are the same colour. On Stanley the
+            // header bar and accent are both yellow, so the old --brand rule
+            // painted a yellow chip on a yellow bar and the wordmark vanished;
+            // Stanley's real mark is plain black type on the yellow bar, which
+            // is what transparent + #171717 produces.
+            "bg-[var(--brand-wordmark-bg)] text-[var(--brand-wordmark-fg)]"
           : "bg-[var(--brand-ink)] text-[var(--brand-ink-foreground)]",
         className,
       )}

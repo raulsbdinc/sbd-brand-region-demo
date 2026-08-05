@@ -10,7 +10,7 @@ This is not a storefront. It is three thin branded shells wrapped around a real 
 | --- | --- | --- | --- |
 | DeWalt France | DeWalt | FR | `dewalt-fr` |
 | DeWalt Germany | DeWalt | DE | `dewalt-de` |
-| Craftsman France | Craftsman | FR | `craftsman-fr` |
+| Stanley France | Stanley | FR | `stanley-fr` |
 
 France and Germany are both in the EU locality, so all three live in **one tenant and one directory**. That is what lets the same person be one account across them.
 

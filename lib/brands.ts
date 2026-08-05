@@ -49,6 +49,10 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-label-muted": "#646062",
       "--brand-description-color": "#413d3f",
       "--brand-button-text": "#231e20",
+      // Wordmark chip: the values DeWalt already resolved to via --brand /
+      // --brand-foreground; named explicitly so no brand relies on a CSS fallback.
+      "--brand-wordmark-bg": "#FEBD17",
+      "--brand-wordmark-fg": "#1a1a1a",
     },
   },
   craftsman: {
@@ -83,12 +87,56 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-label-muted": "#768084",
       "--brand-description-color": "#53585a",
       "--brand-button-text": "#ffffff",
+      // Wordmark chip: the values Craftsman already resolved to via --brand /
+      // --brand-foreground; named explicitly so no brand relies on a CSS fallback.
+      "--brand-wordmark-bg": "#D6001C",
+      "--brand-wordmark-fg": "#ffffff",
+    },
+  },
+  stanley: {
+    id: "stanley",
+    name: "Stanley",
+    wordmark: "STANLEY",
+    category: "Hand tools, storage and measuring",
+    vars: {
+      "--brand": "#FFD20A",
+      "--brand-foreground": "#171717",
+      // INTENTIONAL, measured off the live Stanley France site: --brand-ink is
+      // YELLOW here (not near-black like the other two brands). Stanley inverts
+      // DeWalt's lockup — DeWalt is a black bar with a yellow wordmark, Stanley
+      // is a yellow bar with a black wordmark. The header reads its background
+      // from --brand-ink and its text from --brand-ink-foreground, so this
+      // inverts correctly with no header change. Do NOT "fix" these back to black.
+      "--brand-ink": "#FFD20A",
+      "--brand-ink-foreground": "#171717",
+      "--brand-surface": "#ffffff",
+      "--brand-surface-muted": "#f5f5f5",
+      "--brand-border": "#d4d4d4",
+      "--brand-foreground-strong": "#171717",
+      "--brand-muted-foreground": "#525252",
+      // Sign-in surface facts, measured off the live Stanley site. Display face
+      // is Open Sans Condensed Bold (Open Sans + wdth, stretched 75% — see app/layout).
+      "--brand-display-font": "var(--font-open-sans), 'Open Sans Fallback', sans-serif",
+      "--brand-display-stretch": "75%",
+      "--brand-display-case": "uppercase",
+      "--brand-display-tracking": "-0.0128em",
+      "--brand-heading-size": "28px",
+      "--brand-heading-line": "32px",
+      "--brand-button-radius": "4px",
+      "--brand-button-size": "16px",
+      "--brand-input-border": "#d4d4d4",
+      "--brand-label-color": "#171717",
+      "--brand-label-muted": "#525252",
+      "--brand-description-color": "#404040",
+      "--brand-button-text": "#171717",
+      "--brand-wordmark-bg": "transparent",
+      "--brand-wordmark-fg": "#171717",
     },
   },
 }
 
 /** Ordered list of brands the repo can be deployed as. */
-export const BRAND_ORDER: BrandId[] = ["dewalt", "craftsman"]
+export const BRAND_ORDER: BrandId[] = ["dewalt", "craftsman", "stanley"]
 
 export interface Country {
   id: CountryId

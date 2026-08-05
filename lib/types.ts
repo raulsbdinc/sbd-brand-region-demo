@@ -1,6 +1,6 @@
 // Each deployment is pinned to one brand via NEXT_PUBLIC_BRAND (see lib/site.ts);
 // the brand model supplies that brand's theme tokens, wordmark, and metadata.
-export type BrandId = "dewalt" | "craftsman"
+export type BrandId = "dewalt" | "craftsman" | "stanley"
 
 export type CountryId = "us" | "uk" | "ca" | "fr" | "de" | "au"
 
