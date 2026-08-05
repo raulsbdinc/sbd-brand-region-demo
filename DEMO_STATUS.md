@@ -10,7 +10,7 @@ Secrets are deliberately absent. See "Credentials" at the bottom.
 
 ## What the demo has to show
 
-Three brand-region sites — DeWalt France, DeWalt Germany, Craftsman France —
+Three brand-region sites — DeWalt France, DeWalt Germany, Stanley France —
 that look like the real Polaris storefronts, where:
 
 - One person has **one account with one password** that works on all three.
@@ -49,7 +49,13 @@ is what makes embedded password login possible (see below).
 | --- | --- |
 | SBD Demo - DeWalt France | `BGDDy2XQqKEoHkjCaHcDyddwEB3yM1Va` |
 | SBD Demo - DeWalt Germany | `nucmPspqRd7fh8m77mvhx0VipdIx9zyP` |
-| SBD Demo - Craftsman France | `3aKESYWk19d4bd9JBb2CF9rUJz6l2tGI` |
+| SBD Demo - Stanley France | `3aKESYWk19d4bd9JBb2CF9rUJz6l2tGI` |
+
+**The third row's client id is unchanged.** On 5 August this application was
+*renamed* from "SBD Demo - Craftsman France" to "SBD Demo - Stanley France", not
+recreated, so `3aKESYWk19d4bd9JBb2CF9rUJz6l2tGI` still identifies it — the single
+most surprising fact on this table, and the reason nothing that references this
+client id needed to change.
 
 Callback and logout URLs on each: its own Vercel domain plus
 `https://sbd-brand-region-demo.vercel.app` for the v0 preview.
@@ -124,7 +130,7 @@ shared demo user would still break the demo, so leave it alone during a run.
 password across the three sites, with no linking required.
 
 The name carries the story: a single EU directory serving DeWalt France, DeWalt
-Germany and Craftsman France, because France and Germany share a compliance zone.
+Germany and Stanley France, because France and Germany share a compliance zone.
 
 Superseded and **deleted** on 3 August: `dewalt-fr` (`con_47SpxTfS2YeWCAmc`),
 `dewalt-de` (`con_rGDHijRVGeKL6HYz`), `craftsman-fr` (`con_xNOjfFUBxcP9UGt4`),
@@ -149,7 +155,7 @@ proof of concept in this tenant is untouched.
 
 What it writes. On every successful login it appends the current site to
 `app_metadata.sbd_sites` on the user record — a map of site id to ISO timestamp,
-with ids `dewalt-fr`, `dewalt-de` and `craftsman-fr`. That directory entry is the
+with ids `dewalt-fr`, `dewalt-de` and `stanley-fr`. That directory entry is the
 source of truth the recognition beat reads back from; nothing is inferred from
 the browser.
 
@@ -192,7 +198,7 @@ endpoint disagree about this, and the error messages are unhelpful.
 
 Then rehearsed end to end in a browser against the deployed sites. Signed into
 DeWalt France through the drawer; landed on `/welcome` having never left the
-domain. Visited Craftsman France, which sent us to sign in rather than honouring
+domain. Visited Stanley France, which sent us to sign in rather than honouring
 the existing session. Signed in there with **the same email and the same
 password**, and landed on its own `/welcome`.
 
@@ -327,7 +333,7 @@ Checked so they do not bite later:
 
 The three sites share the one `sbd-eu` connection, so an email address is unique
 across all of them at the directory level. An address already registered on
-DeWalt France **cannot be registered again** on DeWalt Germany or on Craftsman
+DeWalt France **cannot be registered again** on DeWalt Germany or on Stanley
 France — one record per email, not one per brand. This is the same
 single-connection fact that gives "same user, same password"; it simply shows
 its other face at sign-up.
@@ -364,13 +370,13 @@ passcode challenge, and the static drawer line). **Do not tighten this wording
 into a confirmation.**
 
 Verified live on the deployed sites, without creating any user. The existing demo
-address returns `exists_or_invalid` on both Craftsman France and DeWalt Germany —
+address returns `exists_or_invalid` on both Stanley France and DeWalt Germany —
 the already-registered path — and a brand-new address paired with a weak password
 returns `weak_password` rather than `exists_or_invalid`, confirming the strength
 check is reached and the two failure classes stay distinct.
 
 **The product point for Michael and Xavier.** One directory means a customer
-**cannot hold separate DeWalt and Craftsman accounts on the same email**. That is
+**cannot hold separate DeWalt and Stanley accounts on the same email**. That is
 the flip side of "same user, same password", and it is a product decision, not a
 technical limit. A customer who wants a separate identity simply registers with a
 different email — at which point they become a separate person, a separate record
@@ -387,16 +393,16 @@ which is what makes the session boundary real.
 | --- | --- |
 | `sbd-demo-dewalt-fr` | https://sbd-demo-dewalt-fr.vercel.app |
 | `sbd-demo-dewalt-de` | https://sbd-demo-dewalt-de.vercel.app |
-| `sbd-demo-craftsman-fr` | https://sbd-demo-craftsman-fr.vercel.app |
+| `sbd-demo-stanley-fr` | https://sbd-demo-stanley-fr.vercel.app |
 
 The `sbd-demo-` prefix avoids colliding with the SBD team's existing `dewalt-de`,
 `dewalt-bg` and similar projects.
 
 ### Environment variables
 
-| Variable | dewalt-fr | dewalt-de | craftsman-fr |
+| Variable | dewalt-fr | dewalt-de | stanley-fr |
 | --- | --- | --- | --- |
-| `NEXT_PUBLIC_BRAND` | `dewalt` | `dewalt` | `craftsman` |
+| `NEXT_PUBLIC_BRAND` | `dewalt` | `dewalt` | `stanley` |
 | `NEXT_PUBLIC_MARKET` | `fr` | `de` | `fr` |
 | `NEXT_PUBLIC_AUTH0_CONNECTION` | `sbd-eu` | `sbd-eu` | `sbd-eu` |
 | `AUTH0_CONNECTION` | `sbd-eu` | `sbd-eu` | `sbd-eu` |
@@ -426,6 +432,9 @@ is the safety net for that inference.
 - Fonts: DeWalt's face is **Archivo Expanded**, loaded as variable Archivo with
   the `wdth` axis at `font-stretch: 125%`. Craftsman's real face is **GT
   America**, which is commercially licensed and unavailable, so Inter stands in.
+  Stanley's display face is **Open Sans Condensed Bold**, loaded as variable Open
+  Sans with the `wdth` axis at `font-stretch: 75%` — the same technique as DeWalt.
+  Unlike Craftsman, this is the real typeface, not a stand-in.
 - `components/sign-in-drawer.tsx` is the Polaris-style panel, with a password
   state and a passcode state. On a **successful** sign-in both paths — password
   and email passcode — do a full document navigation to `/welcome` rather than a
@@ -513,7 +522,7 @@ reason the beat is post-login and not pre-login. The static drawer line above is
 unaffected: it is still shown to everyone, with no lookup.
 
 Verified live on the deployed URLs after both merges. Signing in on DeWalt France
-shows no panel; signing in next on Craftsman France lands on the welcome route
+shows no panel; signing in next on Stanley France lands on the welcome route
 showing "Welcome back to SBD." naming DeWalt France with a locale-formatted last
 sign-in; and DeWalt Germany then names both, most recent first. The directory id
 is identical on all three.
@@ -531,6 +540,59 @@ presenting:
 - **Browser sessions from an earlier day can survive and predate the Action**, so
   the welcome page shows the "Action not deployed" placeholder and no recognition.
   Sign out of all three sites before rehearsing or presenting.
+
+## 5 August — Craftsman France became Stanley France
+
+The third site changed brand. Craftsman France is gone from the deployed set and
+Stanley France takes its place; Craftsman stays in the codebase as a second brand
+skin, simply no longer deployed. Everything below already happened and is live
+and verified.
+
+**Why the header is yellow.** Every Stanley brand token was measured off the live
+Stanley France site, `stanleyoutillage.fr`. Stanley's brand yellow is `#FFD20A`
+and its ink is `#171717`. The part that looks like a mistake and is not: Stanley
+**inverts** DeWalt's lockup. DeWalt is a black bar carrying a yellow wordmark;
+Stanley is a yellow bar carrying a black wordmark. So `stanley`'s `--brand-ink` is
+yellow rather than the near-black the other two brands use. This is deliberate and
+it earns its keep on stage — with two of the three sites now being yellow brands,
+the inverted bar is what makes "you are on a different brand now" read instantly
+from the back of a room.
+
+**Two new tokens.** `--brand-wordmark-bg` and `--brand-wordmark-fg` were added
+because the wordmark chip used to derive its colour from `--brand`, which breaks
+when a brand's bar and its accent are the same colour — exactly Stanley's case,
+where a yellow chip on a yellow bar made the wordmark vanish. The chip now reads
+these dedicated tokens instead. DeWalt and Craftsman were given the values they
+already resolved to (`#FEBD17`/`#1a1a1a` and `#D6001C`/`#ffffff`), so neither
+changed appearance; only Stanley, at `transparent`/`#171717`, renders its real
+black-on-yellow mark.
+
+**Auth0.** The application was renamed to `SBD Demo - Stanley France` with the
+**same client id** `3aKESYWk19d4bd9JBb2CF9rUJz6l2tGI`, and its callback, logout,
+allowed-origin and web-origin URLs were repointed to the new domain. Nothing about
+grants, the `sbd-eu` connection, or the M2M app changed.
+
+**The recognition Action.** `Recognise SBD sites across brands` was edited and
+redeployed as **version 3**, with `stanley-fr` and "Stanley France" replacing the
+Craftsman entry against that same unchanged client id. A defensive property paid
+off here: the Action filters recorded sites through its own site table, so the
+stale `craftsman-fr` entries already sitting in user records are ignored rather
+than rendered — no user records needed cleaning up.
+
+**The demo user.** `app_metadata.sbd_sites` was cleared to `{}` on the shared demo
+user so rehearsals start from a clean recognition state.
+
+**Vercel.** The project was renamed to `sbd-demo-stanley-fr`, the new
+`.vercel.app` domain was added, and the old `sbd-demo-craftsman-fr.vercel.app`
+domain was **removed** rather than left redirecting — deliberately, so nobody can
+demo on a URL that names a brand we no longer show. `NEXT_PUBLIC_BRAND` is now
+`stanley`. `APP_BASE_URL` is unset by design, so the base URL follows the request
+host and needed no change.
+
+**Verified live after the merge.** Stanley France renders the inverted yellow bar
+with its own nav and copy; sign-in works on the new domain against the same one
+account and password; and signing in afterwards on DeWalt France shows "Welcome
+back to SBD." naming Stanley France with a locale-formatted timestamp.
 
 ## Working with the v0 chat
 
