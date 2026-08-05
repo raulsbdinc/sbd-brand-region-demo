@@ -583,6 +583,40 @@ to `/signin`. That page is the old unbranded proof of concept, and one stray
 click during the demo would have put it on screen instead of the Polaris panel.
 The drawer's open state lives in `app-providers` so any component can raise it.
 
+### Where the storefront imagery comes from (5 August)
+
+The storefront originally shipped with generated stand-in product images. They
+are gone. Every product shot and hero on the three sites is now the brand's own
+photography, pulled from the **production asset CDNs that serve dewalt.fr and
+stanleyoutillage.fr to real customers**, plus Stanley Black & Decker's own Bynder
+library for the campaign heroes:
+
+- `assets.dewalt.fr/EMEA/PRODUCT/IMAGES/HIRES/WHITEBG/…` — DEWALT product shots
+- `assets.stanleyoutillage.fr/EMEA/PRODUCT/IMAGES/HIRES/WHITEBG/…` — STANLEY shots
+- `bynder.sbdinc.com` — the three hero images
+
+This matters for the room we are presenting to: the audience works here and
+recognises its own products, so an invented tool would undercut everything else
+on screen. The catalogue carries the **real model codes** (DCD794NT, DCF860NT,
+DCS383H2 for DEWALT; SFMCD716B, SFMCF811B, SFMCS311B for STANLEY) and both brands
+deliberately cover the same three categories, so moving between a DEWALT site and
+the STANLEY site shows one storefront shape carrying a genuinely different range.
+
+The files are **committed to `public/`, not hotlinked**. Nothing on stage then
+depends on a third-party CDN answering, and no `next.config` remote patterns are
+needed. Guessing SKU strings against the media library does not work — every
+guess returns the same small fallback image — so the URLs were read off the
+brands' own rendered category pages. If you add a product, take the URL from the
+live site rather than constructing one, and check the saved file's byte size so a
+fallback or an error page is never committed as a photo.
+
+The two DEWALT markets carry **different heroes on purpose**. Real brands run
+different regional campaigns, and on a projector the flag and market line are
+easy to miss, so a different hero is what tells the audience the presenter has
+actually moved to another site. Product tiles are white because the supplied
+shots are on white; on the previous tinted tile the photo's own background showed
+as a pale square.
+
 ## Presentation decisions
 
 **Copy stays in English on all three sites**, including France and Germany. The
