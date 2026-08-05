@@ -1,0 +1,142 @@
+import { NextResponse } from "next/server"
+import { headers } from "next/headers"
+import {
+  requireAccountUser,
+  managementErrorResponse,
+} from "@/lib/account-guard"
+import {
+  getUser,
+  getUsersByEmail,
+  linkIdentity,
+  ManagementError,
+} from "@/lib/auth0-management"
+import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
+import {
+  resolvePasswordlessCreds,
+  verifyEmailPasscode,
+  PasswordlessError,
+} from "@/lib/auth0-passwordless"
+
+// POST /api/account/emails/verify  { email, code }
+// ------------------------------------------------
+// Second step of adding an alternate sign-in email. The person has just proven
+// they hold the mailbox by entering the passcode; we exchange it for the NEW
+// secondary identity and LINK it onto this account so the alternate becomes a
+// real sign-in identifier for the same person.
+//
+// GUARD ORDER (privacy): only NOW — after mailbox ownership is proven — do we
+// look the address up against the wider directory. If it already signs in to a
+// DIFFERENT account on our database connection, we refuse the link and say so
+// plainly. That is not an enumeration leak (they just proved they own the
+// mailbox) and it is the correct outcome: one sign-in address must resolve to
+// exactly one person.
+export const dynamic = "force-dynamic"
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+// Shown when the address is already a sign-in identifier for another account.
+const IN_USE_ELSEWHERE =
+  "That address is already used to sign in to another Stanley Black & Decker account, so it can't also sign in to this one. Sign in to that account to manage it, or use a different address."
+
+export async function POST(request: Request) {
+  const guard = await requireAccountUser()
+  if (!guard.ok) return guard.response
+
+  let email: string
+  let code: string
+  try {
+    const body = (await request.json()) as { email?: unknown; code?: unknown }
+    email = typeof body.email === "string" ? body.email.trim().toLowerCase() : ""
+    code = typeof body.code === "string" ? body.code.trim() : ""
+  } catch {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 })
+  }
+
+  if (!EMAIL_RE.test(email) || !/^\d{4,8}$/.test(code)) {
+    return NextResponse.json(
+      { error: "Enter the code we emailed you." },
+      { status: 400 },
+    )
+  }
+
+  // STEP b — exchange the passcode for the new secondary identity.
+  const cookieHeader = (await headers()).get("cookie")
+  const creds = resolvePasswordlessCreds(cookieHeader)
+  if (!creds) {
+    return NextResponse.json(
+      { error: "We can't verify this right now. Please try again shortly." },
+      { status: 503 },
+    )
+  }
+
+  let secondary
+  try {
+    secondary = await verifyEmailPasscode(creds, email, code)
+  } catch (err) {
+    if (err instanceof PasswordlessError && err.kind === "otp") {
+      return NextResponse.json(
+        { error: "That code isn't right or has expired. Please try again." },
+        { status: 400 },
+      )
+    }
+    console.log("[v0] emails/verify exchange failed:", (err as Error).message)
+    return NextResponse.json(
+      { error: "We couldn't verify that code. Please try again shortly." },
+      { status: 502 },
+    )
+  }
+
+  // If the passcode somehow resolved to this very account, there's nothing to
+  // link — just report success.
+  if (secondary.sub === guard.user.sub) {
+    try {
+      const me = await getUser(guard.user.sub)
+      return NextResponse.json({ ok: true, identities: me.identities ?? [] })
+    } catch (err) {
+      return managementErrorResponse(err)
+    }
+  }
+
+  // STEP (guard) — now that ownership is proven, refuse if the address already
+  // signs in to a DIFFERENT account on our database connection.
+  try {
+    const matches = await getUsersByEmail(email)
+    const conflict = matches.find(
+      (u) =>
+        u.user_id !== guard.user.sub &&
+        u.user_id !== secondary.sub &&
+        (u.identities ?? []).some(
+          (id) => id.connection === PASSWORD_CONNECTION,
+        ),
+    )
+    if (conflict) {
+      return NextResponse.json({ error: IN_USE_ELSEWHERE }, { status: 409 })
+    }
+  } catch (err) {
+    // If the lookup itself fails, don't link blind — surface a soft error.
+    console.log("[v0] emails/verify lookup failed:", (err as Error).message)
+    return NextResponse.json(
+      { error: "We couldn't finish adding that address. Please try again shortly." },
+      { status: 502 },
+    )
+  }
+
+  // STEP c — link the proven secondary identity onto the primary account.
+  try {
+    const identities = await linkIdentity(guard.user.sub, {
+      provider: secondary.provider,
+      user_id: secondary.userId,
+    })
+    return NextResponse.json({ ok: true, identities })
+  } catch (err) {
+    // A 400/409 here almost always means the address is attached elsewhere —
+    // fall back to the same plain message rather than a raw directory error.
+    if (
+      err instanceof ManagementError &&
+      (err.status === 400 || err.status === 409)
+    ) {
+      return NextResponse.json({ error: IN_USE_ELSEWHERE }, { status: 409 })
+    }
+    return managementErrorResponse(err)
+  }
+}

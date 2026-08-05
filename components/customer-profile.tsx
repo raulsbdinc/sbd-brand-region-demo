@@ -1,13 +1,15 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import useSWR from "swr"
 import {
+  ArrowLeft,
   Bell,
   Check,
   Code2,
   Fingerprint,
+  HelpCircle,
   KeyRound,
   Loader2,
   Mail,
@@ -16,6 +18,7 @@ import {
   Phone,
   Plus,
   ShieldAlert,
+  ShieldCheck,
   Star,
   Trash2,
   User,
@@ -37,14 +40,19 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { OtpInput } from "@/components/flows/otp-input"
 import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
   DEFAULT_ADDRESS_COUNTRY,
+  DEFAULT_PHONE_PREFIX,
   DEFAULT_PREFERENCES,
+  isValidE164,
+  normalizePhoneInput,
   type Address,
   type AddressType,
   type CommunicationChannel,
+  type Phone as PhoneNumber,
   type SitePreferences,
 } from "@/lib/metadata-schema"
 
@@ -101,7 +109,7 @@ function ProfileCard({
   children,
 }: {
   icon: React.ReactNode
-  title: string
+  title: React.ReactNode
   description: string
   action?: React.ReactNode
   children: React.ReactNode
@@ -439,35 +447,58 @@ function DetailsSection({
 }
 
 // ===========================================================================
-// Email addresses
+// Email addresses — add a REAL alternate sign-in address
 // ===========================================================================
+// "Add another email address" runs a two-step inline flow inside this card:
+// enter the address → enter the 6-digit passcode we email → the address is
+// LINKED onto this account and can be used to sign in. It uses the same six-box
+// code input as the sign-in drawer so it reads as one product. There is no
+// route change and no developer vocabulary on screen.
 interface Identity {
   provider: string
   user_id: string
   profileData?: { email?: string }
 }
 
+interface AlternateEmail {
+  email: string
+  user_id: string
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
-  const { data, error } = useSWR<{
+  const { data, error, mutate } = useSWR<{
     configured: boolean
     user: { email?: string; identities?: Identity[] }
   }>(live ? "/api/account/profile" : null, fetcher)
 
   if (error) warnUnavailable("Email addresses", (error as { status?: number }).status)
 
+  const [adding, setAdding] = useState(false)
+
   const accountEmail = data?.user?.email ?? primaryEmail
-  const alternates =
-    (data?.user?.identities ?? [])
-      .filter((id) => id.provider === "email")
-      .map((id) => id.profileData?.email ?? id.user_id)
-      .filter((e): e is string => Boolean(e))
-      .filter((e) => e.toLowerCase() !== (accountEmail ?? "").toLowerCase()) ?? []
+  const alternates: AlternateEmail[] = (data?.user?.identities ?? [])
+    .filter((id) => id.provider === "email")
+    .map((id) => ({
+      email: ((id.profileData?.email as string | undefined) ?? id.user_id) || "",
+      user_id: id.user_id,
+    }))
+    .filter((a) => Boolean(a.email))
+    .filter((a) => a.email.toLowerCase() !== (accountEmail ?? "").toLowerCase())
+
+  // Addresses already on the account — used for an instant client-side check so
+  // the person gets immediate feedback before we email anything.
+  const knownEmails = [
+    ...(accountEmail ? [accountEmail.toLowerCase()] : []),
+    ...alternates.map((a) => a.email.toLowerCase()),
+  ]
 
   return (
     <ProfileCard
       icon={<Mail className="size-5" />}
       title="Email addresses"
-      description="Where we send order updates and account notices."
+      description="Where we send order updates and account notices. You can add a second address and sign in with either."
     >
       {error ? (
         <Note>{UNAVAILABLE_COPY}</Note>
@@ -486,66 +517,655 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
               <Note>No email address on file yet.</Note>
             </li>
           )}
-          {alternates.map((e) => (
+          {alternates.map((a) => (
             <li
-              key={e}
+              key={a.user_id}
               className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
             >
-              <span className="min-w-0 truncate text-sm text-foreground">{e}</span>
+              <span className="min-w-0 truncate text-sm text-foreground">{a.email}</span>
+              <div className="flex shrink-0 items-center gap-2">
+                <Badge>Signs you in too</Badge>
+                <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
+              </div>
             </li>
           ))}
         </ul>
       )}
 
-      {/* Add flow lands in the next update — rendered but not yet active. */}
-      <div className="mt-4">
-        <Button variant="outline" size="sm" disabled title="Coming soon">
-          <Plus className="size-4" />
-          Add another email address
-        </Button>
-      </div>
+      {live && !error ? (
+        adding ? (
+          <AddEmailFlow
+            knownEmails={knownEmails}
+            onCancel={() => setAdding(false)}
+            onLinked={() => {
+              setAdding(false)
+              mutate()
+            }}
+          />
+        ) : (
+          <div className="mt-4">
+            <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+              <Plus className="size-4" />
+              Add another email address
+            </Button>
+          </div>
+        )
+      ) : (
+        <div className="mt-4">
+          <Button variant="outline" size="sm" disabled>
+            <Plus className="size-4" />
+            Add another email address
+          </Button>
+        </div>
+      )}
     </ProfileCard>
   )
 }
 
+/** The inline enter-address → enter-passcode → done flow. */
+function AddEmailFlow({
+  knownEmails,
+  onCancel,
+  onLinked,
+}: {
+  knownEmails: string[]
+  onCancel: () => void
+  onLinked: () => void
+}) {
+  const [step, setStep] = useState<"email" | "code" | "done">("email")
+  const [email, setEmail] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [cooldown, setCooldown] = useState(0)
+  const [otpKey, setOtpKey] = useState(0)
+
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const id = setInterval(() => setCooldown((c) => (c > 0 ? c - 1 : 0)), 1000)
+    return () => clearInterval(id)
+  }, [cooldown])
+
+  const normalizedEmail = email.trim().toLowerCase()
+  const emailValid = EMAIL_RE.test(normalizedEmail)
+
+  async function sendCode(e?: React.FormEvent) {
+    e?.preventDefault()
+    if (!emailValid) return
+    if (knownEmails.includes(normalizedEmail)) {
+      setError("That address is already on your account.")
+      return
+    }
+    setError(null)
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/emails/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(json.error ?? "We couldn't send a code right now. Please try again.")
+        setBusy(false)
+        return
+      }
+      setBusy(false)
+      setStep("code")
+      setCooldown(30)
+      setOtpKey((k) => k + 1)
+    } catch {
+      setError("Something went wrong. Please try again.")
+      setBusy(false)
+    }
+  }
+
+  async function resend() {
+    if (cooldown > 0) return
+    setError(null)
+    setOtpKey((k) => k + 1)
+    setCooldown(30)
+    try {
+      await fetch("/api/account/emails/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail }),
+      })
+    } catch {
+      // A failed resend just means no new code arrived; the person can try again.
+    }
+  }
+
+  async function verify(entered: string) {
+    setError(null)
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/emails/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail, code: entered }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(json.error ?? "That code isn't right. Please try again.")
+        setOtpKey((k) => k + 1)
+        setBusy(false)
+        return
+      }
+      setBusy(false)
+      setStep("done")
+      setTimeout(() => onLinked(), 1800)
+    } catch {
+      setError("Something went wrong. Please try again.")
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-muted/40 p-4">
+      {step === "email" ? (
+        <form onSubmit={sendCode} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="add-email">New email address</Label>
+            <Input
+              id="add-email"
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus
+            />
+            <p className="text-xs text-muted-foreground">
+              We&apos;ll email a 6-digit code to confirm it&apos;s yours. Once confirmed, you
+              can sign in with this address too.
+            </p>
+          </div>
+          {error ? <Note tone="error">{error}</Note> : null}
+          <div className="flex items-center gap-2">
+            <Button type="submit" size="sm" disabled={!emailValid || busy}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Mail className="size-4" />}
+              Send code
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : step === "code" ? (
+        <div className="space-y-3">
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Enter the 6-digit code we sent to{" "}
+              <span className="text-primary">{normalizedEmail}</span>
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              It confirms automatically once all six digits are entered.
+            </p>
+          </div>
+
+          <OtpInput key={otpKey} disabled={busy} onComplete={verify} />
+
+          {busy ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Confirming your address…
+            </p>
+          ) : null}
+          {error ? <Note tone="error">{error}</Note> : null}
+
+          <div className="flex items-center justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={resend}
+              disabled={cooldown > 0 || busy}
+            >
+              Resend code
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {cooldown > 0 ? `Resend available in ${cooldown}s` : "You can resend the code now"}
+            </span>
+          </div>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setStep("email")
+              setError(null)
+            }}
+            disabled={busy}
+          >
+            <ArrowLeft className="size-4" />
+            Use a different address
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-start gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+            <ShieldCheck className="size-5" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-foreground">Address confirmed</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{normalizedEmail}</span> is now on your
+              account. You can use it to sign in from now on.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Remove an alternate sign-in email (reuses the identities unlink route). */
+function RemoveAlternateButton({
+  alternate,
+  onRemoved,
+}: {
+  alternate: AlternateEmail
+  onRemoved: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function remove() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/account/identities?provider=email&user_id=${encodeURIComponent(alternate.user_id)}`,
+        { method: "DELETE" },
+      )
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(json.error ?? "We couldn't remove this address. Please try again.")
+        setBusy(false)
+        return
+      }
+      setBusy(false)
+      setOpen(false)
+      onRemoved()
+    } catch {
+      setError("Something went wrong. Please try again.")
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Remove ${alternate.email}`}
+            className="text-destructive hover:text-destructive"
+          />
+        }
+      >
+        <Trash2 className="size-4" />
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Remove this email address?</DialogTitle>
+          <DialogDescription>
+            {alternate.email} will no longer sign you in to your account. You can add it again at
+            any time.
+          </DialogDescription>
+        </DialogHeader>
+        {error ? <Note tone="error">{error}</Note> : null}
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>Keep it</DialogClose>
+          <Button variant="destructive" onClick={remove} disabled={busy}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+            Remove address
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ===========================================================================
-// Phone numbers
+// Phone numbers — a saved account identifier (staged for text-message sign-in)
 // ===========================================================================
+// Numbers are stored on the account with add / edit / remove and a default.
+// They are presented as an account IDENTIFIER, not an active sign-in method:
+// text-message sign-in and verification switch on when a text-message provider
+// is connected. The calm explanation lives behind the "?" next to the title.
+const EMPTY_PHONE: Omit<PhoneNumber, "id"> = {
+  label: "",
+  e164: DEFAULT_PHONE_PREFIX,
+  is_default: false,
+}
+
+function PhoneHelp() {
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 rounded-full text-muted-foreground hover:text-foreground"
+            aria-label="About phone numbers and text-message sign-in"
+          />
+        }
+      >
+        <HelpCircle className="size-4" />
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>About your phone number</DialogTitle>
+          <DialogDescription className="leading-relaxed">
+            Text-message sign-in and verification switch on as soon as a text-message provider
+            (for example Twilio) is connected to your account service. Saving and managing your
+            number here is already in place — turning on the provider is a configuration change,
+            not new development.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose render={<Button />}>Got it</DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PhoneSection({ live }: { live: boolean }) {
-  const { data, error } = useSWR<{
+  const { data, error, isLoading, mutate } = useSWR<{
     configured: boolean
-    user: { user_metadata?: { phone_number?: string } }
-  }>(live ? "/api/account/profile" : null, fetcher)
+    phones: PhoneNumber[]
+  }>(live ? "/api/account/phones" : null, fetcher)
 
   if (error) warnUnavailable("Phone numbers", (error as { status?: number }).status)
 
-  const phone = data?.user?.user_metadata?.phone_number?.trim() || ""
+  const phones = data?.phones ?? []
+
+  async function makeDefault(id: string) {
+    // Optimistic: reflect the new default immediately, revalidate from server.
+    mutate(
+      {
+        configured: true,
+        phones: phones.map((p) => ({ ...p, is_default: p.id === id })),
+      },
+      { revalidate: false },
+    )
+    try {
+      const res = await fetch("/api/account/phones", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, is_default: true }),
+      })
+      if (!res.ok) warnUnavailable("Phone numbers", res.status)
+    } catch {
+      // ignore — the revalidate below restores server truth either way
+    } finally {
+      mutate()
+    }
+  }
 
   return (
     <ProfileCard
       icon={<Phone className="size-5" />}
-      title="Phone numbers"
-      description="Used for delivery updates and time-sensitive alerts."
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          Phone numbers
+          <PhoneHelp />
+        </span>
+      }
+      description="Saved to your account so we can reach you about orders and deliveries."
+      action={live && !error ? <PhoneDialog mode="add" isFirst={phones.length === 0} onSaved={() => mutate()} /> : undefined}
     >
-      {error ? (
+      {!live || error ? (
         <Note>{UNAVAILABLE_COPY}</Note>
-      ) : phone ? (
-        <ul className="space-y-2">
-          <li className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3">
-            <span className="text-sm font-medium text-foreground">{phone}</span>
-          </li>
-        </ul>
+      ) : isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Loading your numbers…
+        </div>
+      ) : phones.length === 0 ? (
+        <Note>You haven&apos;t saved a phone number yet.</Note>
       ) : (
-        <Note>No phone number saved yet.</Note>
+        <ul className="space-y-2">
+          {phones.map((p) => (
+            <li
+              key={p.id}
+              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold tabular-nums text-foreground">{p.e164}</span>
+                  {p.is_default ? (
+                    <Badge tone="brand">
+                      <Check className="size-3" />
+                      Default
+                    </Badge>
+                  ) : null}
+                </div>
+                {p.label ? <p className="mt-0.5 text-xs text-muted-foreground">{p.label}</p> : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {!p.is_default ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => makeDefault(p.id)}
+                  >
+                    Make default
+                  </Button>
+                ) : null}
+                <PhoneDialog mode="edit" phone={p} isFirst={false} onSaved={() => mutate()} />
+                <DeletePhoneButton phone={p} onDeleted={() => mutate()} />
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
-
-      <div className="mt-4">
-        <Button variant="outline" size="sm" disabled title="Coming soon">
-          <Plus className="size-4" />
-          Add a phone number
-        </Button>
-      </div>
     </ProfileCard>
+  )
+}
+
+function PhoneDialog({
+  mode,
+  phone,
+  isFirst,
+  onSaved,
+}: {
+  mode: "add" | "edit"
+  phone?: PhoneNumber
+  isFirst: boolean
+  onSaved: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<Omit<PhoneNumber, "id">>(
+    phone ? { label: phone.label, e164: phone.e164, is_default: phone.is_default } : { ...EMPTY_PHONE },
+  )
+  const [busy, setBusy] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  function reset() {
+    setDraft(
+      phone
+        ? { label: phone.label, e164: phone.e164, is_default: phone.is_default }
+        : { ...EMPTY_PHONE },
+    )
+    setFormError(null)
+  }
+
+  async function submit() {
+    const e164 = normalizePhoneInput(draft.e164)
+    if (!isValidE164(e164)) {
+      setFormError(
+        "Enter the number in full international format, starting with + and your country code.",
+      )
+      return
+    }
+    setBusy(true)
+    setFormError(null)
+    try {
+      const res = await fetch("/api/account/phones", {
+        method: mode === "add" ? "POST" : "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          mode === "add"
+            ? { label: draft.label, e164, is_default: draft.is_default }
+            : { id: phone?.id, label: draft.label, e164, is_default: draft.is_default },
+        ),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setFormError(json.error ?? "We couldn't save this number. Please try again.")
+        setBusy(false)
+        return
+      }
+      setBusy(false)
+      setOpen(false)
+      onSaved()
+    } catch {
+      setFormError("Something went wrong. Please try again.")
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) reset()
+      }}
+    >
+      <DialogTrigger
+        render={
+          mode === "add" ? (
+            <Button variant="outline" size="sm" />
+          ) : (
+            <Button variant="ghost" size="sm" aria-label="Edit number" />
+          )
+        }
+      >
+        {mode === "add" ? (
+          <>
+            <Plus className="size-4" />
+            Add a phone number
+          </>
+        ) : (
+          <Pencil className="size-4" />
+        )}
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mode === "add" ? "Add a phone number" : "Edit phone number"}</DialogTitle>
+          <DialogDescription>
+            Enter the number in full international format, starting with + and your country code.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="phone-label">Label</Label>
+            <Input
+              id="phone-label"
+              placeholder="Mobile"
+              value={draft.label}
+              onChange={(e) => setDraft((p) => ({ ...p, label: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="phone-e164">Phone number</Label>
+            <Input
+              id="phone-e164"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder={`${DEFAULT_PHONE_PREFIX} 6 12 34 56 78`}
+              value={draft.e164}
+              onChange={(e) => setDraft((p) => ({ ...p, e164: e.target.value }))}
+            />
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Make this my default number</p>
+              <p className="text-xs text-muted-foreground">
+                The number we&apos;ll try first.
+              </p>
+            </div>
+            <Switch
+              checked={isFirst ? true : draft.is_default}
+              disabled={isFirst}
+              onCheckedChange={(v) => setDraft((p) => ({ ...p, is_default: Boolean(v) }))}
+            />
+          </div>
+
+          {formError ? <Note tone="error">{formError}</Note> : null}
+        </div>
+
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+          <Button onClick={submit} disabled={busy}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+            Save number
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DeletePhoneButton({ phone, onDeleted }: { phone: PhoneNumber; onDeleted: () => void }) {
+  const [busy, setBusy] = useState(false)
+
+  async function remove() {
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/account/phones?id=${encodeURIComponent(phone.id)}`, {
+        method: "DELETE",
+      })
+      if (res.ok) onDeleted()
+    } catch {
+      // A failed delete leaves the number in place; the list simply won't change.
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Remove number"
+            className="text-destructive hover:text-destructive"
+            disabled={busy}
+          />
+        }
+      >
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Remove this number?</DialogTitle>
+          <DialogDescription>
+            {phone.e164} will be removed from your account. You can add it again at any time.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>Keep it</DialogClose>
+          <DialogClose render={<Button variant="destructive" onClick={remove} />}>
+            Remove number
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

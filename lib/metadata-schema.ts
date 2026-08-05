@@ -287,6 +287,123 @@ export function sanitizeAddresses(input: unknown): Address[] {
   return enforceSingleDefaultPerType(out)
 }
 
+// --- Saved phone numbers (user_metadata.phones) ----------------------------
+// A customer's saved phone numbers, stored as an array under
+// `user_metadata.phones`. Written by /api/account/phones and rendered on the
+// customer profile (/profile). Numbers are held as an account IDENTIFIER today;
+// text-message sign-in / verification turns on when an SMS provider is
+// connected to the tenant (a configuration change, not new development). Same
+// defensive contract as the address sanitiser: NEVER throw on malformed stored
+// data — read whatever is valid, silently drop the rest.
+
+/** One saved phone number, stored in E.164 (e.g. "+33612345678"). */
+export interface Phone {
+  id: string
+  /** Friendly label the customer gives it, e.g. "Mobile", "Work". */
+  label: string
+  /** The number in E.164 form: a leading "+", country code, then digits. */
+  e164: string
+  /** At most one phone may be the default (enforced on write). */
+  is_default: boolean
+}
+
+// Country dialling codes for the markets this repo can be built as. Used only
+// to pre-fill the "+" prefix for a NEW number on this deployment; a customer
+// can always type a number for any country. Unknown markets fall back to a bare
+// "+", which still validates once the customer types their country code.
+const COUNTRY_DIAL_CODES: Partial<Record<CountryId, string>> = {
+  us: "+1",
+  ca: "+1",
+  uk: "+44",
+  fr: "+33",
+  de: "+49",
+  au: "+61",
+}
+
+/** Default "+" dialling prefix for a new number on this deployment's market. */
+export const DEFAULT_PHONE_PREFIX: string = COUNTRY_DIAL_CODES[SITE_MARKET] ?? "+"
+
+// E.164: a "+" then a non-zero country-code digit, then up to 14 more digits
+// (15 significant digits max, per the ITU standard).
+const E164_RE = /^\+[1-9]\d{6,14}$/
+
+/** Whether a string is a valid E.164 phone number. */
+export function isValidE164(v: string): boolean {
+  return E164_RE.test(v)
+}
+
+/** Strip spaces, hyphens and brackets so "+33 6 12-34" → "+33612 34". */
+export function normalizePhoneInput(v: string): string {
+  return v.replace(/[\s()\-.]/g, "")
+}
+
+/** Generate a stable id for a new phone. Falls back if crypto is unavailable. */
+export function newPhoneId(): string {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return `tel_${crypto.randomUUID().slice(0, 8)}`
+    }
+  } catch {
+    // fall through
+  }
+  return `tel_${Math.random().toString(16).slice(2, 10)}`
+}
+
+/**
+ * Normalize one raw phone-ish value. Returns null (→ dropped) when the entry is
+ * not an object or does not carry a valid E.164 number, so junk never survives
+ * a read or a write. A missing/blank id is assigned a fresh one.
+ */
+export function sanitizePhone(input: unknown): Phone | null {
+  if (!input || typeof input !== "object") return null
+  const raw = input as Record<string, unknown>
+
+  const e164 = normalizePhoneInput(asTrimmed(raw.e164, 24))
+  if (!isValidE164(e164)) return null
+
+  return {
+    id: asTrimmed(raw.id, 40) || newPhoneId(),
+    label: asTrimmed(raw.label, 60) || "Phone",
+    e164,
+    is_default: asBool(raw.is_default, false),
+  }
+}
+
+/** Keep at most ONE default phone: the first default seen wins, rest demoted. */
+export function enforceSinglePhoneDefault(phones: Phone[]): Phone[] {
+  let claimed = false
+  return phones.map((p) => {
+    if (p.is_default && !claimed) {
+      claimed = true
+      return p
+    }
+    return p.is_default ? { ...p, is_default: false } : p
+  })
+}
+
+/**
+ * Read an entire stored `user_metadata.phones` value into a clean array: drop
+ * non-objects and invalid numbers, de-duplicate ids and E.164 values, and
+ * collapse to one default. Used both to read the section and to re-validate
+ * every write before it is persisted.
+ */
+export function sanitizePhones(input: unknown): Phone[] {
+  const arr = Array.isArray(input) ? input : []
+  const out: Phone[] = []
+  const seenIds = new Set<string>()
+  const seenNumbers = new Set<string>()
+  for (const item of arr) {
+    const p = sanitizePhone(item)
+    if (!p) continue
+    if (seenNumbers.has(p.e164)) continue // same number twice → keep the first
+    if (seenIds.has(p.id)) p.id = newPhoneId()
+    seenIds.add(p.id)
+    seenNumbers.add(p.e164)
+    out.push(p)
+  }
+  return enforceSinglePhoneDefault(out)
+}
+
 // --- Consent management (user_metadata.consent) ----------------------------
 // Consent is the lawful-basis layer (GDPR/CCPA): WHETHER the user agrees to a
 // kind of processing. It is deliberately separate from SitePreferences:
