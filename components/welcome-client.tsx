@@ -104,7 +104,7 @@ export function WelcomeClient() {
           <Braces className="size-5" />
           Inspect tokens
         </Button>
-        <Link href="/account">
+        <Link href="/dev-account-details">
           <Button size="lg" variant="outline" className="h-12">
             View account &amp; tenants
           </Button>

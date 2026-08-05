@@ -27,7 +27,7 @@ export const REGISTRATION_CONFIG: Record<RegistrationEntryPoint, RegistrationCon
     completionTitle: "Your account journey is ready",
     completionDescription: "Your identity step is complete. The newsletter handoff is represented in this POC and is not yet connected to a marketing platform.",
     nextLabel: "Manage communication preferences",
-    nextHref: "/account",
+    nextHref: "/profile",
   },
   product: {
     id: "product",
@@ -38,7 +38,7 @@ export const REGISTRATION_CONFIG: Record<RegistrationEntryPoint, RegistrationCon
     completionTitle: "Continue your product registration",
     completionDescription: "Your identity step is complete. Product details are preserved only for this browser session; no product system write is claimed.",
     nextLabel: "Continue to account",
-    nextHref: "/account",
+    nextHref: "/profile",
   },
 }
 

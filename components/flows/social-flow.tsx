@@ -77,7 +77,7 @@ export function SocialFlow({ onSwitchMethod }: FlowProps) {
     startAuthRedirect(
       buildAuthLoginUrl({
         connection: SOCIAL_CONNECTIONS[id],
-        returnTo: "/welcome",
+        returnTo: "/profile",
       }),
     )
   }

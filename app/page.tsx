@@ -13,8 +13,8 @@ export default function HomePage() {
   const router = useRouter()
 
   // Signed-out entry points open the branded drawer in place; signed-in ones
-  // go to the account/session page. Never route to the old /signin showcase.
-  const enter = () => (session ? router.push("/welcome") : openSignIn())
+  // go to the customer profile page. Never route to the old /signin showcase.
+  const enter = () => (session ? router.push("/profile") : openSignIn())
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 pb-16 sm:px-6">

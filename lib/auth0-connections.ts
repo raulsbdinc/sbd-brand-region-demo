@@ -105,7 +105,7 @@ export function getLiveSocialProviders(): SocialProvider[] {
  */
 export function buildAuthLoginUrl({
   connection,
-  returnTo = "/welcome",
+  returnTo = "/profile",
   loginHint,
   screenHint,
   organization,

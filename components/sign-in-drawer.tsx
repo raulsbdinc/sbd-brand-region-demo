@@ -204,11 +204,11 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
       }
       // Full document navigation (not router.push): a client-side push keeps
       // this drawer mounted across the route change, so its open + in-flight
-      // "Signing in…" state would persist over the welcome page until a manual
+      // "Signing in…" state would persist over the profile page until a manual
       // reload. A hard navigation tears the drawer down and re-renders the
       // server components against the __session cookie that was just set, so
-      // the welcome route paints with the new session on first paint.
-      window.location.assign("/welcome")
+      // the profile route paints with the new session on first paint.
+      window.location.assign("/profile")
     } catch {
       setPasswordError("That email or password isn't right.")
       setSigningIn(false)
@@ -285,7 +285,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
       }
       // Full document navigation, same reasoning as the password path above:
       // tear the drawer down and re-render against the just-set session cookie.
-      window.location.assign("/welcome")
+      window.location.assign("/profile")
     } catch {
       setOtpError("That code isn't right, or it's expired.")
       setVerifying(false)
@@ -351,7 +351,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
           if (signIn.ok) {
             // Same full document navigation as the password path: tears the
             // drawer down and re-renders against the just-set __session cookie.
-            window.location.assign("/welcome")
+            window.location.assign("/profile")
             return
           }
         } catch {

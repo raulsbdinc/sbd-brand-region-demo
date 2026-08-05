@@ -83,7 +83,7 @@ export function RegistrationCompletion() {
       </Alert>
 
       <div className="flex flex-wrap justify-center gap-3">
-        {session.signedIn ? <Button nativeButton={false} render={<Link href="/welcome" />}>Continue to profile<ArrowRight data-icon="inline-end" /></Button> : <Button nativeButton={false} render={<Link href={config.nextHref} />}>{config.nextLabel}<ArrowRight data-icon="inline-end" /></Button>}
+        {session.signedIn ? <Button nativeButton={false} render={<Link href="/profile" />}>Continue to profile<ArrowRight data-icon="inline-end" /></Button> : <Button nativeButton={false} render={<Link href={config.nextHref} />}>{config.nextLabel}<ArrowRight data-icon="inline-end" /></Button>}
         <Button variant="outline" nativeButton={false} render={<Link href="/register" />}>Try another entry point</Button>
       </div>
     </main>

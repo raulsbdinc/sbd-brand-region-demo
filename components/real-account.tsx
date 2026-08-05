@@ -1721,7 +1721,7 @@ function SecuritySection({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => startAuthRedirect(buildAuthLoginUrl({ returnTo: "/account" }))}
+                onClick={() => startAuthRedirect(buildAuthLoginUrl({ returnTo: "/dev-account-details" }))}
               >
                 <Plus className="size-4" />
                 Enroll factor
@@ -1776,7 +1776,7 @@ function SecuritySection({
               size="sm"
               onClick={
                 live
-                  ? () => startAuthRedirect(buildAuthLoginUrl({ returnTo: "/account" }))
+                  ? () => startAuthRedirect(buildAuthLoginUrl({ returnTo: "/dev-account-details" }))
                   : () => {
                       setMethodNote(null)
                       setMethodError(null)

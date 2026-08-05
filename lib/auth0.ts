@@ -47,8 +47,10 @@ export const auth0 = new Auth0Client({
       ? { audience: process.env.AUTH0_AUDIENCE }
       : {}),
   },
-  // After a successful login, send the user to the live result page.
-  signInReturnToPath: "/live",
+  // After a successful login, send the user to the customer profile page — the
+  // same destination as the embedded drawer, so a Universal Login round trip
+  // and the in-app flows all land in one place.
+  signInReturnToPath: "/profile",
 })
 
 /**

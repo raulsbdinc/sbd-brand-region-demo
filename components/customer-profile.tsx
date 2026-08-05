@@ -44,6 +44,8 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { OtpInput } from "@/components/flows/otp-input"
+import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
+import type { OtherSite } from "@/lib/claims"
 import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
@@ -74,6 +76,13 @@ import {
 
 interface CustomerProfileProps {
   user: Record<string, unknown>
+  /**
+   * Other SBD sites this same account has already signed into, read from the
+   * session claims by the server page (extractOtherSites). Drives the
+   * cross-brand recognition panel at the top. Empty on a first-ever site — the
+   * panel renders nothing in that case, so a first-time user sees no gap.
+   */
+  sites: OtherSite[]
 }
 
 /** Throw on non-OK so SWR populates `error` (not `data`) on failure. */
@@ -179,7 +188,7 @@ function Badge({
 // ===========================================================================
 // Root
 // ===========================================================================
-export function CustomerProfile({ user }: CustomerProfileProps) {
+export function CustomerProfile({ user, sites }: CustomerProfileProps) {
   const { logout } = useApp()
 
   const name =
@@ -223,6 +232,13 @@ export function CustomerProfile({ user }: CustomerProfileProps) {
         </div>
       </header>
 
+      {/* Cross-brand recognition — the payoff of the demo, now that /profile is
+          where people land after signing in. Sits at the top, below the "My
+          account" heading and above "Your details". Renders nothing when the
+          account has only ever used this one site, so a first-time user sees no
+          gap. Fed by the session claims the server page passed as `sites`. */}
+      <CrossBrandRecognition sites={sites} />
+
       <div className="mt-8 space-y-5">
         <DetailsSection
           live={live}
@@ -250,7 +266,7 @@ export function CustomerProfile({ user }: CustomerProfileProps) {
       {/* Low-key link to the engineer-facing view. */}
       <div className="mt-8 border-t border-border pt-4 text-center">
         <Link
-          href="/account"
+          href="/dev-account-details"
           className="text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
         >
           Technical view
@@ -861,14 +877,11 @@ function PhoneHelp() {
       >
         <HelpCircle className="size-4" />
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>About your phone number</DialogTitle>
           <DialogDescription className="leading-relaxed">
-            Text-message sign-in and verification switch on as soon as a text-message provider
-            (for example Twilio) is connected to your account service. Saving and managing your
-            number here is already in place — turning on the provider is a configuration change,
-            not new development.
+            Text-message sign-in and verification switch on as soon as a text-message provider such as Twilio is connected to your account service. Saving and managing your number here is already in place. Turning on the provider is a configuration change, not new development.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

@@ -15,7 +15,7 @@ export function InvitationAcceptance() {
   const organization = params.get("organization") ?? ""
   const organizationName = params.get("organization_name") ?? "your Pro team"
   const valid = invitation.length > 8 && organization.length > 2
-  const loginUrl = useMemo(() => buildAuthLoginUrl({ returnTo: "/welcome", organization, invitation }), [organization, invitation])
+  const loginUrl = useMemo(() => buildAuthLoginUrl({ returnTo: "/profile", organization, invitation }), [organization, invitation])
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-16 sm:px-6">

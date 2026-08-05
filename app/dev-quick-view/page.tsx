@@ -189,7 +189,7 @@ function RealWelcome({ user }: { user: Record<string, unknown> }) {
       {/* Actions */}
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <InspectTokensButton />
-        <Link href="/account">
+        <Link href="/dev-account-details">
           <button
             type="button"
             className="inline-flex h-12 items-center gap-2 rounded-lg border border-border bg-background px-5 text-sm font-semibold text-foreground transition-colors hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"

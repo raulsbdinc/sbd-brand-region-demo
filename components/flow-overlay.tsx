@@ -28,7 +28,7 @@ export function FlowOverlay() {
   function handleComplete(session: Session) {
     setSession(session)
     closeFlow()
-    router.push("/welcome")
+    router.push("/profile")
   }
 
   function handleSwitchMethod() {

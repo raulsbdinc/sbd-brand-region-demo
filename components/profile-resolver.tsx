@@ -4,6 +4,7 @@ import useSWR from "swr"
 import { Loader2 } from "lucide-react"
 import { CustomerProfile } from "@/components/customer-profile"
 import { AccountClient } from "@/components/account-client"
+import { extractOtherSites } from "@/lib/claims"
 
 // PROFILE RESOLVER (client safety net)
 // ====================================
@@ -42,7 +43,14 @@ export function ProfileResolver() {
   }
 
   if (data?.claims) {
-    return <CustomerProfile user={data.claims} />
+    // Same claim shape as the server session, so the cross-brand panel works on
+    // this fallback path too.
+    return (
+      <CustomerProfile
+        user={data.claims}
+        sites={extractOtherSites(data.claims)}
+      />
+    )
   }
 
   return <AccountClient />

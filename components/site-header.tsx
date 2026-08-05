@@ -103,14 +103,24 @@ export function SiteHeader() {
                 <DropdownMenuItem onClick={() => router.push("/profile")}>
                   My profile
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {/* The two developer surfaces, grouped and styled muted/xs so a
+                    presenter can reach them from one place while it stays
+                    obvious they are not customer-facing. */}
+                <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
+                  Developer views
+                </DropdownMenuLabel>
                 <DropdownMenuItem
-                  onClick={() => router.push("/account")}
+                  onClick={() => router.push("/dev-quick-view")}
                   className="text-xs text-muted-foreground focus:text-foreground"
                 >
-                  Technical view
+                  Quick view
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push("/welcome")}>
-                  Session details
+                <DropdownMenuItem
+                  onClick={() => router.push("/dev-account-details")}
+                  className="text-xs text-muted-foreground focus:text-foreground"
+                >
+                  Account details
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -156,14 +166,24 @@ export function SiteHeader() {
                 <DropdownMenuItem onClick={() => router.push("/profile")}>
                   My profile
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {/* The two developer surfaces, grouped and styled muted/xs so a
+                    presenter can reach them from one place while it stays
+                    obvious they are not customer-facing. */}
+                <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
+                  Developer views
+                </DropdownMenuLabel>
                 <DropdownMenuItem
-                  onClick={() => router.push("/account")}
+                  onClick={() => router.push("/dev-quick-view")}
                   className="text-xs text-muted-foreground focus:text-foreground"
                 >
-                  Technical view
+                  Quick view
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push("/welcome")}>
-                  Session details
+                <DropdownMenuItem
+                  onClick={() => router.push("/dev-account-details")}
+                  className="text-xs text-muted-foreground focus:text-foreground"
+                >
+                  Account details
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {/* Same canonical logout as everywhere else (see lib/logout.ts):

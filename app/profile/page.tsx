@@ -1,4 +1,5 @@
 import { auth0, isAuthConfigured } from "@/lib/auth0"
+import { extractOtherSites } from "@/lib/claims"
 import { AccountClient } from "@/components/account-client"
 import { CustomerProfile } from "@/components/customer-profile"
 import { ProfileResolver } from "@/components/profile-resolver"
@@ -26,7 +27,11 @@ export default async function ProfilePage() {
   }
 
   if (session?.user) {
-    return <CustomerProfile user={session.user} />
+    // Read the cross-brand claim here (same as the old welcome page did) and
+    // hand it to the customer profile, which renders the recognition panel at
+    // the top. Empty on a first-ever site — the panel renders nothing then.
+    const otherSites = extractOtherSites(session.user)
+    return <CustomerProfile user={session.user} sites={otherSites} />
   }
 
   if (isAuthConfigured()) {

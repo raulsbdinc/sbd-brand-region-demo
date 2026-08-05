@@ -24,7 +24,7 @@ import { looksLikeEmail } from "@/lib/auth-service"
 import type { SocialProvider } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const RETURN_TO = "/welcome"
+const RETURN_TO = "/profile"
 
 // Providers shown on the card, with a brand glyph. Order matters: live ones
 // (verified on the tenant) float to the top so the working option is first.

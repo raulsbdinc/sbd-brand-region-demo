@@ -51,7 +51,7 @@ export function PasswordFlow({ onSwitchMethod }: FlowProps) {
     startAuthRedirect(
       buildAuthLoginUrl({
         connection: PASSWORD_CONNECTION,
-        returnTo: "/welcome",
+        returnTo: "/profile",
         loginHint: looksLikeEmail(email) ? email : undefined,
       }),
     )

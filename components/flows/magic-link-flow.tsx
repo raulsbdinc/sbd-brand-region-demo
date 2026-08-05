@@ -64,7 +64,7 @@ function MagicLinkLive({ onSwitchMethod }: FlowProps) {
     startAuthRedirect(
       buildAuthLoginUrl({
         connection: PASSWORDLESS_EMAIL_CONNECTION,
-        returnTo: "/welcome",
+        returnTo: "/profile",
         loginHint: email,
       }),
     )
