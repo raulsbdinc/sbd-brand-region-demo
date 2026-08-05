@@ -68,6 +68,55 @@ is honoured on `/oauth/token`. The two must be set **together**: Auth0 rejects
 the trust flag on a client that does not authenticate, with *"can only be set
 true on clients that require authentication"*.
 
+### Account centre — live Management API access
+
+The account centre (`/account`, `components/real-account.tsx`) reads and writes
+the real directory record through the Auth0 Management API, called server-side by
+`lib/auth0-management.ts` using the **client-credentials grant**. The three site
+applications above deliberately do **not** have Management API access, so before
+this was wired every Live section failed with a 403 and the page fell back to its
+Demo simulation.
+
+Access now comes from a dedicated, least-privilege machine-to-machine app:
+
+- **Name:** `SBD Demo - Account Management (M2M)`
+- **Client ID:** `0RWne76j9zA3MInSB6SmAetnRIG4UNpy`
+- **Client grant:** the Management API, limited to these **13 scopes** —
+  `read:users`, `update:users`, `read:users_app_metadata`,
+  `update:users_app_metadata`, `read:authentication_methods`,
+  `delete:authentication_methods`, `delete:guardian_enrollments`,
+  `read:guardian_enrollments`, `read:organizations`,
+  `create:organization_invitations`, `create:user_tickets`,
+  `read:organization_members`, `read:organization_invitations`.
+
+**`delete:users` was withheld on purpose.** Without it the account centre can
+never hard-delete the single shared demo user, whatever the deletion flow tries
+to call.
+
+**Why a separate application, not scopes on the login apps.** The three site apps
+are internet-facing and already carry the `password-realm` grant. Giving them
+Management API scopes would widen the blast radius of a leaked client secret for
+no benefit, so the privileged credentials live in their own M2M app that never
+reaches the browser.
+
+`AUTH0_MGMT_CLIENT_ID` and `AUTH0_MGMT_CLIENT_SECRET` are set on all three Vercel
+projects, for production, preview and development. `lib/auth0-management.ts`
+**prefers these over `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET`**, which is why the
+login applications stay unprivileged and no code change was needed to bring the
+account centre live.
+
+**A change to environment variables only takes effect on a new deployment.** All
+three projects were redeployed after these variables were set; anyone who adds an
+env var later must redeploy or it will silently do nothing.
+
+Verified after the redeploy: the account centre on **DeWalt Germany shows 8 Live
+sections and no failures**.
+
+**Gotcha — do not exercise "delete my account" on stage.** That path is a
+**soft** delete: it blocks the user from signing in unless
+`AUTH0_ALLOW_HARD_DELETE` is set to `1`, which it is not. Blocking the single
+shared demo user would still break the demo, so leave it alone during a run.
+
 ### Database connection
 
 **`sbd-eu` — `con_MtETCCoRdTvrTgZY`**, enabled on all three applications plus the
@@ -352,6 +401,7 @@ The `sbd-demo-` prefix avoids colliding with the SBD team's existing `dewalt-de`
 | `NEXT_PUBLIC_AUTH0_CONNECTION` | `sbd-eu` | `sbd-eu` | `sbd-eu` |
 | `AUTH0_CONNECTION` | `sbd-eu` | `sbd-eu` | `sbd-eu` |
 | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` | per app | | |
+| `AUTH0_MGMT_CLIENT_ID` / `AUTH0_MGMT_CLIENT_SECRET` | shared M2M app (see Account centre) | | |
 | `AUTH0_DOMAIN` | tenant, above | | |
 | `AUTH0_SECRET` | per project | | |
 

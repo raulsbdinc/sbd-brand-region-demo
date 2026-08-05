@@ -106,6 +106,41 @@ const fetcher = async (url: string) => {
   return r.json()
 }
 
+// Diagnostic split — READ THIS BEFORE EDITING THE FAILURE STRINGS BELOW.
+//
+// This account centre is shown on a projector to a non-technical audience, so
+// the on-screen copy for a Live-section failure stays plain English and says
+// what the person can do. The technical story a developer needs — the HTTP
+// status and the exact Management API scopes the call requires — is written to
+// the browser console here instead. A developer with dev tools open still gets
+// the full picture; the executive watching does not see status codes or scope
+// names that read like a broken build.
+//
+// Keep it this way. Do NOT "helpfully" move the status code, the scope names, or
+// "client-credentials grant" back into any visible <Note>. This warning is where
+// they belong. Only a 403 (missing Management API authorization) gets the
+// scope-specific message; any other status is reported plainly.
+function warnManagementApiUnavailable(
+  section: string,
+  scopes: string[],
+  status?: number,
+) {
+  if (status === 403) {
+    console.warn(
+      `[SBD account centre] Live "${section}" could not load: the Auth0 Management API returned 403 (not authorized). ` +
+        `This call needs the scope(s) ${scopes.join(", ")}, granted to the dedicated M2M app via a client grant on the ` +
+        `Management API (client-credentials grant). Confirm AUTH0_MGMT_CLIENT_ID / AUTH0_MGMT_CLIENT_SECRET are set on this ` +
+        `deployment and that the client grant includes those scopes.`,
+    )
+    return
+  }
+  console.warn(
+    `[SBD account centre] Live "${section}" could not load: the account API returned ${
+      status ?? "an unexpected error"
+    }.`,
+  )
+}
+
 /** Map an Auth0 `sub` prefix to a human-readable sign-in connection. */
 function connectionFromSub(sub: string | undefined): {
   label: string
@@ -994,7 +1029,14 @@ function PreferencesSection({ live }: { live: boolean }) {
   const { data, error, isLoading, mutate } = useSWR<{
     configured: boolean
     preferences: SitePreferences
-  }>(live ? "/api/account/preferences" : null, fetcher)
+  }>(live ? "/api/account/preferences" : null, fetcher, {
+    onError: (err) =>
+      warnManagementApiUnavailable(
+        "Site preferences",
+        ["read:users", "update:users"],
+        (err as { status?: number })?.status,
+      ),
+  })
 
   const prefsError = live ? Boolean(error) : false
   const prefs403 = (error as { status?: number } | undefined)?.status === 403
@@ -1083,9 +1125,11 @@ function PreferencesSection({ live }: { live: boolean }) {
       description="Personal preferences stored in user_metadata. These tailor your experience but never change what you're allowed to access."
     >
       {live && prefsError ? (
+        // Plain English only — the status code and required scopes go to the
+        // console via warnManagementApiUnavailable(). Do not add them here.
         <Note tone="error">
           {prefs403
-              ? "Live preferences couldn't load — the Management API returned 403. Confirm the app has read:users / update:users scopes and the client-credentials grant enabled (see the feature backlog, Part 3)."
+            ? "We couldn't load your live preferences right now. Your saved settings are safe — please refresh the page in a moment to try again."
             : "Live preferences couldn't load right now. Please try again."}
         </Note>
       ) : live && isLoading ? (
@@ -1304,7 +1348,14 @@ function ConsentSection({ live }: { live: boolean }) {
     configured: boolean
     consent: ConsentState
     updatedAt: string | null
-  }>(live ? "/api/account/consent" : null, fetcher)
+  }>(live ? "/api/account/consent" : null, fetcher, {
+    onError: (err) =>
+      warnManagementApiUnavailable(
+        "Consent & permissions",
+        ["read:users", "update:users"],
+        (err as { status?: number })?.status,
+      ),
+  })
 
   const consentError = live ? Boolean(error) : false
   const consent403 = (error as { status?: number } | undefined)?.status === 403
@@ -1420,9 +1471,11 @@ function ConsentSection({ live }: { live: boolean }) {
       description="Control how Stanley Black & Decker may use your data. You can grant or withdraw consent at any time."
     >
       {live && consentError ? (
+        // Plain English only — the status code and required scopes go to the
+        // console via warnManagementApiUnavailable(). Do not add them here.
         <Note tone="error">
           {consent403
-            ? "Live consent couldn't load — the Management API returned 403. Confirm the app has read:users / update:users scopes and the client-credentials grant enabled (see the feature backlog, Part 3)."
+            ? "We couldn't load your live consent choices right now. Nothing has changed — please refresh the page in a moment to try again."
             : "Live consent couldn't load right now. Please try again."}
         </Note>
       ) : live && isLoading ? (
@@ -1535,7 +1588,14 @@ function SecuritySection({
     methods: LoginMethodView[]
     total: number
     removableCount: number
-  }>(live ? "/api/account/login-methods" : null, fetcher)
+  }>(live ? "/api/account/login-methods" : null, fetcher, {
+    onError: (err) =>
+      warnManagementApiUnavailable(
+        "Sign-in methods",
+        ["read:users", "read:authentication_methods"],
+        (err as { status?: number })?.status,
+      ),
+  })
 
   // Demo-only local state
   const [mfaEnabled, setMfaEnabled] = useState(false)
@@ -1745,9 +1805,11 @@ function SecuritySection({
           </div>
 
           {live && methodsLoadError ? (
+            // Plain English only — the status code and required scopes go to the
+            // console via warnManagementApiUnavailable(). Do not add them here.
             <Note tone="error">
               {methods403
-                ? "Live sign-in methods couldn't load — the Management API returned 403. Confirm the app has read:users / read:authentication_methods scopes and the client-credentials grant enabled (see the feature backlog, Part 3)."
+                ? "We couldn't load your live sign-in methods right now. The ways you already sign in aren't affected — please refresh the page in a moment to try again."
                 : "Live sign-in methods couldn't load right now. Please try again."}
             </Note>
           ) : methods.length > 0 ? (
@@ -1823,6 +1885,14 @@ function OrganizationsSection({ live }: { live: boolean }) {
   const orgsData = useSWR<{ configured: boolean; organizations: { id: string; name: string; display_name?: string }[] }>(
     live ? "/api/account/organizations" : null,
     fetcher,
+    {
+      onError: (err) =>
+        warnManagementApiUnavailable(
+          "Organizations & tenants",
+          ["read:organizations"],
+          (err as { status?: number })?.status,
+        ),
+    },
   )
   const orgs403 = (orgsData.error as { status?: number } | undefined)?.status === 403
 
@@ -1854,9 +1924,11 @@ function OrganizationsSection({ live }: { live: boolean }) {
     >
       {live ? (
         orgsData.error ? (
+          // Plain English only — the status code and required scopes go to the
+          // console via warnManagementApiUnavailable(). Do not add them here.
           <Note tone="error">
             {orgs403
-              ? "Live organizations couldn't load — the Management API returned 403. Confirm the app has the read:organizations scope and the client-credentials grant enabled (see the feature backlog, Part 3)."
+              ? "We couldn't load your live organizations right now. Please refresh the page in a moment to try again."
               : "Live organizations couldn't load right now. Please try again."}
           </Note>
         ) : orgsData.data ? (
@@ -1876,8 +1948,9 @@ function OrganizationsSection({ live }: { live: boolean }) {
             </div>
           ) : (
             <Note>
-              You don&apos;t belong to any Auth0 Organizations. Membership is
-              granted by an org admin or an invitation — see the feature backlog, Part 3.
+              You&apos;re not a member of any organizations yet. When you&apos;re
+              added to one — by an administrator or an invitation — it will appear
+              here.
             </Note>
           )
         ) : (

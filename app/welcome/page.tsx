@@ -123,7 +123,7 @@ function RealWelcome({ user }: { user: Record<string, unknown> }) {
                 : "rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
             }
           >
-            {claims.present ? "From Action" : "Action not deployed"}
+            {claims.present ? "From Action" : "Not available"}
           </span>
         </div>
 
@@ -158,14 +158,9 @@ function RealWelcome({ user }: { user: Record<string, unknown> }) {
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
             <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <p>
-              This ID token has no valid namespaced SBD identity claim yet.
-              Deploy the post-login Action at{" "}
-              <code className="rounded bg-muted px-1">
-                auth0/actions/add-sbd-claims.js
-              </code>{" "}
-              to the tenant&apos;s Login flow and sign in again. Roles are
-              authorization data and appear only in a JWT access token requested
-              for the approved SBD API audience. See the feature backlog, Part 1.
+              The additional SBD identity context isn&apos;t available for this
+              session. Your sign-in is still valid — this section simply has
+              nothing extra to show right now.
             </p>
           </div>
         )}
