@@ -287,6 +287,50 @@ export function deleteAuthenticationMethod(
 }
 
 /**
+ * POST /users/{id}/authentication-methods — register an EMAIL authentication
+ * method (the "email security code" the account keeps for an extra check). We
+ * pass the account's own already-verified primary email, so Auth0 returns
+ * `confirmed: true` immediately and there is no second verification step to
+ * build. Requires the `create:authentication_methods` scope.
+ */
+export function enrollEmailAuthenticator(
+  userId: string,
+  email: string,
+  name = "Email",
+): Promise<{
+  id: string
+  type: string
+  confirmed?: boolean
+  name?: string
+  email?: string
+  created_at?: string
+}> {
+  return mgmtFetch(
+    `/users/${encodeURIComponent(userId)}/authentication-methods`,
+    {
+      method: "POST",
+      body: JSON.stringify({ type: "email", email, name }),
+    },
+  )
+}
+
+/**
+ * POST /users/{id}/recovery-code-regeneration — generate a fresh single backup
+ * code and return it. Auth0 returns this value EXACTLY ONCE and it is never
+ * retrievable again; callers must hand it straight to the user and never
+ * persist or log it. Regenerating replaces any previous code. Requires the
+ * `update:users` scope.
+ */
+export function regenerateRecoveryCode(
+  userId: string,
+): Promise<{ recovery_code: string }> {
+  return mgmtFetch<{ recovery_code: string }>(
+    `/users/${encodeURIComponent(userId)}/recovery-code-regeneration`,
+    { method: "POST" },
+  )
+}
+
+/**
  * POST /users/{id}/authentication-methods — register a confirmed TOTP factor
  * from a secret we already generated and verified server-side. Because we pass
  * `totp_secret`, Auth0 stores the factor as active without running its own

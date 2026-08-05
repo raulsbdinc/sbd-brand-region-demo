@@ -5,16 +5,19 @@ import Link from "next/link"
 import useSWR from "swr"
 import {
   ArrowLeft,
+  AtSign,
   Bell,
   Check,
-  Code2,
   Copy,
   Fingerprint,
   HelpCircle,
   KeyRound,
+  LifeBuoy,
   Loader2,
   Mail,
+  MailCheck,
   MapPin,
+  MessageSquare,
   Pencil,
   Phone,
   Plus,
@@ -258,7 +261,7 @@ export function CustomerProfile({ user, sites }: CustomerProfileProps) {
 
         <CommunicationSection live={live} />
 
-        <SignInSection live={live} />
+        <SignInSection live={live} primaryEmail={email} />
 
         <DeleteSection live={live} onClosed={() => logout()} />
       </div>
@@ -469,7 +472,7 @@ function DetailsSection({
 // Email addresses — add a REAL alternate sign-in address
 // ===========================================================================
 // "Add another email address" runs a two-step inline flow inside this card:
-// enter the address → enter the 6-digit passcode we email → the address is
+// enter the address �� enter the 6-digit passcode we email → the address is
 // LINKED onto this account and can be used to sign in. It uses the same six-box
 // code input as the sign-in drawer so it reads as one product. There is no
 // route change and no developer vocabulary on screen.
@@ -862,7 +865,19 @@ const EMPTY_PHONE: Omit<PhoneNumber, "id"> = {
   is_default: false,
 }
 
-function PhoneHelp() {
+// A small "?" button that opens a wide explainer dialog. Shared by the three
+// places that explain a method the customer can't act on yet (phone / text
+// message, passkeys). One component keeps the copy, the width (sm:max-w-lg) and
+// the affordance identical everywhere.
+function MethodHelpDialog({
+  title,
+  ariaLabel,
+  children,
+}: {
+  title: string
+  ariaLabel: string
+  children: React.ReactNode
+}) {
   return (
     <Dialog>
       <DialogTrigger
@@ -871,7 +886,7 @@ function PhoneHelp() {
             variant="ghost"
             size="icon"
             className="size-6 rounded-full text-muted-foreground hover:text-foreground"
-            aria-label="About phone numbers and text-message sign-in"
+            aria-label={ariaLabel}
           />
         }
       >
@@ -879,9 +894,9 @@ function PhoneHelp() {
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>About your phone number</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription className="leading-relaxed">
-            Text-message sign-in and verification switch on as soon as a text-message provider such as Twilio is connected to your account service. Saving and managing your number here is already in place. Turning on the provider is a configuration change, not new development.
+            {children}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -889,6 +904,20 @@ function PhoneHelp() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function PhoneHelp() {
+  return (
+    <MethodHelpDialog
+      title="About your phone number"
+      ariaLabel="About phone numbers and text-message sign-in"
+    >
+      Text-message sign-in and verification switch on as soon as a text-message
+      provider such as Twilio is connected to your account service. Saving and
+      managing your number here is already in place. Turning on the provider is
+      a configuration change, not new development.
+    </MethodHelpDialog>
   )
 }
 
@@ -1629,25 +1658,61 @@ function CommunicationSection({ live }: { live: boolean }) {
 // ===========================================================================
 // How you sign in
 // ===========================================================================
-interface LoginMethodView {
-  key: string
-  kind: "password" | "social" | "passkey"
-  label: string
-  detail?: string
-  isPrimary: boolean
-}
-
-function SignInMethodIcon({ kind }: { kind: LoginMethodView["kind"] }) {
-  const Icon = kind === "passkey" ? Fingerprint : kind === "password" ? KeyRound : Code2
-  return <Icon className="size-4 text-primary" />
-}
-
 interface MfaFactor {
   id: string
   type: string
   status: string
   name?: string
   createdAt?: string
+}
+
+// One row in the "How you sign in" inventory. A single shell keeps all eight
+// rows visually consistent: an icon, a name, one plain-English line, an
+// optional right-hand slot (a status tag, an action, or the "?" explainer) and
+// optional expanded content below (used by the interactive rows).
+function MethodRow({
+  icon,
+  name,
+  line,
+  right,
+  children,
+}: {
+  icon: React.ReactNode
+  name: string
+  line: React.ReactNode
+  right?: React.ReactNode
+  children?: React.ReactNode
+}) {
+  return (
+    <li className="rounded-xl border border-border bg-background px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
+          {icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-sm font-bold text-foreground">{name}</h3>
+            {right ? <div className="shrink-0">{right}</div> : null}
+          </div>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            {line}
+          </p>
+          {children}
+        </div>
+      </div>
+    </li>
+  )
+}
+
+// A stated fact, not an action — used by the rows that are simply on: email &
+// password, email passcode, and any method currently kept on the account.
+function ActiveTag() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-semibold text-foreground">
+      <Check className="size-3" />
+      Active
+    </span>
+  )
 }
 
 // Inline authenticator (TOTP) enrolment. The whole point of part 4: the person
@@ -1765,20 +1830,12 @@ function AuthenticatorApp({ live }: { live: boolean }) {
   if (!live) return null
 
   return (
-    <div className="mt-5 border-t border-border pt-5">
-      <div className="flex items-start gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
-          <Smartphone className="size-4 text-primary" />
-        </span>
-        <div className="flex-1">
-          <h3 className="text-sm font-bold text-foreground">Authenticator app</h3>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            Add an app like Google Authenticator, 1Password or Authy to generate
-            sign-in codes for extra protection.
-          </p>
-        </div>
-      </div>
-
+    <MethodRow
+      icon={<Smartphone className="size-4" />}
+      name="Authenticator app"
+      line="Use an app like Google Authenticator, 1Password or Authy to generate a sign-in code. Kept on your account and used when an extra check is needed."
+      right={authenticators.length > 0 ? <ActiveTag /> : null}
+    >
       {authenticators.length > 0 ? (
         <ul className="mt-3 space-y-2">
           {authenticators.map((f) => (
@@ -1914,11 +1971,11 @@ function AuthenticatorApp({ live }: { live: boolean }) {
             <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
             <div>
               <p className="text-sm font-medium text-foreground">
-                Authenticator app registered
+                Authenticator app added
               </p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Your authenticator is now registered to your account and can be
-                required at sign-in according to your security policy.
+                Your authenticator app is now kept on your account and used when
+                an extra check is needed.
               </p>
               <Button
                 type="button"
@@ -1933,53 +1990,309 @@ function AuthenticatorApp({ live }: { live: boolean }) {
           </div>
         </div>
       ) : null}
-    </div>
+    </MethodRow>
   )
 }
 
-function SignInSection({ live }: { live: boolean }) {
+// Row 5 — Email security code. An extra email check the account keeps on file.
+// Because the address is already verified, adding it is a single call that
+// comes back confirmed, so there's no code to type. Add / Remove only.
+function EmailSecurityCode({ live }: { live: boolean }) {
+  const { data, error, mutate } = useSWR<{
+    configured: boolean
+    enrollments: MfaFactor[]
+  }>(live ? "/api/account/mfa" : null, fetcher)
+
+  if (error) warnUnavailable("Email security code", (error as { status?: number }).status)
+
+  const emailMethod = (data?.enrollments ?? []).find((e) => e.type === "email")
+  const [busy, setBusy] = useState<null | "add" | "remove">(null)
+  const [rowError, setRowError] = useState<string | null>(null)
+
+  async function add() {
+    setBusy("add")
+    setRowError(null)
+    try {
+      const res = await fetch("/api/account/mfa/email", { method: "POST" })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setRowError(json.error ?? "We couldn't add that just now. Please try again.")
+      }
+      await mutate()
+    } catch {
+      setRowError("Something went wrong. Please try again.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function remove() {
+    setBusy("remove")
+    setRowError(null)
+    try {
+      const res = await fetch("/api/account/mfa/email", { method: "DELETE" })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setRowError(json.error ?? "We couldn't remove that just now. Please try again.")
+      }
+      await mutate()
+    } catch {
+      setRowError("Something went wrong. Please try again.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (!live) return null
+
+  return (
+    <MethodRow
+      icon={<MailCheck className="size-4" />}
+      name="Email security code"
+      line="An extra email check kept on your account and used when we need to confirm it's really you."
+      right={emailMethod ? <ActiveTag /> : null}
+    >
+      <div className="mt-3">
+        {emailMethod ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive"
+            disabled={busy !== null}
+            onClick={remove}
+          >
+            {busy === "remove" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
+            Remove
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" disabled={busy !== null} onClick={add}>
+            {busy === "add" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+            Add email security code
+          </Button>
+        )}
+        {rowError ? (
+          <div className="mt-2">
+            <Note tone="error">{rowError}</Note>
+          </div>
+        ) : null}
+      </div>
+    </MethodRow>
+  )
+}
+
+// Row 6 — Backup codes. Regenerating is the ONLY way to see a code: the value
+// comes back from the server exactly once, is shown here once in a bordered
+// block with a copy button and a clear warning, and is never persisted or
+// logged anywhere.
+function BackupCodes({ live }: { live: boolean }) {
+  const { data, error, mutate } = useSWR<{
+    configured: boolean
+    enrollments: MfaFactor[]
+  }>(live ? "/api/account/mfa" : null, fetcher)
+
+  if (error) warnUnavailable("Backup codes", (error as { status?: number }).status)
+
+  const hasCode = (data?.enrollments ?? []).some((e) => e.type === "recovery-code")
+  const [busy, setBusy] = useState(false)
+  const [rowError, setRowError] = useState<string | null>(null)
+  const [code, setCode] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  async function generate() {
+    setBusy(true)
+    setRowError(null)
+    setCode(null)
+    try {
+      const res = await fetch("/api/account/mfa/recovery-code", { method: "POST" })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.recoveryCode) {
+        setRowError(json.error ?? "We couldn't generate a code just now. Please try again.")
+      } else {
+        setCode(json.recoveryCode)
+      }
+      await mutate()
+    } catch {
+      setRowError("Something went wrong. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copy() {
+    if (!code) return
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard blocked — the code is still visible to copy by hand */
+    }
+  }
+
+  if (!live) return null
+
+  return (
+    <MethodRow
+      icon={<LifeBuoy className="size-4" />}
+      name="Backup codes"
+      line="A single one-time code for getting back in if you lose your other ways to sign in."
+      right={hasCode ? <ActiveTag /> : null}
+    >
+      <div className="mt-3">
+        <Button variant="outline" size="sm" disabled={busy} onClick={generate}>
+          {busy ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <KeyRound className="size-4" />
+          )}
+          {hasCode ? "Generate a new code" : "Generate a backup code"}
+        </Button>
+        {rowError ? (
+          <div className="mt-2">
+            <Note tone="error">{rowError}</Note>
+          </div>
+        ) : null}
+        {code ? (
+          <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <p className="text-xs font-medium text-foreground">Your backup code</p>
+            <div className="mt-2 flex items-center gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-md border border-border bg-background px-2.5 py-1.5 text-sm font-semibold tracking-wide text-foreground">
+                {code}
+              </code>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={copy}
+                aria-label="Copy backup code"
+              >
+                {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Save this somewhere safe now. It won&apos;t be shown again, and
+              generating a new one replaces it.
+            </p>
+          </div>
+        ) : null}
+      </div>
+    </MethodRow>
+  )
+}
+
+function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
+  // We read the profile (not login-methods) for the account email and the
+  // count of alternate addresses — the same source the Email addresses section
+  // uses, so the two stay in step.
   const { data, error } = useSWR<{
     configured: boolean
-    methods: LoginMethodView[]
-  }>(live ? "/api/account/login-methods" : null, fetcher)
+    user: { email?: string; identities?: Identity[] }
+  }>(live ? "/api/account/profile" : null, fetcher)
 
   if (error) warnUnavailable("How you sign in", (error as { status?: number }).status)
 
-  const methods = data?.methods ?? []
+  const accountEmail = data?.user?.email ?? primaryEmail
+  const alternateCount = (data?.user?.identities ?? [])
+    .filter((id) => id.provider === "email")
+    .map((id) => ((id.profileData?.email as string | undefined) ?? id.user_id) || "")
+    .filter(Boolean)
+    .filter((e) => e.toLowerCase() !== (accountEmail ?? "").toLowerCase()).length
 
   return (
     <ProfileCard
       icon={<KeyRound className="size-5" />}
       title="How you sign in"
-      description="The ways you can get into your account."
+      description="Every way you can get into your account, and what you can turn on."
     >
       {!live || error ? (
         <Note>{UNAVAILABLE_COPY}</Note>
-      ) : methods.length === 0 ? (
-        <Note>No sign-in methods to show.</Note>
       ) : (
         <ul className="space-y-2">
-          {methods.map((m) => (
-            <li
-              key={m.key}
-              className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-3"
-            >
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <SignInMethodIcon kind={m.kind} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium text-foreground">{m.label}</span>
-                {m.detail ? (
-                  <span className="block truncate text-xs text-muted-foreground">{m.detail}</span>
-                ) : null}
-              </span>
-              {m.isPrimary ? <Badge tone="brand">Primary</Badge> : null}
-            </li>
-          ))}
+          {/* 1 — Email and password (the primary way in) */}
+          <MethodRow
+            icon={<Mail className="size-4" />}
+            name="Email and password"
+            line={
+              accountEmail
+                ? `Sign in with ${accountEmail} and your password.`
+                : "Sign in with your email address and your password."
+            }
+            right={<Badge tone="brand">Primary</Badge>}
+          />
+
+          {/* 2 — Email passcode (already on every account) */}
+          <MethodRow
+            icon={<MailCheck className="size-4" />}
+            name="Email passcode"
+            line="We email you a 6-digit code so you can sign in without a password. Ready to use on this account."
+            right={<ActiveTag />}
+          />
+
+          {/* 3 — Alternate email addresses (same passcode, any linked address) */}
+          <MethodRow
+            icon={<AtSign className="size-4" />}
+            name="Alternate email addresses"
+            line={
+              alternateCount > 0
+                ? `Any of your ${alternateCount === 1 ? "1 linked address" : `${alternateCount} linked addresses`} can receive that same passcode. Manage them under Email addresses above.`
+                : "Any address you link can receive that same passcode. Add one under Email addresses above."
+            }
+            right={alternateCount > 0 ? <ActiveTag /> : null}
+          />
+
+          {/* 4 — Authenticator app (existing inline enrolment) */}
+          <AuthenticatorApp live={live} />
+
+          {/* 5 — Email security code (new) */}
+          <EmailSecurityCode live={live} />
+
+          {/* 6 — Backup codes (new) */}
+          <BackupCodes live={live} />
+
+          {/* 7 — Passkey (not actionable, explainer only) */}
+          <MethodRow
+            icon={<Fingerprint className="size-4" />}
+            name="Passkey (Face ID, fingerprint or device PIN)"
+            line="Sign in with Face ID, a fingerprint or a device PIN, with no password to remember."
+            right={
+              <MethodHelpDialog title="About passkeys" ariaLabel="About passkeys">
+                Passkeys let you sign in with Face ID, a fingerprint or a device
+                PIN, with no password to remember. Your account service already
+                supports them. Switching them on needs a custom sign-in domain,
+                because a passkey is tied to the exact web address that created
+                it. That is a domain and configuration step, not new
+                development.
+              </MethodHelpDialog>
+            }
+          />
+
+          {/* 8 — Text-message passcode (not actionable, explainer only) */}
+          <MethodRow
+            icon={<MessageSquare className="size-4" />}
+            name="Text-message passcode"
+            line="Get a sign-in code by text message. Your numbers are managed in the Phone numbers section above."
+            right={
+              <MethodHelpDialog
+                title="About text-message passcodes"
+                ariaLabel="About text-message passcodes"
+              >
+                Sending a passcode by text switches on as soon as a text-message
+                provider such as Twilio is connected to your account service.
+                Everything else in this list already works today. Turning on the
+                provider is a configuration change, not new development.
+              </MethodHelpDialog>
+            }
+          />
         </ul>
       )}
-
-      <AuthenticatorApp live={live} />
     </ProfileCard>
   )
 }

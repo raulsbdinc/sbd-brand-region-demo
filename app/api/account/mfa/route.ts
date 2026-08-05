@@ -49,12 +49,18 @@ async function listFactors(sub: string): Promise<FactorView[]> {
 
   const factors: FactorView[] = []
 
-  // TOTP (and any other) authenticator methods — the endpoint we enroll through.
+  // Authentication methods we surface in the profile:
+  //   totp          → drives the "Authenticator app" row
+  //   email         → drives the "Email security code" row
+  //   recovery-code → drives the "Backup codes" row
+  // The authenticator row filters to totp on the client, so listing the other
+  // two here only tells rows 5 and 6 their current on/off state.
+  const SURFACED = new Set(["totp", "email", "recovery-code"])
   for (const m of authMethods ?? []) {
-    if (m.type === "totp") {
+    if (SURFACED.has(m.type)) {
       factors.push({
         id: m.id,
-        type: "totp",
+        type: m.type,
         status: "confirmed",
         name: m.name,
         createdAt: m.created_at,
