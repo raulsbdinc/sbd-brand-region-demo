@@ -636,7 +636,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
           <div className="mt-6">
             <p role="alert" className={alertClass}>
               {
-                "You may already have an SBD account with this address. One SBD account works across DeWalt, Stanley and our other brands, so try signing in instead."
+                "You may already have a Stanley Black & Decker account with this address. One account works across DeWalt, Stanley and our other brands, so try signing in instead."
               }
             </p>
             <button
@@ -724,7 +724,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
             challenge avoids, and we don't reintroduce it here. */}
         <p className="mt-3 rounded-md border border-[var(--brand-input-border)] bg-[var(--brand-surface-muted)] px-3 py-2 font-sans text-[12px] font-[500] leading-[17px] [color:var(--brand-description-color)]">
           {
-            "One SBD account works across DeWalt, Stanley and our other brands. You\u2019ll sign in separately on each site."
+            "One Stanley Black & Decker account works across DeWalt, Stanley and our other brands. You\u2019ll sign in separately on each site."
           }
         </p>
 

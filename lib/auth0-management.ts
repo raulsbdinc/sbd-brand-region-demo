@@ -286,6 +286,28 @@ export function deleteAuthenticationMethod(
   )
 }
 
+/**
+ * POST /users/{id}/authentication-methods — register a confirmed TOTP factor
+ * from a secret we already generated and verified server-side. Because we pass
+ * `totp_secret`, Auth0 stores the factor as active without running its own
+ * enrolment challenge — the challenge already happened on our side, which is the
+ * whole point of enrolling inside our own page. Requires the
+ * `create:authentication_methods` scope on the Management grant.
+ */
+export function enrollTotpAuthenticator(
+  userId: string,
+  totpSecret: string,
+  name: string,
+): Promise<{ id: string; type: string; name?: string; created_at?: string }> {
+  return mgmtFetch(
+    `/users/${encodeURIComponent(userId)}/authentication-methods`,
+    {
+      method: "POST",
+      body: JSON.stringify({ type: "totp", totp_secret: totpSecret, name }),
+    },
+  )
+}
+
 /** GET /users/{id}/organizations — org memberships (Auth0 Organizations). */
 export function getUserOrganizations(
   userId: string,

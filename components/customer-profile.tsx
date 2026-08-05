@@ -8,6 +8,7 @@ import {
   Bell,
   Check,
   Code2,
+  Copy,
   Fingerprint,
   HelpCircle,
   KeyRound,
@@ -19,10 +20,12 @@ import {
   Plus,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Star,
   Trash2,
   User,
 } from "lucide-react"
+import { QRCodeSVG } from "qrcode.react"
 import { useApp } from "@/components/app-providers"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -1626,6 +1629,301 @@ function SignInMethodIcon({ kind }: { kind: LoginMethodView["kind"] }) {
   return <Icon className="size-4 text-primary" />
 }
 
+interface MfaFactor {
+  id: string
+  type: string
+  status: string
+  name?: string
+  createdAt?: string
+}
+
+// Inline authenticator (TOTP) enrolment. The whole point of part 4: the person
+// scans a QR and confirms a code WITHOUT ever leaving this page for Auth0's
+// hosted flow. The server generates the secret, verifies the typed code against
+// it, and only then registers the factor — so a mis-scan can't leave a broken
+// enrolment behind.
+function AuthenticatorApp({ live }: { live: boolean }) {
+  const { data, error, mutate } = useSWR<{
+    configured: boolean
+    enabled: boolean
+    enrollments: MfaFactor[]
+  }>(live ? "/api/account/mfa" : null, fetcher)
+
+  if (error) warnUnavailable("Authenticator app", (error as { status?: number }).status)
+
+  const [phase, setPhase] = useState<"idle" | "loading" | "setup" | "done">("idle")
+  const [setup, setSetup] = useState<{
+    secret: string
+    uri: string
+    issuer: string
+    account: string
+  } | null>(null)
+  const [otpKey, setOtpKey] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [enrollError, setEnrollError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [removing, setRemoving] = useState<string | null>(null)
+
+  const authenticators = (data?.enrollments ?? []).filter((e) => e.type === "totp")
+
+  async function start() {
+    setEnrollError(null)
+    setPhase("loading")
+    try {
+      const res = await fetch("/api/account/mfa/enroll/start", { method: "POST" })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.uri) {
+        setEnrollError("We couldn't start setup just now. Please try again.")
+        setPhase("idle")
+        return
+      }
+      setSetup({ secret: json.secret, uri: json.uri, issuer: json.issuer, account: json.account })
+      setPhase("setup")
+    } catch {
+      setEnrollError("Something went wrong. Please try again.")
+      setPhase("idle")
+    }
+  }
+
+  async function verify(value: string) {
+    setBusy(true)
+    setEnrollError(null)
+    try {
+      const res = await fetch("/api/account/mfa/enroll/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: value }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setEnrollError(json.error ?? "That code didn't match. Enter the current 6-digit code.")
+        setBusy(false)
+        setOtpKey((k) => k + 1)
+        return
+      }
+      setBusy(false)
+      setSetup(null)
+      setPhase("done")
+      mutate()
+    } catch {
+      setEnrollError("Something went wrong. Please try again.")
+      setBusy(false)
+      setOtpKey((k) => k + 1)
+    }
+  }
+
+  async function copySecret() {
+    if (!setup) return
+    try {
+      await navigator.clipboard.writeText(setup.secret.replace(/\s/g, ""))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard blocked — the code is still visible to type by hand */
+    }
+  }
+
+  async function remove(id: string) {
+    setRemoving(id)
+    setEnrollError(null)
+    try {
+      const res = await fetch(`/api/account/mfa?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setEnrollError(json.error ?? "We couldn't remove that authenticator. Please try again.")
+      }
+      mutate()
+    } catch {
+      setEnrollError("Something went wrong. Please try again.")
+    } finally {
+      setRemoving(null)
+    }
+  }
+
+  function cancel() {
+    setPhase("idle")
+    setSetup(null)
+    setEnrollError(null)
+    setOtpKey((k) => k + 1)
+  }
+
+  if (!live) return null
+
+  return (
+    <div className="mt-5 border-t border-border pt-5">
+      <div className="flex items-start gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+          <Smartphone className="size-4 text-primary" />
+        </span>
+        <div className="flex-1">
+          <h3 className="text-sm font-bold text-foreground">Authenticator app</h3>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            Add an app like Google Authenticator, 1Password or Authy to generate
+            sign-in codes for extra protection.
+          </p>
+        </div>
+      </div>
+
+      {authenticators.length > 0 ? (
+        <ul className="mt-3 space-y-2">
+          {authenticators.map((f) => (
+            <li
+              key={f.id}
+              className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-3"
+            >
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                <ShieldCheck className="size-4 text-primary" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-foreground">
+                  {f.name || "Authenticator app"}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  {f.createdAt
+                    ? `Added ${new Date(f.createdAt).toLocaleDateString()}`
+                    : "Registered to your account"}
+                </span>
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+                disabled={removing === f.id}
+                onClick={() => remove(f.id)}
+              >
+                {removing === f.id ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4" />
+                )}
+                <span className="sr-only">Remove authenticator</span>
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {phase === "idle" || phase === "loading" ? (
+        <div className="mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={start}
+            disabled={phase === "loading"}
+          >
+            {phase === "loading" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+            {authenticators.length > 0 ? "Add another authenticator" : "Add authenticator app"}
+          </Button>
+          {enrollError ? (
+            <div className="mt-2">
+              <Note tone="error">{enrollError}</Note>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {phase === "setup" && setup ? (
+        <div className="mt-4 space-y-4 rounded-xl border border-border bg-muted/40 p-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              1. Scan this code with your authenticator app
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              It will be saved as{" "}
+              <span className="font-medium text-foreground">{setup.issuer}</span>.
+            </p>
+          </div>
+
+          <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+            {/* Fixed white background so the QR scans reliably in any theme. */}
+            <div className="rounded-lg bg-white p-3">
+              <QRCodeSVG value={setup.uri} size={148} level="M" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-muted-foreground">
+                Can&apos;t scan? Enter this key in your app instead:
+              </p>
+              <div className="mt-1.5 flex items-center gap-2">
+                <code className="min-w-0 flex-1 break-all rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium tracking-wide text-foreground">
+                  {setup.secret}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={copySecret}
+                  aria-label="Copy setup key"
+                >
+                  {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              2. Enter the 6-digit code from your app
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              It confirms automatically once all six digits are entered.
+            </p>
+          </div>
+
+          <OtpInput key={otpKey} disabled={busy} onComplete={verify} />
+
+          {busy ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Checking the code…
+            </p>
+          ) : null}
+          {enrollError ? <Note tone="error">{enrollError}</Note> : null}
+
+          <div>
+            <Button type="button" variant="ghost" size="sm" onClick={cancel} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {phase === "done" ? (
+        <div className="mt-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                Authenticator app registered
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Your authenticator is now registered to your account and can be
+                required at sign-in according to your security policy.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => setPhase("idle")}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function SignInSection({ live }: { live: boolean }) {
   const { data, error } = useSWR<{
     configured: boolean
@@ -1668,12 +1966,7 @@ function SignInSection({ live }: { live: boolean }) {
         </ul>
       )}
 
-      <div className="mt-4">
-        <Button variant="outline" size="sm" disabled title="Coming soon">
-          <Plus className="size-4" />
-          Add a way to sign in
-        </Button>
-      </div>
+      <AuthenticatorApp live={live} />
     </ProfileCard>
   )
 }

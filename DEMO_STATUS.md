@@ -8,6 +8,55 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## Customer profile: identity, MFA and account model (5 August)
+
+The four-part customer-profile work is complete. The durable, off-codebase facts
+behind it:
+
+**Alternate email is a real identity, not a stored string.** Adding an alternate
+address mails a passcode and, once the mailbox is proven, links the resulting
+identity to the primary user with
+`POST /api/v2/users/{id}/identities { provider: "email", user_id }`. It uses the
+`{ provider, user_id }` form and **deliberately not** `{ link_with: <id_token> }`:
+`link_with` is rejected with *"JWT (link_with) contains an invalid aud claim"*
+whenever the Management token comes from a different application than the one that
+issued the id_token, which is exactly our situation. The `{ provider, user_id }`
+form has no such coupling and is equivalent once the mailbox is already proven.
+
+**After linking, Auth0 merges the secondary record into the primary.** The
+alternate address then **stops resolving as its own user** in users-by-email, and
+the `sub` returned when someone signs in with that alternate becomes the
+**primary** `auth0|…` sub. This is what makes "sign in with the alternate, come
+back as the same person" work — and it is the basis of the sign-in guard below.
+
+**The sign-in resolver uses users-by-email, not the search index.** Deciding
+whether a typed address is a database user (database flow) or an alternate
+(passwordless flow) is done with the Management API's **users-by-email direct
+lookup**. The search index is **not** used in any sign-in path because it does
+**not** return linked identities and is **eventually consistent** — either
+property would silently route a just-linked alternate down the wrong flow.
+
+**Management grant scopes.** `create:authentication_methods` was added to the
+Management grant so an authenticator can be registered from our own page (part 4).
+`delete:users` remains **deliberately absent**: with no way to hard-delete a user,
+account deletion is **soft by construction** and cannot be turned into a
+destructive call by mistake.
+
+**MFA policy list is empty on purpose and must stay empty.** The tenant's `otp`
+factor is enabled and authenticators can be registered, but the tenant's MFA
+**policy list is empty**. That is intentional: an empty policy means enrolling an
+authenticator **cannot** start forcing a second factor at sign-in, so it can never
+break the embedded password and passcode flows. Do **not** add an MFA policy —
+doing so would make embedded sign-in demand a second factor and take the demo
+down. Because of this, the profile copy says an authenticator "can be required at
+sign-in according to your security policy" and never claims the person will be
+challenged on every sign-in.
+
+**Phone is staged, pending an SMS provider.** Phone numbers can be added, labelled
+and set as default on the profile, stored as an account identifier, but text-
+message sign-in is **not** active because no SMS provider is connected. The UI
+presents phone as an identifier, not an active sign-in method.
+
 ## What the demo has to show
 
 Three brand-region sites — DeWalt France, DeWalt Germany, Stanley France —
