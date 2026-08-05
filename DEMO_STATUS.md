@@ -36,6 +36,25 @@ lookup**. The search index is **not** used in any sign-in path because it does
 **not** return linked identities and is **eventually consistent** — either
 property would silently route a just-linked alternate down the wrong flow.
 
+**The sign-in guard that must never be removed.** The passwordless flow will
+happily authenticate *any* address — Auth0 mints a brand-new empty user for one
+it has never seen. So the verify route inspects the `sub` it gets back and only
+creates a session when that `sub` is **not** a bare `email|…`. A bare `email|…`
+means nobody has linked that address, so it is not an account on this storefront
+and the request is refused with the drawer's ordinary failure message. Delete
+this check and any address in the world signs in and lands on an empty account.
+
+Verified against the live DeWalt France deployment on 5 August, in both
+directions:
+
+| Address used | Start step | Result |
+| --- | --- | --- |
+| Linked alternate | `{"ok":true}` | Session opened **as the primary account** |
+| Never-linked address, correct passcode for its own mailbox | `{"ok":true}` | Refused, no session |
+
+The two start responses are byte-identical, so the flow cannot be used to work
+out which addresses we know.
+
 **Management grant scopes.** `create:authentication_methods` was added to the
 Management grant so an authenticator can be registered from our own page (part 4).
 `delete:users` remains **deliberately absent**: with no way to hard-delete a user,
