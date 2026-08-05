@@ -425,7 +425,7 @@ export function RealAccount({ user }: RealAccountProps) {
           </span>
         )}
         <div className="flex-1">
-          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">
+          <h1 className="brand-display text-2xl text-foreground">
             {displayName}
           </h1>
           <div className="mt-1 flex flex-wrap items-center gap-2">

@@ -81,7 +81,7 @@ export function CrossBrandRecognition({ sites }: { sites: OtherSite[] }) {
         <div className="min-w-0">
           <h2
             id="cross-brand-heading"
-            className="text-balance text-2xl font-extrabold tracking-tight text-foreground"
+            className="brand-display text-balance text-2xl text-foreground"
           >
             Welcome back to SBD.
           </h2>

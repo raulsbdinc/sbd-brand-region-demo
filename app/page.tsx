@@ -26,7 +26,7 @@ export default function HomePage() {
               <Sparkles className="size-3.5 text-primary" />
               {SITE_CONTENT.eyebrow}
             </span>
-            <h1 className="mt-4 text-balance text-4xl font-extrabold tracking-tight sm:text-5xl">
+            <h1 className="brand-display mt-4 text-balance text-4xl sm:text-5xl">
               {SITE_CONTENT.headline}
             </h1>
             <p className="mt-4 max-w-md text-pretty leading-relaxed text-muted-foreground">
@@ -66,7 +66,7 @@ export default function HomePage() {
       {/* Products */}
       <section className="mt-10">
         <div className="flex items-end justify-between">
-          <h2 className="text-2xl font-bold tracking-tight">Featured tools</h2>
+          <h2 className="brand-display text-2xl">Featured tools</h2>
           <span className="text-sm text-muted-foreground">{PRODUCTS.length} items</span>
         </div>
         <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">

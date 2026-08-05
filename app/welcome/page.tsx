@@ -84,7 +84,7 @@ function RealWelcome({ user }: { user: Record<string, unknown> }) {
           <BadgeCheck className="size-3.5 text-primary" />
           Real Auth0 session
         </div>
-        <h1 className="mt-3 text-balance text-3xl font-extrabold tracking-tight">
+        <h1 className="brand-display mt-3 text-balance text-3xl">
           Welcome, {firstName}.
         </h1>
         <p className="mt-2 leading-relaxed text-muted-foreground">

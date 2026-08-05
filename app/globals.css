@@ -192,6 +192,28 @@
   --input: var(--brand-border);
 }
 
+/* ---- Brand display face -------------------------------------------------- */
+/* The real Polaris properties (dewalt.com, stanleyoutillage.fr) set ONE display
+   face across the storefront AND the sign-in panel: hero and section headings in
+   that face, with Inter reserved for body copy. This class is how a heading opts
+   into the active brand's display face; every value comes from the brand's
+   display tokens (applied inline on the app root), so there is no per-brand
+   branching at the call site, matching how the sign-in drawer works. Sizes stay
+   on the element as Tailwind text-size classes — only the face, weight, case and
+   tracking come from the brand. Deliberately left OUT of any Tailwind layer so it
+   wins over layered utilities without a specificity fight; the conflicting weight
+   and tracking utilities are also removed at each call site.
+   NOTE: keep this comment free of the character pair that closes a CSS comment —
+   writing a star-slash inside it (e.g. "font-* / tracking-*") ends the comment
+   early and mis-parses the rule below. */
+.brand-display {
+  font-family: var(--brand-display-font);
+  font-stretch: var(--brand-display-stretch);
+  text-transform: var(--brand-display-case);
+  letter-spacing: var(--brand-display-tracking);
+  font-weight: var(--brand-display-weight);
+}
+
 /* ---- Showcase animations ------------------------------------------------- */
 @keyframes sbd-glow {
   0% {

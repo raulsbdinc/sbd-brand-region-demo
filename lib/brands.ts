@@ -40,6 +40,8 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-display-stretch": "125%",
       "--brand-display-case": "uppercase",
       "--brand-display-tracking": "-0.0146em",
+      // Measured on dewalt.com — hero/section headings are Archivo Expanded 900.
+      "--brand-display-weight": "900",
       "--brand-heading-size": "24px",
       "--brand-heading-line": "28px",
       "--brand-button-radius": "0px",
@@ -78,6 +80,9 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-display-stretch": "normal",
       "--brand-display-case": "none",
       "--brand-display-tracking": "-0.0034em",
+      // Not deployed; Inter stands in for GT America. 800 keeps the stand-in
+      // close to its current font-extrabold headings.
+      "--brand-display-weight": "800",
       "--brand-heading-size": "30px",
       "--brand-heading-line": "34px",
       "--brand-button-radius": "9999px",
@@ -120,6 +125,8 @@ export const BRANDS: Record<BrandId, Brand> = {
       "--brand-display-stretch": "75%",
       "--brand-display-case": "uppercase",
       "--brand-display-tracking": "-0.0128em",
+      // Measured on stanleyoutillage.fr — headings are Open Sans Condensed Bold (700).
+      "--brand-display-weight": "700",
       "--brand-heading-size": "28px",
       "--brand-heading-line": "32px",
       "--brand-button-radius": "4px",
