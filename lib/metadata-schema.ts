@@ -153,6 +153,140 @@ export function sanitizePreferences(input: unknown): SitePreferences {
   }
 }
 
+// --- Saved addresses (user_metadata.addresses) -----------------------------
+// A customer's saved shipping / billing addresses, stored as an array under
+// `user_metadata.addresses`. Written by /api/account/addresses and rendered on
+// the customer profile (/profile). Same defensive contract as the preference
+// sanitiser above: NEVER throw on malformed stored data — read whatever is
+// valid, silently drop the rest — so one bad row can never blank the section or
+// crash a write.
+
+export type AddressType = "shipping" | "billing"
+
+/** One saved address. All string fields are trimmed + length-capped on write. */
+export interface Address {
+  id: string
+  /** Friendly label the customer gives it, e.g. "Home", "Workshop". */
+  label: string
+  type: AddressType
+  /** Who the parcel is addressed to. */
+  recipient: string
+  line1: string
+  line2: string
+  city: string
+  /** State / province / county. Not used by every market's format. */
+  region: string
+  postal_code: string
+  /** Free-text country name; defaults to this deployment's market. */
+  country: string
+  /** At most one address per type may be the default (enforced on write). */
+  is_default: boolean
+}
+
+/** Default country for a new address on this deployment (its own market). */
+export const DEFAULT_ADDRESS_COUNTRY: string = SITE_COUNTRY.name
+
+const ADDRESS_TYPES = new Set<AddressType>(["shipping", "billing"])
+
+/**
+ * Order of the town / region / postcode group, appropriate to this
+ * deployment's market. Continental-European markets (this repo ships France
+ * and Germany) write the postcode before the town and omit a state/region line;
+ * the other markets put town, then state/region, then postcode last. The
+ * `region` field is still stored either way — it is simply not surfaced in the
+ * European layout.
+ */
+export type AddressLocalityField = "city" | "region" | "postal_code"
+const EUROPEAN_ADDRESS_MARKETS = new Set<CountryId>(["fr", "de"])
+export const ADDRESS_LOCALITY_ORDER: AddressLocalityField[] =
+  EUROPEAN_ADDRESS_MARKETS.has(SITE_MARKET)
+    ? ["postal_code", "city"]
+    : ["city", "region", "postal_code"]
+
+function asTrimmed(v: unknown, max: number): string {
+  return typeof v === "string" ? v.trim().slice(0, max) : ""
+}
+
+/** Generate a stable id for a new address. Falls back if crypto is unavailable. */
+export function newAddressId(): string {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return `addr_${crypto.randomUUID().slice(0, 8)}`
+    }
+  } catch {
+    // fall through
+  }
+  return `addr_${Math.random().toString(16).slice(2, 10)}`
+}
+
+/**
+ * Normalize one raw address-ish value. Returns null (→ dropped) when the entry
+ * is not an object or carries no meaningful content (no recipient AND no
+ * street line), so junk never survives a read or a write. A missing/blank id is
+ * assigned a fresh one; a missing country falls back to this market.
+ */
+export function sanitizeAddress(input: unknown): Address | null {
+  if (!input || typeof input !== "object") return null
+  const raw = input as Record<string, unknown>
+
+  const recipient = asTrimmed(raw.recipient, 120)
+  const line1 = asTrimmed(raw.line1, 200)
+  // An address with neither a recipient nor a street line is not an address.
+  if (!recipient && !line1) return null
+
+  return {
+    id: asTrimmed(raw.id, 40) || newAddressId(),
+    label: asTrimmed(raw.label, 60) || "Address",
+    type: ADDRESS_TYPES.has(raw.type as AddressType)
+      ? (raw.type as AddressType)
+      : "shipping",
+    recipient,
+    line1,
+    line2: asTrimmed(raw.line2, 200),
+    city: asTrimmed(raw.city, 120),
+    region: asTrimmed(raw.region, 120),
+    postal_code: asTrimmed(raw.postal_code, 32),
+    country: asTrimmed(raw.country, 80) || DEFAULT_ADDRESS_COUNTRY,
+    is_default: asBool(raw.is_default, false),
+  }
+}
+
+/**
+ * Keep at most ONE default per type: the first default seen for a type wins,
+ * any later ones are demoted. Order the input so a just-selected default comes
+ * first if you want it to be the surviving one.
+ */
+export function enforceSingleDefaultPerType(addresses: Address[]): Address[] {
+  const claimed: Record<AddressType, boolean> = { shipping: false, billing: false }
+  return addresses.map((a) => {
+    if (a.is_default && !claimed[a.type]) {
+      claimed[a.type] = true
+      return a
+    }
+    return a.is_default ? { ...a, is_default: false } : a
+  })
+}
+
+/**
+ * Read an entire stored `user_metadata.addresses` value into a clean array:
+ * drop non-objects and empty rows, de-duplicate ids, and collapse to one
+ * default per type. Used both to read the section and to re-validate every
+ * write before it is persisted.
+ */
+export function sanitizeAddresses(input: unknown): Address[] {
+  const arr = Array.isArray(input) ? input : []
+  const out: Address[] = []
+  const seenIds = new Set<string>()
+  for (const item of arr) {
+    const a = sanitizeAddress(item)
+    if (!a) continue
+    if (seenIds.has(a.id)) a.id = newAddressId()
+    seenIds.add(a.id)
+    out.push(a)
+  }
+  return enforceSingleDefaultPerType(out)
+}
+
 // --- Consent management (user_metadata.consent) ----------------------------
 // Consent is the lawful-basis layer (GDPR/CCPA): WHETHER the user agrees to a
 // kind of processing. It is deliberately separate from SitePreferences:

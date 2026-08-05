@@ -100,8 +100,14 @@ export function SiteHeader() {
                   </DropdownMenuLabel>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => router.push("/account")}>
-                  Account
+                <DropdownMenuItem onClick={() => router.push("/profile")}>
+                  My profile
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => router.push("/account")}
+                  className="text-xs text-muted-foreground focus:text-foreground"
+                >
+                  Technical view
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push("/welcome")}>
                   Session details
@@ -147,8 +153,14 @@ export function SiteHeader() {
                   </DropdownMenuLabel>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => router.push("/account")}>
-                  Account
+                <DropdownMenuItem onClick={() => router.push("/profile")}>
+                  My profile
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => router.push("/account")}
+                  className="text-xs text-muted-foreground focus:text-foreground"
+                >
+                  Technical view
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push("/welcome")}>
                   Session details
