@@ -17,6 +17,7 @@
 // lists + types can be imported by the client component too.
 
 import { BRAND_ORDER, BRANDS, COUNTRY_ORDER, COUNTRIES, regionForCountry } from "./brands"
+import { SITE_BRAND, SITE_COUNTRY, SITE_MARKET } from "./site"
 import type { BrandId, CountryId } from "./types"
 
 export type CommunicationChannel = "email" | "sms" | "push"
@@ -40,11 +41,23 @@ export interface SitePreferences {
   preferred_login: PreferredLogin
 }
 
-/** Defaults applied when a user has never saved preferences. */
+// Defaults applied when a user has never saved preferences.
+//
+// These are PER-DEPLOYMENT: brand, country and locale are derived from this
+// build's own identity (lib/site.ts), not hardcoded. One build serves all three
+// sites, so a new user who signs up on, say, Craftsman France must start with
+// Craftsman / France / fr-FR — their own brand and market — rather than someone
+// else's (the old hardcoded DeWalt / US / en-US made every new account look like
+// a DeWalt US user regardless of the site they joined on).
+//
+// `lang` is deliberately NOT derived: it is the interface language, and every
+// site's copy is English by design (the document element is hardcoded to
+// lang="en" — see DEMO_STATUS.md). `preferred_locale` is a data preference and
+// follows the market; `lang` is the UI language and stays "en".
 export const DEFAULT_PREFERENCES: SitePreferences = {
-  preferred_brand: "dewalt",
-  preferred_country: "us",
-  preferred_locale: "en-US",
+  preferred_brand: SITE_BRAND,
+  preferred_country: SITE_MARKET,
+  preferred_locale: SITE_COUNTRY.locale,
   lang: "en",
   marketing_opt_in: false,
   communication_prefs: { email: true, sms: false, push: false },
