@@ -1,6 +1,5 @@
 "use client"
 
-import useSWR from "swr"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { LogOut, ShoppingCart, UserRound } from "lucide-react"
@@ -19,27 +18,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-interface RealUserResponse {
-  user: { name: string; email: string | null; picture: string | null } | null
-}
-
-const fetcher = (url: string) =>
-  fetch(url).then((r) => r.json() as Promise<RealUserResponse>)
-
 export function SiteHeader() {
-  const { session, logout, authConfigured, signInOpen, openSignIn, closeSignIn } =
+  // Real-session detection now lives in AppProviders (one source of truth),
+  // so the header just reads `realUser` instead of doing its own /api/me fetch.
+  const { session, realUser, logout, signInOpen, openSignIn, closeSignIn } =
     useApp()
   const router = useRouter()
-
-  // When there's no client-side mock session, the user may still hold a REAL
-  // Auth0 session from a promoted flow (social / password). Detect it so the
-  // header shows the account dropdown instead of the "Sign in" icon.
-  const { data: realData } = useSWR(
-    authConfigured && !session ? "/api/me" : null,
-    fetcher,
-    { revalidateOnFocus: true },
-  )
-  const realUser = !session ? realData?.user ?? null : null
 
   return (
     <header className="sticky top-0 z-30 bg-[var(--brand-ink)] text-[var(--brand-ink-foreground)]">
@@ -104,24 +88,28 @@ export function SiteHeader() {
                   My profile
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                {/* The two developer surfaces, grouped and styled muted/xs so a
-                    presenter can reach them from one place while it stays
-                    obvious they are not customer-facing. */}
-                <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
-                  Developer views
-                </DropdownMenuLabel>
-                <DropdownMenuItem
-                  onClick={() => router.push("/dev-quick-view")}
-                  className="text-xs text-muted-foreground focus:text-foreground"
-                >
-                  Quick view
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => router.push("/dev-account-details")}
-                  className="text-xs text-muted-foreground focus:text-foreground"
-                >
-                  Account details
-                </DropdownMenuItem>
+                {/* The two developer surfaces. The label + its items MUST live
+                    in one DropdownMenuGroup: DropdownMenuLabel is a Base UI
+                    GroupLabel and throws (Base UI error #31, which crashed the
+                    whole page) if it has no Group parent. Grouping is also the
+                    correct accessible structure — the label names its group. */}
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
+                    Developer views
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/dev-quick-view")}
+                    className="text-xs text-muted-foreground focus:text-foreground"
+                  >
+                    Quick view
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/dev-account-details")}
+                    className="text-xs text-muted-foreground focus:text-foreground"
+                  >
+                    Account details
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => logout()}
@@ -167,24 +155,28 @@ export function SiteHeader() {
                   My profile
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                {/* The two developer surfaces, grouped and styled muted/xs so a
-                    presenter can reach them from one place while it stays
-                    obvious they are not customer-facing. */}
-                <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
-                  Developer views
-                </DropdownMenuLabel>
-                <DropdownMenuItem
-                  onClick={() => router.push("/dev-quick-view")}
-                  className="text-xs text-muted-foreground focus:text-foreground"
-                >
-                  Quick view
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => router.push("/dev-account-details")}
-                  className="text-xs text-muted-foreground focus:text-foreground"
-                >
-                  Account details
-                </DropdownMenuItem>
+                {/* The two developer surfaces. The label + its items MUST live
+                    in one DropdownMenuGroup: DropdownMenuLabel is a Base UI
+                    GroupLabel and throws (Base UI error #31, which crashed the
+                    whole page) if it has no Group parent. Grouping is also the
+                    correct accessible structure — the label names its group. */}
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
+                    Developer views
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/dev-quick-view")}
+                    className="text-xs text-muted-foreground focus:text-foreground"
+                  >
+                    Quick view
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/dev-account-details")}
+                    className="text-xs text-muted-foreground focus:text-foreground"
+                  >
+                    Account details
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 {/* Same canonical logout as everywhere else (see lib/logout.ts):
                     it routes to the SDK-mounted /auth/logout for real sessions. */}

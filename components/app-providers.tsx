@@ -9,10 +9,25 @@ import {
   type ReactNode,
 } from "react"
 import { useRouter } from "next/navigation"
+import useSWR from "swr"
 import { BRANDS, COUNTRIES } from "@/lib/brands"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { buildLogoutUrl } from "@/lib/logout"
 import type { BrandId, CountryId, MethodId, Session } from "@/lib/types"
+
+/** The trimmed identity the storefront needs from a REAL Auth0 session. */
+export interface RealUser {
+  name: string
+  email: string | null
+  picture: string | null
+}
+
+interface RealUserResponse {
+  user: RealUser | null
+}
+
+const meFetcher = (url: string) =>
+  fetch(url).then((r) => r.json() as Promise<RealUserResponse>)
 
 interface AppState {
   /** Active brand skin. Part of the simulated tenant. */
@@ -23,6 +38,27 @@ interface AppState {
   setCountry: (c: CountryId) => void
   session: Session | null
   setSession: (s: Session | null) => void
+  /**
+   * The REAL Auth0 user, if one is signed in via a promoted flow (social /
+   * password). Fetched once here (from /api/me) and shared, so the header, the
+   * hero, and any other surface all read ONE source of truth instead of each
+   * doing their own detection. Null when there is no real session.
+   */
+  realUser: RealUser | null
+  /**
+   * The single "is anyone signed in" value the whole app trusts — true for
+   * either the client-side mock session OR a real Auth0 session.
+   */
+  signedIn: boolean
+  /** First-name-friendly display name behind `signedIn` (mock or real). */
+  displayName: string | null
+  /**
+   * True while the real-session probe is still in flight AND there is no mock
+   * session to fall back on. In this window we do not yet know whether the user
+   * is signed in, so signed-in/out UI should render a neutral placeholder
+   * rather than flashing the wrong state.
+   */
+  authLoading: boolean
   /**
    * Whether the storefront sign-in drawer is open. Lifted here (rather than
    * held locally in SiteHeader) so any signed-out entry point — the hero CTA,
@@ -75,6 +111,26 @@ export function AppProviders({
   const [activeFlow, setActiveFlow] = useState<MethodId | null>(null)
   const router = useRouter()
 
+  // Real-session probe, owned here so the whole app shares one answer. Only
+  // runs when Auth0 is configured and there is no mock session to prefer. This
+  // used to live in SiteHeader, which kept the result to itself; app/page.tsx
+  // then read only the mock `session` and wrongly showed signed-out UI to a
+  // genuinely-logged-in user.
+  const { data: realData, isLoading: realLoading } = useSWR(
+    authConfigured && !session ? "/api/me" : null,
+    meFetcher,
+    { revalidateOnFocus: true },
+  )
+  const realUser = !session ? realData?.user ?? null : null
+
+  // One notion of signed-in for the whole app: the mock session OR a real one.
+  const signedIn = Boolean(session) || Boolean(realUser)
+  const displayName = session?.name ?? realUser?.name ?? null
+  // Unknown only while the real probe is genuinely outstanding (configured, no
+  // mock session, no answer yet). Never "loading" for the mock-only showcase.
+  const authLoading =
+    authConfigured && !session && !realData && realLoading
+
   const logout = useCallback(() => {
     // Always tear down the client-side mock session first, so the showcase and
     // a real session both end up in a clean signed-out state.
@@ -102,8 +158,19 @@ export function AppProviders({
       setCountry,
       session,
       setSession,
+      realUser,
+      signedIn,
+      displayName,
+      authLoading,
       signInOpen,
-      openSignIn: () => setSignInOpen(true),
+      // Guard: never open the sign-in drawer for someone already signed in
+      // (mock or real). Raul's rule — "we should not be able to log in again if
+      // we are already logged in" — and the backstop for any entry point that
+      // forgets to branch on `signedIn` itself.
+      openSignIn: () => {
+        if (signedIn) return
+        setSignInOpen(true)
+      },
       closeSignIn: () => setSignInOpen(false),
       tokenInspectorOpen,
       setTokenInspectorOpen,
@@ -113,7 +180,20 @@ export function AppProviders({
       logout,
       authConfigured,
     }),
-    [brand, country, session, signInOpen, tokenInspectorOpen, activeFlow, logout, authConfigured],
+    [
+      brand,
+      country,
+      session,
+      realUser,
+      signedIn,
+      displayName,
+      authLoading,
+      signInOpen,
+      tokenInspectorOpen,
+      activeFlow,
+      logout,
+      authConfigured,
+    ],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

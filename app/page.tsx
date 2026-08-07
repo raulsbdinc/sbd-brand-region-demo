@@ -5,16 +5,24 @@ import { useRouter } from "next/navigation"
 import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react"
 import { useApp } from "@/components/app-providers"
 import { PRODUCTS } from "@/lib/products"
-import { SITE_CONTENT, SITE_HERO, formatPrice } from "@/lib/site"
+import { SITE_BRAND_INFO, SITE_CONTENT, SITE_HERO, formatPrice } from "@/lib/site"
 import { Button } from "@/components/ui/button"
 
 export default function HomePage() {
-  const { session, openSignIn } = useApp()
+  // One shared notion of signed-in (mock OR real Auth0), plus the loading
+  // window so we don't flash the wrong CTA before /api/me answers.
+  const { signedIn, displayName, authLoading, openSignIn } = useApp()
   const router = useRouter()
 
   // Signed-out entry points open the branded drawer in place; signed-in ones
   // go to the customer profile page. Never route to the old /signin showcase.
-  const enter = () => (session ? router.push("/profile") : openSignIn())
+  // (openSignIn is itself guarded for signed-in users as a backstop.)
+  const enter = () => (signedIn ? router.push("/profile") : openSignIn())
+
+  const firstName = displayName?.trim().split(/\s+/)[0] ?? null
+  // Branded label built from the brand name we already have, not hardcoded:
+  // "My DeWalt account" / "My Stanley account" / "My Craftsman account".
+  const accountLabel = `My ${SITE_BRAND_INFO.name} account`
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 pb-16 sm:px-6">
@@ -32,15 +40,41 @@ export default function HomePage() {
             <p className="mt-4 max-w-md text-pretty leading-relaxed text-muted-foreground">
               {SITE_CONTENT.subcopy}
             </p>
-            <div className="mt-7 flex flex-wrap items-center gap-3">
-              <Button
-                size="lg"
-                className="h-12 px-6 text-base font-semibold"
-                onClick={enter}
-              >
-                {session ? "Go to your account" : "Sign in or create account"}
-                <ArrowRight className="size-5" />
-              </Button>
+            <div className="mt-7">
+              {authLoading ? (
+                // In-between state: the real-session probe hasn't answered yet.
+                // Reserve the band's height so nothing jumps when it resolves —
+                // that swap is exactly what looked broken. (h-12 button +
+                // ~1.5rem welcome line + gap.)
+                <div className="h-[4.75rem]" aria-hidden />
+              ) : signedIn ? (
+                // Signed-in welcome band, modelled on the real MyDEWALT page:
+                // a small greeting above a brand-coloured account button.
+                <div className="flex flex-col items-start gap-3">
+                  {firstName ? (
+                    <p className="brand-display text-lg leading-tight text-muted-foreground">
+                      {`Welcome back, ${firstName}`}
+                    </p>
+                  ) : null}
+                  <Button
+                    size="lg"
+                    className="h-12 px-6 text-base font-semibold"
+                    onClick={() => router.push("/profile")}
+                  >
+                    {accountLabel}
+                    <ArrowRight className="size-5" />
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  size="lg"
+                  className="h-12 px-6 text-base font-semibold"
+                  onClick={enter}
+                >
+                  Sign in or create account
+                  <ArrowRight className="size-5" />
+                </Button>
+              )}
             </div>
           </div>
           <div className="relative aspect-[4/3] w-full">
