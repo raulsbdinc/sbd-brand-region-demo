@@ -728,6 +728,123 @@ with its own nav and copy; sign-in works on the new domain against the same one
 account and password; and signing in afterwards on DeWalt France shows "Welcome
 back to SBD." naming Stanley France with a locale-formatted timestamp.
 
+## 6–7 August — every way in, Google, and two bugs caught in review
+
+### "How you sign in" is the full inventory, not just what we built
+
+The profile's sign-in section (#31) lists **eight** ways into an account rather
+than the two the demo started with, because the question executives actually ask
+is "what can this platform do", and a list of two invites the answer "not much".
+Six are real and operable from the page: email and password, an emailed passcode,
+alternate email addresses, an authenticator app, an emailed security code as a
+second factor, and backup codes. Two are **explainers that deliberately do
+nothing**: passkeys and text-message passcodes. They are drawn in the same
+inventory rather than hidden, so the story is "here is the shape of it, here is
+what stands between us and switching it on" instead of a silent gap.
+
+Nothing in that section names Auth0 or Okta. A customer would not see a vendor
+name on their own account page, and the room contains people still choosing the
+vendor.
+
+### Passkeys need a custom domain, so they cannot be demoed here
+
+Enabling passkeys on the `sbd-eu` connection fails with **"Custom domain is
+required"**. This is not the same restriction that embedded passwordless dodged
+earlier: a passkey is bound to a Relying Party ID, which is a domain, and
+`vercel.app` cannot serve as one — it is on the public suffix list, so a
+credential registered there would be scoped to every Vercel deployment in
+existence. Auth0 therefore requires a verified custom domain before it will let
+the tenant register passkeys at all.
+
+So passkeys are an **explainer row** with no action behind it. Turning them on is
+not a code change; it needs a real domain (`account.dewalt.fr` or similar) on the
+tenant, which is the same prerequisite already noted for branded Universal Login.
+
+### Google sign-in reconciles to the account that already exists
+
+"Continue with Google" is in the drawer and a Google row is in the profile (#32).
+The interesting half is not the button, it is what happens underneath.
+
+Google hands back a **separate directory user**. Left alone, a customer who used
+a password on DeWalt France and Google on DeWalt Germany would become two records
+and, by Michael's billing question, two monthly active users — the exact opposite
+of the claim this demo exists to make. So the `Recognise SBD sites across brands`
+Action (now **version 4**) links them: on a Google login with a **verified**
+email, it searches the `sbd-eu` connection for an account holding that same email,
+attaches the Google identity to it, and calls `setPrimaryUser` so the session
+that reaches the site belongs to the original account. The customer keeps one
+profile, one history, and one `sub`.
+
+It is deliberately conservative. It acts only on a verified Google email, matches
+only inside this demo's own connection, and does nothing at all when there is no
+match, in which case Google is simply a new customer signing up. Every failure
+path is swallowed: a linking problem must never stop someone getting into their
+account.
+
+Two caveats worth saying out loud if asked. The link is **automatic, with no "is
+this you?" confirmation step** — defensible here because Google asserts the email
+is verified, but a production design would probably interpose a confirmation. And
+the **full Google round trip has not been exercised**, because no Google account
+matching the demo user was available to test with; the Action's logic and its
+deployment are confirmed, the live click-through is not.
+
+### The MFA policy stays off, and that is a decision rather than an omission
+
+Enrolling an authenticator works and happens inside the site, with no redirect
+out to a hosted page. What is **not** switched on is the tenant policy that would
+*require* a second factor at every login.
+
+That is on purpose. Embedded sign-in exchanges credentials through the
+password-realm grant; with a tenant-wide MFA policy in force that exchange stops
+returning tokens and returns `mfa_required` with an `mfa_token` instead, which
+this application has no UI to answer. Switching the policy on without first
+building an embedded challenge screen would break **every** sign-in on all three
+sites. Enrollment is therefore demonstrable today; enforcement is a known,
+sequenced next step, not an oversight.
+
+### Two bugs found while checking the sites before delivery
+
+**Clicking the account menu crashed the whole page.** The browser showed "This
+page couldn't load" and the console showed `Base UI error #31`. Cause: the
+"Developer views" label added in #30 sat outside any menu group, and Base UI's
+`GroupLabel` requires a `Group` parent — it throws otherwise, and an exception
+thrown while rendering a menu takes the page down with it. The neighbouring
+name-and-email label had always been wrapped in a group, which is why the menu
+worked before that change. Fixed in #33 by wrapping the label with the two items
+it names, which is also the correct accessible structure.
+
+The lesson generalises: **Base UI enforces composition at runtime, not in the
+type system.** A structurally invalid menu compiles, builds, and passes a
+production build, then throws on the first click. Menus and dialogs must be
+opened in a browser before they are called done.
+
+**Signed-in customers were still being offered "Sign in or create account".** The
+header said "Raul", and the hero still showed the signed-out call to action,
+which opened the sign-in drawer. There were **two different notions of signed
+in**: the client-side mock `session` in `app-providers.tsx` used by the showcase
+flows, and a real Auth0 session that only `site-header.tsx` knew about, via an
+`/api/me` lookup it kept to itself. `app/page.tsx` read the mock session alone, so
+a genuine login fell into the signed-out branch.
+
+Fixed in #33 by giving the whole app one answer: `AppProviders` now owns the
+`/api/me` lookup and exposes `signedIn`, `displayName` and `authLoading`; the
+header reads that instead of fetching for itself; and `openSignIn` is a **no-op
+when someone is already signed in**, as the backstop for any entry point that
+forgets to branch. While the lookup is still outstanding the hero reserves its
+height rather than rendering the signed-out state and swapping — that flash was
+itself part of what looked broken.
+
+Signed in, the hero now follows the real MyDEWALT welcome band: a short "Welcome
+back, <first name>" in the brand display face above a brand-labelled button —
+"My DeWalt account", "My Stanley account", built from the brand name rather than
+hardcoded — leading to the profile.
+
+**Verified live on the deployed sites**, signed in with a real Auth0 session, on
+both DeWalt Germany and Stanley France: the account menu opens with all four
+items and no console error, the welcome band and branded button replace the
+sign-in call to action, add-to-cart routes to the profile instead of opening the
+drawer, and signing in on one brand still leaves the other signed out.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only
