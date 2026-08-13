@@ -845,6 +845,117 @@ items and no console error, the welcome band and branded button replace the
 sign-in call to action, add-to-cart routes to the profile instead of opening the
 drawer, and signing in on one brand still leaves the other signed out.
 
+## 12 August standup — Google linking, one account, and no duplicates
+
+The standup surfaced one real bug in the Google flow and a set of account-model
+stories that had to become real behaviour. Everything below is merged to `main`
+and verified live on the deployed storefronts (DeWalt France, DeWalt Germany,
+Stanley France). The single invariant behind all of it: **one human, one
+directory record, one billable MAU.**
+
+**Connecting Google from the profile must link, not sign in.** The old profile
+button reused the signed-out Google sign-in URL. That looked harmless, but when
+the Google address did not already match the SBD account email, Auth0 created or
+loaded a separate Google user and the browser session became that user. The
+profile then appeared to "replace" the primary email with Gmail, which is the
+opposite of the billing story: one human became two directory records.
+
+Fixed in code by separating signed-out Google sign-in from signed-in Google
+linking:
+
+- `GOOGLE_SIGNIN_PATH` remains the signed-out drawer path.
+- `GOOGLE_LINK_START_PATH` starts the signed-in connect flow.
+- `/api/account/identities/google/start` captures the current primary `sub` in a
+  short-lived, signed, httpOnly handoff cookie before leaving for Google.
+- `/api/account/identities/google/complete` reads the post-Google session and
+  handles three outcomes: already the same primary, standalone Google user that
+  can be linked onto the primary, or a Google identity already owned by another
+  account.
+
+Every non-primary outcome restores the original primary session before returning
+to `/profile?google=...`, so the person is never left editing the wrong account.
+The profile row turns the result code into customer copy rather than exposing the
+directory mechanics. Verified live: connecting a Gmail whose address did **not**
+match the account email kept the browser on the primary `sub` and merged Google
+into the one record.
+
+**A Google identity can belong to only one person.** Mark's second question was
+whether the same Gmail could be attached to Raul's SBD account and then also to a
+different account. The completion route refuses that. If Google login resolves to
+an account with other identities, it reports `in-use` and restores the initiating
+account. A sign-in identifier cannot bridge two people "by osmosis".
+
+**An alternate email signs you in with the account's own password.** Venky's
+live test proved the passcode path, but a customer expects the plain thing too:
+type any of your verified addresses plus your account password and get in. The
+tenant's password grant only accepts the account's root database email, so a
+secondary address failed. `getUsersByEmail` did not fix it — it only indexes the
+root email, never a linked identity's address. The working resolution lives in
+`/api/signin/password`: attempt the password grant with the typed address; if it
+fails and the Management API is configured, run an Auth0 v3 search over
+`app_metadata.login_alias_emails` (where every verified secondary and Google
+address is persisted) plus the root email, confirm the typed address really is
+one of that account's aliases, then retry the grant against the account's root
+email. Every failure still returns one generic 401 — no message tells an attacker
+whether an address exists. Verified live: `raul.saavedra+alt2@sbdinc.com` with
+the account password lands as the primary.
+
+**Any verified email can be made the primary, from the UI.** The profile's Email
+addresses section lists every address the account can use, marks one **Primary**
+and the rest "Signs you in too", and offers a **Make primary** control on the
+others. `/api/account/emails/primary` validates that the chosen address is one of
+the account's own verified emails (root, linked `email` identities, or linked
+Google identities), writes `app_metadata.primary_email`, and backfills
+`login_alias_emails` with every non-root address so sign-in keeps working from
+all of them. The post-login Action **"Recognise SBD sites across brands"** now
+also overrides the outgoing `email` claim with `app_metadata.primary_email`, so
+the welcome band and the ID token show the address the customer designated —
+while `sub` never changes. Verified live: clicking Make primary flips the labels,
+and the decoded welcome token shows the designated address on the same `sub`.
+
+**A connected Google email is a real account email, on both surfaces.** Linking
+Google no longer just proves ownership; the Gmail address becomes a first-class
+account email. After a successful link the complete route records the verified
+Google address into `login_alias_emails`, so it appears in the Email addresses
+list, can be made primary, and signs the customer in with the account password —
+the same as any other alias. Disconnecting Google removes that address from the
+alias list again. Verified live: the Gmail shows in Email addresses, disconnect
+removes it, reconnect restores it, and Gmail + account password lands as primary.
+
+**Signing out stays on the storefront.** The SDK's `/auth/logout` bounced the
+customer out to the Auth0 domain, which breaks the demo illusion. Sign-out now
+calls a local `/api/account/logout` route that expires every `__session*` cookie
+— including the chunked `__session__0` / `__session__1` pair — and redirects
+back to the same storefront's home. Verified live: the account menu's Sign out
+clears the session and leaves the customer on the brand site.
+
+**Signing up with an address you already own is refused — without enumerating.**
+The tenant's `dbconnections/signup` only enforces uniqueness inside the `sbd-eu`
+database connection, so signing up with a *secondary* address — a linked
+alternate email, a linked Google email, or a persisted login alias, none of which
+are database users — created a brand-new duplicate record. `/api/signup` now runs
+a pre-signup check, using the same signal the password resolver trusts: an Auth0
+v3 search over `app_metadata.login_alias_emails` plus the root email, requiring a
+returned user to carry an `auth0` identity on the `sbd-eu` connection. If the
+address already belongs to one of this deployment's accounts, signup returns the
+**same** generic `exists_or_invalid` the tenant already returns for an existing
+primary email — no new status, code or message, and the check runs on every
+attempt so timing never distinguishes a known address from an unknown one. It
+fails open: any lookup error falls through to the tenant, so a genuine new signup
+is never blocked. The existing "sign in instead" passcode path is how the
+customer proves ownership and reaches the one account. Verified live:
+`raul.saavedra+alt@sbdinc.com` (a secondary address) is refused with
+`exists_or_invalid` and creates no user, while a brand-new address still passes
+the check and reaches password validation.
+
+**Disconnect cleanup is intentionally best-effort.** Auth0 unlinking recreates
+the removed identity as a standalone user. The route now tries to delete that
+orphan, but only when it has exactly one identity and is not the signed-in user.
+This will quietly skip in the current tenant because the Management grant still
+does not include `delete:users`; granting that scope would make the cleanup live.
+Until then, reconnecting the same standalone Google user still works because the
+link flow can merge it back into the primary account.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only
