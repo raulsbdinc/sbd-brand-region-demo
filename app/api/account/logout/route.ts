@@ -18,16 +18,21 @@ import { type NextRequest, NextResponse } from "next/server"
 
 export const dynamic = "force-dynamic"
 
-// The SDK session cookie, plus the split chunk variants it writes when the
-// session is too large for a single cookie. All are cleared with path "/" and
-// maxAge 0 so none can survive the logout.
-const SESSION_COOKIES = ["__session", "__session.0", "__session.1", "__session.2"]
+// The Auth0 SDK stores the session in "__session" when it's small, but CHUNKS a
+// large session across cookies named "__session__0", "__session__1", ... (the
+// base name + DOUBLE-underscore + index). A hard-coded list can't keep up with
+// that, so instead we read the INCOMING request cookies and expire EVERY cookie
+// whose name is "__session" or starts with "__session" — covering the base
+// cookie, all current chunk variants, and any future ones.
+const SESSION_COOKIE_PREFIX = "__session"
 
 export async function GET(request: NextRequest) {
   // Same-origin redirect to the demo home — keeps the person on OUR site.
   const response = NextResponse.redirect(new URL("/", request.url))
-  for (const name of SESSION_COOKIES) {
-    response.cookies.set(name, "", { path: "/", maxAge: 0 })
+  for (const cookie of request.cookies.getAll()) {
+    if (cookie.name === SESSION_COOKIE_PREFIX || cookie.name.startsWith(SESSION_COOKIE_PREFIX)) {
+      response.cookies.set(cookie.name, "", { path: "/", maxAge: 0 })
+    }
   }
   return response
 }
