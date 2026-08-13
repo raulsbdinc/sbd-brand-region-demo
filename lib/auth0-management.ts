@@ -222,6 +222,26 @@ export function getUsersByEmail(email: string): Promise<Auth0User[]> {
 }
 
 /**
+ * GET /users?search_engine=v3&q=<lucene> — the searchable user index. Unlike
+ * /users-by-email (which matches only a record's ROOT email), this indexes
+ * app_metadata, so it can resolve a login alias persisted there. NOTE: this
+ * index does NOT return linked-identity emails and is EVENTUALLY CONSISTENT, so
+ * only query fields we control (app_metadata) or the root email — never a
+ * linked identity's address. Returns [] on any failure; never throws into
+ * callers (they collapse a miss into the same generic outcome).
+ */
+export async function searchUsers(query: string): Promise<Auth0User[]> {
+  try {
+    return await mgmtFetch<Auth0User[]>(
+      `/users?search_engine=v3&q=${encodeURIComponent(query)}`,
+    )
+  } catch (err) {
+    console.log("[v0] searchUsers failed:", (err as Error).message)
+    return []
+  }
+}
+
+/**
  * PATCH /users/{id} — update profile fields. Only a safe allowlist is accepted
  * by the route; this client doesn't restrict, so callers must sanitize.
  */

@@ -8,6 +8,7 @@ import {
   getUser,
   getUsersByEmail,
   linkIdentity,
+  updateUser,
   ManagementError,
 } from "@/lib/auth0-management"
 import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
@@ -127,6 +128,39 @@ export async function POST(request: Request) {
       provider: secondary.provider,
       user_id: secondary.userId,
     })
+
+    // STEP d — record this alternate on the PRIMARY so password sign-in can
+    // resolve it later. The alternate is now a linked "email" identity whose
+    // address is NOT the primary's root email, and Auth0's users-by-email +
+    // search index do NOT return linked-identity emails — so the ONLY reliably
+    // searchable place to find it is app_metadata, which we control. We append
+    // the lowercased address to a deduped `login_alias_emails` array, keeping
+    // any existing entries. Best-effort: the link (what the user asked for)
+    // already succeeded, so a failure here must NOT fail the request.
+    try {
+      const primary = await getUser(guard.user.sub)
+      const existing = primary.app_metadata?.login_alias_emails
+      const list = Array.isArray(existing)
+        ? existing.filter((e): e is string => typeof e === "string")
+        : []
+      const merged = Array.from(
+        new Set([...list.map((e) => e.toLowerCase()), email]),
+      )
+      if (merged.length !== list.length) {
+        await updateUser(guard.user.sub, {
+          app_metadata: {
+            ...(primary.app_metadata ?? {}),
+            login_alias_emails: merged,
+          },
+        })
+      }
+    } catch (metaErr) {
+      console.log(
+        "[v0] emails/verify login-alias persist skipped:",
+        (metaErr as Error).message,
+      )
+    }
+
     return NextResponse.json({ ok: true, identities })
   } catch (err) {
     // A 400/409 here almost always means the address is attached elsewhere —

@@ -5,7 +5,7 @@ import {
   resolveRegionAuthConfig,
 } from "@/lib/auth0-regions"
 import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
-import { getUsersByEmail, isManagementConfigured } from "@/lib/auth0-management"
+import { searchUsers, isManagementConfigured } from "@/lib/auth0-management"
 
 export const runtime = "nodejs"
 
@@ -87,59 +87,71 @@ async function passwordRealmExchange(params: {
   }
 }
 
+/** Escape a value for safe interpolation into a Lucene phrase query. The typed
+ *  email contains `+ . @` and could contain Lucene metacharacters; we quote it
+ *  as a phrase and backslash-escape backslashes and embedded double quotes so
+ *  it can never break out of the quoted term. */
+function luceneEscapePhrase(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
 /**
  * LOGIN-ALIAS resolution (no new password store, no duplicate users).
  *
  * A verified ALTERNATE email is a linked passwordless `email` identity on the
- * account (added only after mailbox proof in the alternate-email flow), so it
- * carries no password of its own. To let "same person, same password, either
- * email" work, we resolve the typed alternate to the account's ONE primary
- * database login email and let Auth0 verify the single real credential against
- * that. Returns the primary login email to retry with, or `null` if the typed
- * address is not a verified alias of a database-backed account here.
+ * account, so it carries no password of its own AND is NOT its root email —
+ * which is why users-by-email (root-email only) never found it. Instead we
+ * resolve against the alternate we PERSISTED on the primary's app_metadata
+ * (`login_alias_emails`) when the address was linked; app_metadata is the one
+ * reliably searchable place (the search index does not return linked-identity
+ * emails and is eventually consistent, which is fine here — an alternate is
+ * added, then used to sign in later). Returns the account's ONE primary login
+ * email to retry with, or `null` if the typed address is not a verified alias
+ * of a database-backed account here.
  *
- * PRIVACY: any null (unknown address, not database-backed, not verified) is
+ * PRIVACY: any null (unknown address, not database-backed, not a real alias) is
  * indistinguishable to the client — the caller returns the same generic 401.
  */
 async function resolvePrimaryLoginEmail(
   typedEmail: string,
 ): Promise<string | null> {
-  try {
-    const typed = typedEmail.toLowerCase()
-    const matches = await getUsersByEmail(typed)
+  const typed = typedEmail.toLowerCase()
+  const q = luceneEscapePhrase(typed)
 
-    // The account must be backed by THIS deployment's sbd-eu database
-    // connection: an identity with provider "auth0" on PASSWORD_CONNECTION. If
-    // more than one record shares the address (e.g. a stray passwordless-only
-    // record), this picks the database-backed one; if none is, we don't resolve.
-    const dbUser = matches.find((u) =>
-      (u.identities ?? []).some(
-        (id) => id.provider === "auth0" && id.connection === PASSWORD_CONNECTION,
-      ),
-    )
-    if (!dbUser?.email) return null
+  // Find the primary by its PERSISTED alias list, and — belt and suspenders —
+  // by root email too. We query only fields we control (app_metadata) or the
+  // root email; never a linked identity's address (not indexed, per DEMO_STATUS).
+  const query = `app_metadata.login_alias_emails:"${q}" OR email:"${q}"`
+  const matches = await searchUsers(query)
 
-    // The typed address must be VERIFIED on that profile. Accept the root email
-    // when email_verified is true; accept a linked identity's email because the
-    // alternate-email flow only links after mailbox proof (honour an explicit
-    // email_verified === false on the identity if the directory ever sets one).
-    const rootVerified =
-      dbUser.email.toLowerCase() === typed && dbUser.email_verified === true
-    const linkedVerified = (dbUser.identities ?? []).some((id) => {
-      const idEmail = (id.profileData?.email as string | undefined)?.toLowerCase()
-      return idEmail === typed && id.profileData?.email_verified !== false
-    })
-    if (!rootVerified && !linkedVerified) return null
+  // The account must be backed by THIS deployment's sbd-eu database connection:
+  // an identity with provider "auth0" on PASSWORD_CONNECTION. If several records
+  // come back, pick the database-backed one; if none is, don't resolve.
+  const dbUser = matches.find((u) =>
+    (u.identities ?? []).some(
+      (id) => id.provider === "auth0" && id.connection === PASSWORD_CONNECTION,
+    ),
+  )
+  if (!dbUser?.email) return null
 
-    // Retry only if it actually changes the username — if the primary email IS
-    // the typed address, attempt 1 already tried it (so this was a wrong
-    // password, a genuine failure), and a second identical call is pointless.
-    if (dbUser.email.toLowerCase() === typed) return null
-    return dbUser.email
-  } catch (err) {
-    console.log("[v0] password alias resolution failed:", (err as Error).message)
-    return null
-  }
+  // NEVER substitute on a loose search match. Confirm the typed address is
+  // genuinely one of this account's persisted aliases, or its verified root
+  // email, before we retry the password against the primary.
+  const aliasList = Array.isArray(dbUser.app_metadata?.login_alias_emails)
+    ? (dbUser.app_metadata!.login_alias_emails as unknown[]).filter(
+        (e): e is string => typeof e === "string",
+      )
+    : []
+  const isPersistedAlias = aliasList.some((e) => e.toLowerCase() === typed)
+  const isVerifiedRoot =
+    dbUser.email.toLowerCase() === typed && dbUser.email_verified === true
+  if (!isPersistedAlias && !isVerifiedRoot) return null
+
+  // Retry only if it actually changes the username — if the primary email IS
+  // the typed address, attempt 1 already tried it (so this was a wrong
+  // password, a genuine failure) and a second identical call is pointless.
+  if (dbUser.email.toLowerCase() === typed) return null
+  return dbUser.email
 }
 
 export async function POST(request: NextRequest) {
