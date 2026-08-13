@@ -5,6 +5,7 @@ import {
   resolveRegionAuthConfig,
 } from "@/lib/auth0-regions"
 import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
+import { getUsersByEmail, isManagementConfigured } from "@/lib/auth0-management"
 
 export const runtime = "nodejs"
 
@@ -34,6 +35,111 @@ function decodeJwtClaims(idToken: string): Record<string, unknown> {
   const normalized = payload.replace(/-/g, "+").replace(/_/g, "/")
   const json = Buffer.from(normalized, "base64").toString("utf8")
   return JSON.parse(json) as Record<string, unknown>
+}
+
+/** A token response we've confirmed carries the tokens the session needs. */
+type VerifiedTokenResponse = PasswordRealmTokenResponse & { id_token: string }
+
+/**
+ * ONE password-realm exchange against the sbd-eu database connection. Returns
+ * the token set on success, or `null` for ANY failure (wrong password, unknown
+ * user, blocked, network) — the caller decides what a null means, and every
+ * caller-visible failure still collapses to the single generic 401 below. The
+ * password is only ever verified here, by Auth0; we never see or store it.
+ */
+async function passwordRealmExchange(params: {
+  domain: string
+  clientId: string
+  clientSecret: string
+  firstHop: string
+  username: string
+  password: string
+}): Promise<VerifiedTokenResponse | null> {
+  const { domain, clientId, clientSecret, firstHop, username, password } = params
+  try {
+    const res = await fetch(`https://${domain}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        // Forward the caller's first x-forwarded-for hop as auth0-forwarded-for
+        // so Auth0 brute-force protection attributes failures to the real
+        // end-user IP, not the shared Vercel egress IP (which would lock the
+        // whole demo out after 10 attempts). The tenant apps have
+        // trust-token-endpoint-IP-header enabled so this header is honoured.
+        ...(firstHop ? { "auth0-forwarded-for": firstHop } : {}),
+      },
+      body: JSON.stringify({
+        grant_type: "http://auth0.com/oauth/grant-type/password-realm",
+        realm: PASSWORD_CONNECTION,
+        username,
+        password,
+        scope: "openid profile email",
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+    })
+    if (!res.ok) return null
+    const json = (await res.json()) as PasswordRealmTokenResponse
+    if (!json.access_token || !json.id_token) return null
+    return json as VerifiedTokenResponse
+  } catch {
+    return null
+  }
+}
+
+/**
+ * LOGIN-ALIAS resolution (no new password store, no duplicate users).
+ *
+ * A verified ALTERNATE email is a linked passwordless `email` identity on the
+ * account (added only after mailbox proof in the alternate-email flow), so it
+ * carries no password of its own. To let "same person, same password, either
+ * email" work, we resolve the typed alternate to the account's ONE primary
+ * database login email and let Auth0 verify the single real credential against
+ * that. Returns the primary login email to retry with, or `null` if the typed
+ * address is not a verified alias of a database-backed account here.
+ *
+ * PRIVACY: any null (unknown address, not database-backed, not verified) is
+ * indistinguishable to the client — the caller returns the same generic 401.
+ */
+async function resolvePrimaryLoginEmail(
+  typedEmail: string,
+): Promise<string | null> {
+  try {
+    const typed = typedEmail.toLowerCase()
+    const matches = await getUsersByEmail(typed)
+
+    // The account must be backed by THIS deployment's sbd-eu database
+    // connection: an identity with provider "auth0" on PASSWORD_CONNECTION. If
+    // more than one record shares the address (e.g. a stray passwordless-only
+    // record), this picks the database-backed one; if none is, we don't resolve.
+    const dbUser = matches.find((u) =>
+      (u.identities ?? []).some(
+        (id) => id.provider === "auth0" && id.connection === PASSWORD_CONNECTION,
+      ),
+    )
+    if (!dbUser?.email) return null
+
+    // The typed address must be VERIFIED on that profile. Accept the root email
+    // when email_verified is true; accept a linked identity's email because the
+    // alternate-email flow only links after mailbox proof (honour an explicit
+    // email_verified === false on the identity if the directory ever sets one).
+    const rootVerified =
+      dbUser.email.toLowerCase() === typed && dbUser.email_verified === true
+    const linkedVerified = (dbUser.identities ?? []).some((id) => {
+      const idEmail = (id.profileData?.email as string | undefined)?.toLowerCase()
+      return idEmail === typed && id.profileData?.email_verified !== false
+    })
+    if (!rootVerified && !linkedVerified) return null
+
+    // Retry only if it actually changes the username — if the primary email IS
+    // the typed address, attempt 1 already tried it (so this was a wrong
+    // password, a genuine failure), and a second identical call is pointless.
+    if (dbUser.email.toLowerCase() === typed) return null
+    return dbUser.email
+  } catch (err) {
+    console.log("[v0] password alias resolution failed:", (err as Error).message)
+    return null
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -67,47 +173,49 @@ export async function POST(request: NextRequest) {
   // STEP 2 — Exchange credentials at the tenant token endpoint using the
   // password-realm grant. This is server-to-server (the secret never touches
   // the browser), which is why it needs no custom domain and no third-party
-  // cookies.
-  // STEP 3 — Forward the caller's first x-forwarded-for hop as
-  // auth0-forwarded-for so Auth0 brute-force protection attributes failures to
-  // the real end-user IP, not the shared Vercel egress IP (which would lock the
-  // whole demo out after 10 attempts). The tenant apps have
-  // trust-token-endpoint-IP-header enabled so this header is honoured.
+  // cookies. The forwarded-for hop is preserved inside passwordRealmExchange.
   const firstHop = (request.headers.get("x-forwarded-for") ?? "")
     .split(",")[0]
     .trim()
 
-  let tokenResponse: PasswordRealmTokenResponse
-  try {
-    const res = await fetch(`https://${domain}/oauth/token`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(firstHop ? { "auth0-forwarded-for": firstHop } : {}),
-      },
-      body: JSON.stringify({
-        grant_type: "http://auth0.com/oauth/grant-type/password-realm",
-        realm: PASSWORD_CONNECTION,
-        username: email,
+  // ATTEMPT 1 — today's behavior, UNCHANGED: verify the password with the email
+  // exactly as typed. This still succeeds for the account's PRIMARY email at no
+  // extra cost, and — crucially — makes NO Management call on a normal login.
+  let tokenResponse = await passwordRealmExchange({
+    domain,
+    clientId,
+    clientSecret,
+    firstHop,
+    username: email,
+    password,
+  })
+
+  // ATTEMPT 2 — login-alias fallback. Runs ONLY when attempt 1 failed (a typed
+  // alternate email, or simply a wrong password), so a successful primary-email
+  // login never pays for the extra Management lookup. Treat a VERIFIED alternate
+  // email as an alias for the account's one database credential: resolve it to
+  // the primary login email and let Auth0 verify the single real password
+  // against that. No second password store, no duplicate user, no crypto.
+  if (!tokenResponse && isManagementConfigured()) {
+    const primaryEmail = await resolvePrimaryLoginEmail(email)
+    if (primaryEmail) {
+      tokenResponse = await passwordRealmExchange({
+        domain,
+        clientId,
+        clientSecret,
+        firstHop,
+        username: primaryEmail,
         password,
-        scope: "openid profile email",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
-    })
-
-    if (!res.ok) {
-      // STEP 4 — Any tenant rejection (wrong password, unknown user, blocked)
-      // collapses to a single generic 401.
-      return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
+      })
     }
-
-    tokenResponse = (await res.json()) as PasswordRealmTokenResponse
-  } catch {
-    return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
   }
 
-  if (!tokenResponse.access_token || !tokenResponse.id_token) {
+  // STEP 4 — If neither attempt produced a token, collapse EVERY cause (wrong
+  // password, unknown user, unverified/unknown alias, blocked) to one generic
+  // 401. Never reveal whether an address exists or is an alias — no enumeration.
+  // The sign-in guard is intact: a bare email with no sbd-eu database account
+  // can never mint a session, because there is no password for Auth0 to verify.
+  if (!tokenResponse) {
     return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
   }
 
