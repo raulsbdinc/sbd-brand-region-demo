@@ -4,6 +4,12 @@ import {
   resolveRegionAuthConfig,
 } from "@/lib/auth0-regions"
 import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
+import {
+  searchUsers,
+  getUsersByEmail,
+  isManagementConfigured,
+  type Auth0User,
+} from "@/lib/auth0-management"
 
 export const runtime = "nodejs"
 
@@ -27,6 +33,60 @@ type SignupStatus = "created" | "exists_or_invalid" | "weak_password" | "error"
 interface TenantSignupError {
   code?: string
   name?: string
+}
+
+/** Escape a value for use inside a Lucene phrase (same as the password route). */
+function luceneEscapePhrase(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+/**
+ * Does the typed email ALREADY belong to a database-backed (sbd-eu) account?
+ *
+ * The tenant's dbconnections/signup only enforces uniqueness within the sbd-eu
+ * DATABASE connection, so it happily creates a DUPLICATE sbd-eu user when the
+ * address is really a SECONDARY email of an existing account — an alternate
+ * linked "email" identity, a linked Google identity, or a persisted login
+ * alias — none of which are themselves database users. That breaks "one human,
+ * one record, one billable MAU". We detect that case here, BEFORE creating.
+ *
+ * Detection reuses the SAME signal the password alias resolver trusts:
+ *   - a Lucene search on app_metadata.login_alias_emails (where alternates /
+ *     Google emails are persisted as aliases) OR the root email, and
+ *   - getUsersByEmail as a belt-and-suspenders for a plain root email,
+ * then requires a returned user to carry an identity with provider "auth0" on
+ * PASSWORD_CONNECTION — i.e. it is genuinely one of THIS deployment's sbd-eu
+ * accounts, not some unrelated record.
+ *
+ * PRIVACY: the caller maps a true result to the SAME generic "exists_or_invalid"
+ * the tenant already returns for an existing primary email — no new status,
+ * code, or message. It runs on EVERY signup so timing never distinguishes a
+ * known from an unknown address, and FAILS OPEN: any error returns false so a
+ * legitimate brand-new signup is never blocked.
+ */
+async function emailBelongsToExistingDbAccount(email: string): Promise<boolean> {
+  try {
+    const typed = email.toLowerCase()
+    const q = luceneEscapePhrase(typed)
+
+    // Query only fields we control (app_metadata alias list) or the root email;
+    // never a linked identity's address (not indexed, per DEMO_STATUS).
+    const query = `app_metadata.login_alias_emails:"${q}" OR email:"${q}"`
+    const [searchMatches, byEmailMatches] = await Promise.all([
+      searchUsers(query),
+      getUsersByEmail(typed).catch(() => [] as Auth0User[]),
+    ])
+
+    const candidates = [...searchMatches, ...byEmailMatches]
+    return candidates.some((u) =>
+      (u.identities ?? []).some(
+        (id) => id.provider === "auth0" && id.connection === PASSWORD_CONNECTION,
+      ),
+    )
+  } catch {
+    // FAIL OPEN — never block a legitimate brand-new signup over a lookup blip.
+    return false
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -64,6 +124,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json<{ status: SignupStatus }>(
       { status: "error" },
       { status: 400 },
+    )
+  }
+
+  // STEP 1b — Existing-account guard (the actual fix). BEFORE creating, and on
+  // EVERY attempt when the Management API is configured, check whether the typed
+  // email already belongs to a database-backed account — including SECONDARY
+  // addresses (alternate/linked "email" or Google identities, or a persisted
+  // login alias) that dbconnections/signup would otherwise let slip through as a
+  // brand-new duplicate. If so, return the SAME generic "exists_or_invalid" the
+  // tenant returns for an existing primary email — no new status/code/message,
+  // no enumeration — and DO NOT call signup, so no duplicate is ever created.
+  // The check fails open (see helper), so a lookup error never blocks a
+  // legitimate new signup; it just falls through to the tenant, which still
+  // rejects an existing PRIMARY db email and is mapped to exists_or_invalid.
+  if (isManagementConfigured() && (await emailBelongsToExistingDbAccount(email))) {
+    return NextResponse.json<{ status: SignupStatus }>(
+      { status: "exists_or_invalid" },
+      { status: 409 },
     )
   }
 
