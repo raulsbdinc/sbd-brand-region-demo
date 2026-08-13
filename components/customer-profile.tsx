@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import {
   ArrowLeft,
@@ -49,7 +50,6 @@ import { cn } from "@/lib/utils"
 import { OtpInput } from "@/components/flows/otp-input"
 import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { GoogleMark } from "@/components/google-mark"
-import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import type { OtherSite } from "@/lib/claims"
 import {
   ADDRESS_LOCALITY_ORDER,
@@ -2216,6 +2216,16 @@ function GoogleSignIn({ live }: { live: boolean }) {
   const [busy, setBusy] = useState(false)
   const [rowError, setRowError] = useState<string | null>(null)
 
+  // Result of the explicit link round trip: the complete route redirects back
+  // to /profile?google=linked | in_use | error. Surface it in this row in plain
+  // language — customers read this page — and, on success, revalidate so the
+  // row flips to "Connected as …".
+  const searchParams = useSearchParams()
+  const linkResult = searchParams.get("google")
+  useEffect(() => {
+    if (linkResult === "linked") void mutate()
+  }, [linkResult, mutate])
+
   async function disconnect() {
     if (!google || isOnlyWayIn) return
     setBusy(true)
@@ -2270,7 +2280,9 @@ function GoogleSignIn({ live }: { live: boolean }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => window.location.assign(GOOGLE_SIGNIN_PATH)}
+            onClick={() =>
+              window.location.assign("/api/account/identities/google/start")
+            }
           >
             <GoogleMark className="size-4" />
             Connect Google
@@ -2285,6 +2297,32 @@ function GoogleSignIn({ live }: { live: boolean }) {
         {rowError ? (
           <div className="mt-2">
             <Note tone="error">{rowError}</Note>
+          </div>
+        ) : null}
+        {linkResult === "linked" ? (
+          <div className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+            <Check className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              Google connected. You can now sign in with Google, and it stays
+              part of this one profile.
+            </span>
+          </div>
+        ) : null}
+        {linkResult === "in_use" ? (
+          <div className="mt-2">
+            <Note tone="error">
+              That Google account is already used to sign in to another Stanley
+              Black &amp; Decker account, so it can&apos;t also sign in to this
+              one. Sign in to that account to manage it, or use a different
+              Google account.
+            </Note>
+          </div>
+        ) : null}
+        {linkResult === "error" ? (
+          <div className="mt-2">
+            <Note tone="error">
+              We couldn&apos;t connect Google just now. Please try again.
+            </Note>
           </div>
         ) : null}
       </div>
