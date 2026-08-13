@@ -481,7 +481,7 @@ function DetailsSection({
 interface Identity {
   provider: string
   user_id: string
-  profileData?: { email?: string; name?: string }
+  profileData?: { email?: string; name?: string; email_verified?: boolean }
 }
 
 interface AlternateEmail {
@@ -516,6 +516,29 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
     .filter((a) => Boolean(a.email))
     .filter((a) => a.email.toLowerCase() !== (accountEmail ?? "").toLowerCase())
 
+  // A connected Google account's VERIFIED email is a first-class account email:
+  // it signs in with the password (login alias) and can be made primary, so it
+  // appears here as a "Signs you in too" row — AND still shows in the separate
+  // "Google" connection row below. Dedupe against the root email and the
+  // "email"-identity rows so it never appears twice in THIS list.
+  const seenEmails = new Set<string>([
+    ...(accountEmail ? [accountEmail.toLowerCase()] : []),
+    ...alternates.map((a) => a.email.toLowerCase()),
+  ])
+  const googleEmails: AlternateEmail[] = (data?.user?.identities ?? [])
+    .filter((id) => id.provider === "google-oauth2")
+    .filter((id) => id.profileData?.email_verified !== false)
+    .map((id) => ({
+      email: (id.profileData?.email as string | undefined)?.toLowerCase() || "",
+      user_id: id.user_id,
+    }))
+    .filter((g) => Boolean(g.email))
+    .filter((g) => {
+      if (seenEmails.has(g.email)) return false
+      seenEmails.add(g.email)
+      return true
+    })
+
   // The DISPLAY primary is the designation in app_metadata.primary_email, or —
   // when unset — the account's root email. It is purely a label here: the
   // password and the database identity's email are unchanged. Every OTHER
@@ -529,6 +552,7 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
   const knownEmails = [
     ...(accountEmail ? [accountEmail.toLowerCase()] : []),
     ...alternates.map((a) => a.email.toLowerCase()),
+    ...googleEmails.map((g) => g.email.toLowerCase()),
   ]
 
   return (
@@ -604,6 +628,38 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
                   </>
                 )}
                 <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
+              </div>
+            </li>
+          ))}
+          {googleEmails.map((g) => (
+            <li
+              key={g.user_id}
+              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
+            >
+              <span
+                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(g.email) ? "font-medium" : ""}`}
+              >
+                {g.email}
+              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                {isPrimary(g.email) ? (
+                  <Badge tone="brand">
+                    <Star className="size-3" />
+                    Primary
+                  </Badge>
+                ) : (
+                  <>
+                    <Badge>Signs you in too</Badge>
+                    <MakePrimaryButton
+                      email={g.email}
+                      onDone={() => {
+                        setPrimaryError(null)
+                        mutate()
+                      }}
+                      onError={(m) => setPrimaryError(m || null)}
+                    />
+                  </>
+                )}
               </div>
             </li>
           ))}

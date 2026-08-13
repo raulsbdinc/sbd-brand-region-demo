@@ -51,12 +51,14 @@ export async function POST(request: Request) {
     // The account's OWN verified emails. Match the existing alias code's notion
     // of "verified": a root email with email_verified === true, plus every
     // linked "email" identity whose profileData.email_verified !== false (the
-    // add-email flow only links after mailbox proof, so linked === verified).
+    // add-email flow only links after mailbox proof, so linked === verified),
+    // plus every linked "google-oauth2" identity's verified email — a connected
+    // Google address is a first-class account email that can be made primary.
     const rootEmail = user.email?.toLowerCase() ?? null
     const rootVerified = Boolean(rootEmail) && user.email_verified === true
 
     const linkedVerified = (user.identities ?? [])
-      .filter((id) => id.provider === "email")
+      .filter((id) => id.provider === "email" || id.provider === "google-oauth2")
       .map((id) => ({
         email: (id.profileData?.email as string | undefined)?.toLowerCase(),
         verified: id.profileData?.email_verified !== false,

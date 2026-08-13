@@ -4,7 +4,12 @@ import {
   managementErrorResponse,
   ensureNotLastLoginMethod,
 } from "@/lib/account-guard"
-import { getUser, unlinkIdentity, deleteUser } from "@/lib/auth0-management"
+import {
+  getUser,
+  unlinkIdentity,
+  deleteUser,
+  updateUser,
+} from "@/lib/auth0-management"
 
 // /api/account/identities
 //   GET    → the connected accounts (identities) linked to the signed-in user.
@@ -58,6 +63,22 @@ export async function DELETE(request: Request) {
     const lockout = await ensureNotLastLoginMethod(guard.user.sub)
     if (lockout) return lockout
 
+    // Capture the address of the identity being disconnected BEFORE the unlink
+    // removes it from the primary's identity list, so we can drop it from the
+    // password alias list afterward. Applies to both "email" and
+    // "google-oauth2" identities. Best-effort read — a miss just skips cleanup.
+    let disconnectedEmail: string | null = null
+    try {
+      const before = await getUser(guard.user.sub)
+      const match = (before.identities ?? []).find(
+        (id) => id.provider === provider && id.user_id === secondaryId,
+      )
+      disconnectedEmail =
+        (match?.profileData?.email as string | undefined)?.toLowerCase() ?? null
+    } catch {
+      disconnectedEmail = null
+    }
+
     const identities = await unlinkIdentity(
       guard.user.sub,
       provider,
@@ -82,6 +103,38 @@ export async function DELETE(request: Request) {
         console.log(
           "[v0] identity unlink orphan cleanup skipped:",
           (cleanupErr as Error).message,
+        )
+      }
+    }
+
+    // ALIAS CLEANUP. A disconnected account email must stop working as a
+    // password alias. Drop it from app_metadata.login_alias_emails. Best-effort
+    // and after the successful unlink — the disconnect already succeeded, so a
+    // failure here still reports the disconnect as done. Only app_metadata
+    // changes; no user create/delete, no password/sub change.
+    if (disconnectedEmail) {
+      try {
+        const primary = await getUser(guard.user.sub)
+        const existing = Array.isArray(primary.app_metadata?.login_alias_emails)
+          ? (primary.app_metadata!.login_alias_emails as unknown[]).filter(
+              (e): e is string => typeof e === "string",
+            )
+          : []
+        const filtered = existing.filter(
+          (e) => e.toLowerCase() !== disconnectedEmail,
+        )
+        if (filtered.length !== existing.length) {
+          await updateUser(guard.user.sub, {
+            app_metadata: {
+              ...(primary.app_metadata ?? {}),
+              login_alias_emails: filtered,
+            },
+          })
+        }
+      } catch (aliasErr) {
+        console.log(
+          "[v0] identity unlink alias cleanup skipped:",
+          (aliasErr as Error).message,
         )
       }
     }

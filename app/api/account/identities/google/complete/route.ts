@@ -4,8 +4,10 @@ import { auth0, isAuthConfigured } from "@/lib/auth0"
 import {
   getUser,
   linkIdentity,
+  updateUser,
   isManagementConfigured,
   ManagementError,
+  type Auth0User,
 } from "@/lib/auth0-management"
 import {
   resolveRegionAuthConfig,
@@ -43,6 +45,50 @@ const SESSION_TTL_SECONDS = 60 * 60
 const SESSION_COOKIE_NAME = "__session"
 
 type Result = "linked" | "in_use" | "error"
+
+/**
+ * Make the just-linked Google account's VERIFIED email a first-class login
+ * alias on the primary, so it signs in with the one account password exactly
+ * like a linked "email" identity (PR #37). `googleUser` is the standalone
+ * Google record read BEFORE linking, so its email + email_verified are the
+ * Google account's own. Best-effort: the link already succeeded and is what the
+ * customer asked for, so a metadata-write failure must NOT change the outcome.
+ * Only app_metadata.login_alias_emails changes — no user create/delete, no
+ * password or sub change.
+ */
+async function recordGoogleAlias(
+  primarySub: string,
+  googleUser: Auth0User,
+): Promise<void> {
+  try {
+    const googleEmail =
+      googleUser.email?.toLowerCase() ??
+      (googleUser.identities?.[0]?.profileData?.email as string | undefined)?.toLowerCase()
+    const verified =
+      googleUser.email_verified === true ||
+      googleUser.identities?.[0]?.profileData?.email_verified === true
+    if (!googleEmail || !verified) return
+
+    const primary = await getUser(primarySub)
+    const existing = Array.isArray(primary.app_metadata?.login_alias_emails)
+      ? (primary.app_metadata!.login_alias_emails as unknown[]).filter(
+          (e): e is string => typeof e === "string",
+        )
+      : []
+    const merged = Array.from(
+      new Set([...existing.map((e) => e.toLowerCase()), googleEmail]),
+    )
+    if (merged.length === existing.length) return // already present
+    await updateUser(primarySub, {
+      app_metadata: {
+        ...(primary.app_metadata ?? {}),
+        login_alias_emails: merged,
+      },
+    })
+  } catch (err) {
+    console.log("[v0] google alias persist skipped:", (err as Error).message)
+  }
+}
 
 export async function GET(request: NextRequest) {
   const cookieHeader = request.headers.get("cookie")
@@ -157,6 +203,9 @@ export async function GET(request: NextRequest) {
         provider: "google-oauth2",
         user_id: only.user_id,
       })
+      // Promote the Google email to a first-class password alias on the primary
+      // (best-effort; never changes the reported link outcome).
+      await recordGoogleAlias(primarySub, currentUser)
       return finish("linked", await restorePrimary(primarySub))
     } catch (err) {
       // A 400/409 almost always means it's attached elsewhere — same refusal
