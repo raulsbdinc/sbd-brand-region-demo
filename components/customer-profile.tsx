@@ -494,12 +494,17 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
   const { data, error, mutate } = useSWR<{
     configured: boolean
-    user: { email?: string; identities?: Identity[] }
+    user: {
+      email?: string
+      identities?: Identity[]
+      app_metadata?: { primary_email?: string }
+    }
   }>(live ? "/api/account/profile" : null, fetcher)
 
   if (error) warnUnavailable("Email addresses", (error as { status?: number }).status)
 
   const [adding, setAdding] = useState(false)
+  const [primaryError, setPrimaryError] = useState<string | null>(null)
 
   const accountEmail = data?.user?.email ?? primaryEmail
   const alternates: AlternateEmail[] = (data?.user?.identities ?? [])
@@ -510,6 +515,14 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
     }))
     .filter((a) => Boolean(a.email))
     .filter((a) => a.email.toLowerCase() !== (accountEmail ?? "").toLowerCase())
+
+  // The DISPLAY primary is the designation in app_metadata.primary_email, or —
+  // when unset — the account's root email. It is purely a label here: the
+  // password and the database identity's email are unchanged. Every OTHER
+  // verified email offers "Make primary" and keeps its "Signs you in too" line.
+  const designatedPrimary = data?.user?.app_metadata?.primary_email?.toLowerCase()
+  const effectivePrimary = designatedPrimary ?? (accountEmail ?? "").toLowerCase()
+  const isPrimary = (addr: string) => addr.toLowerCase() === effectivePrimary
 
   // Addresses already on the account — used for an instant client-side check so
   // the person gets immediate feedback before we email anything.
@@ -530,11 +543,31 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
         <ul className="space-y-2">
           {accountEmail ? (
             <li className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3">
-              <span className="min-w-0 truncate text-sm font-medium text-foreground">{accountEmail}</span>
-              <Badge tone="brand">
-                <Star className="size-3" />
-                Primary
-              </Badge>
+              <span
+                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(accountEmail) ? "font-medium" : ""}`}
+              >
+                {accountEmail}
+              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                {isPrimary(accountEmail) ? (
+                  <Badge tone="brand">
+                    <Star className="size-3" />
+                    Primary
+                  </Badge>
+                ) : (
+                  <>
+                    <Badge>Signs you in too</Badge>
+                    <MakePrimaryButton
+                      email={accountEmail}
+                      onDone={() => {
+                        setPrimaryError(null)
+                        mutate()
+                      }}
+                      onError={(m) => setPrimaryError(m || null)}
+                    />
+                  </>
+                )}
+              </div>
             </li>
           ) : (
             <li>
@@ -546,15 +579,42 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
               key={a.user_id}
               className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
             >
-              <span className="min-w-0 truncate text-sm text-foreground">{a.email}</span>
+              <span
+                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(a.email) ? "font-medium" : ""}`}
+              >
+                {a.email}
+              </span>
               <div className="flex shrink-0 items-center gap-2">
-                <Badge>Signs you in too</Badge>
+                {isPrimary(a.email) ? (
+                  <Badge tone="brand">
+                    <Star className="size-3" />
+                    Primary
+                  </Badge>
+                ) : (
+                  <>
+                    <Badge>Signs you in too</Badge>
+                    <MakePrimaryButton
+                      email={a.email}
+                      onDone={() => {
+                        setPrimaryError(null)
+                        mutate()
+                      }}
+                      onError={(m) => setPrimaryError(m || null)}
+                    />
+                  </>
+                )}
                 <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
               </div>
             </li>
           ))}
         </ul>
       )}
+
+      {primaryError ? (
+        <div className="mt-2">
+          <Note tone="error">{primaryError}</Note>
+        </div>
+      ) : null}
 
       {live && !error ? (
         adding ? (
@@ -781,6 +841,62 @@ function AddEmailFlow({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * "Make primary" — a subtle text button on any non-primary verified email row.
+ * POSTs the chosen address to /api/account/emails/primary; on success it
+ * revalidates the profile so the "Primary" / "Signs you in too" labels update
+ * in place. On failure it shows a brief inline Note under the row. This changes
+ * only the displayed designation — the password and database identity email are
+ * untouched (one account, one MAU).
+ */
+function MakePrimaryButton({
+  email,
+  onDone,
+  onError,
+}: {
+  email: string
+  onDone: () => void
+  onError: (message: string) => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  async function makePrimary() {
+    setBusy(true)
+    onError("")
+    try {
+      const res = await fetch("/api/account/emails/primary", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) {
+        onError(json.error ?? "We couldn't update this right now. Please try again.")
+        setBusy(false)
+        return
+      }
+      setBusy(false)
+      onDone()
+    } catch {
+      onError("Something went wrong. Please try again.")
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-auto px-1.5 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+      onClick={makePrimary}
+      disabled={busy}
+    >
+      {busy ? <Loader2 className="size-3 animate-spin" /> : null}
+      Make primary
+    </Button>
   )
 }
 
