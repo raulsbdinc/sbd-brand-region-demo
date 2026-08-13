@@ -179,7 +179,7 @@ export function SiteHeader() {
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 {/* Same canonical logout as everywhere else (see lib/logout.ts):
-                    it routes to the SDK-mounted /auth/logout for real sessions. */}
+                    it routes to the local /api/account/logout, staying on our site. */}
                 <DropdownMenuItem
                   onClick={() => logout()}
                   className="text-destructive focus:text-destructive"

@@ -6,29 +6,35 @@
 // — calls that method instead of rolling its own. As mock methods are promoted
 // to real Auth0, no logout code has to change.
 //
-// When Auth0 is configured, logout() navigates here. The Auth0 nextjs-auth0 v4
-// SDK mounts a GET /auth/logout route via proxy.ts that:
-//   1. clears the encrypted, HTTP-only session cookie, then
-//   2. redirects to Auth0's /v2/logout endpoint to end the IdP session, then
-//   3. returns the user to `returnTo` (must be an Allowed Logout URL).
-// This is the logout flow described in the Auth0 Next.js SDK docs.
+// LOCAL logout (no federated Auth0 logout). When Auth0 is configured, logout()
+// navigates to the app's own GET /api/account/logout route, which clears the
+// __session cookie (and its split chunk variants) and returns the person to the
+// demo home on OUR origin. It intentionally does NOT hit Auth0's hosted
+// /v2/logout endpoint, so the customer never leaves the demo site for the
+// Auth0-branded "Are you sure you want to log out" page on auth0app.com.
+//
+// This is correct for the demo because sign-in is EMBEDDED: password and
+// passcode mint the app's own __session cookie (there is no browser Auth0 SSO
+// session to end), Google sign-in already uses prompt=login (so a persisted IdP
+// session never causes a silent re-login), and the per-domain __session
+// boundary the demo relies on is unaffected. The SDK's /auth/logout mount in
+// proxy.ts is left in place but is no longer used by the UI.
 
-export const AUTH0_LOGOUT_PATH = "/auth/logout"
+export const LOCAL_LOGOUT_PATH = "/api/account/logout"
 
 /**
- * Build the URL for the SDK-mounted Auth0 logout route.
+ * Build the URL for the local logout route.
  *
- * By default no `returnTo` is sent: the SDK then defaults the post-logout
- * redirect to the app's base origin, which is what's registered as an Allowed
- * Logout URL on the Auth0 application (a relative path like "/" is NOT a valid
- * absolute logout URL and Auth0 would reject it). Only pass `returnTo` when you
- * have an absolute, registered URL to send the user to.
+ * The route always redirects to the app's home on the same origin, so no
+ * `returnTo` is needed in the common case. The optional `returnTo` is retained
+ * for signature compatibility with existing callers; when passed it is appended
+ * as a query param (the route currently ignores it and always returns home).
  *
- * @param returnTo Absolute, registered Allowed Logout URL to return to. Omit to
- *                 use the app origin (the common case).
+ * @param returnTo Optional same-origin path to return to. Omit for the home
+ *                 page (the common case).
  */
 export function buildLogoutUrl(returnTo?: string): string {
-  if (!returnTo) return AUTH0_LOGOUT_PATH
+  if (!returnTo) return LOCAL_LOGOUT_PATH
   const params = new URLSearchParams({ returnTo })
-  return `${AUTH0_LOGOUT_PATH}?${params.toString()}`
+  return `${LOCAL_LOGOUT_PATH}?${params.toString()}`
 }

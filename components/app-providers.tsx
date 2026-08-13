@@ -77,9 +77,11 @@ interface AppState {
   /**
    * Canonical sign-out — the single source of truth (see lib/logout.ts). It
    * always clears the client-side mock session, then, when Auth0 is
-   * configured, hands off to the real SDK-mounted /auth/logout route so a real
-   * session is fully ended; otherwise it just returns to the storefront home.
-   * Every sign-out affordance in the app calls this — including the mock flows.
+   * configured, navigates to the app's own LOCAL /api/account/logout route,
+   * which clears the __session cookie and returns to the demo home on OUR
+   * origin (no federated Auth0 logout). Otherwise it just returns to the
+   * storefront home. Every sign-out affordance calls this — including the mock
+   * flows.
    */
   logout: () => void
   /**
@@ -139,9 +141,10 @@ export function AppProviders({
     setActiveFlow(null)
 
     if (authConfigured) {
-      // Real Auth0 logout: full navigation (not client routing) so it hits the
-      // SDK-mounted /auth/logout route, which clears the server session cookie
-      // and ends the IdP session before returning to the app origin.
+      // Local logout: full navigation (not client routing) so it hits the
+      // app's own /api/account/logout route, which clears the __session cookie
+      // and redirects to the demo home on OUR origin — no federated Auth0
+      // logout, so the customer stays on the demo site.
       window.location.href = buildLogoutUrl()
       return
     }
