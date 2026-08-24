@@ -89,6 +89,28 @@ that look like the real Polaris storefronts, where:
 - Login can be done by **password or by a one-time passcode**, and neither ever
   leaves our own branded panel.
 
+### Four identity models for stakeholder decision (24 August)
+
+The stakeholder decision surface is available at `/identity-models` and the
+durable business/technical guide is in Confluence under the 19 August standup:
+**CIAM/Auth0: Four Identity Models for Stakeholder Decision**.
+
+1. **Baseline shared account** is live: one `sbd-eu` identity and one password
+   across all three sites.
+2. **Multiple linked identities with one shared password** is live: verified
+   alternate emails and Google are ways into the same primary account, not
+   separate customer profiles.
+3. **Per-email passwords** is an alternative topology, not an account setting.
+   Each independently passworded email needs its own database identity/connection
+   and explicit account linking after both credentials are proven.
+4. **Per-brand passwords** is also an alternative topology. Each brand needs its
+   own database connection and a connection-aware lifecycle for linking, signup,
+   recovery, reset, Google, duplicate prevention, and reporting.
+
+Models 3 and 4 must use temporary, isolated demo connections and seeded users.
+Do not repurpose or change `sbd-eu` to demonstrate them: it is the working
+shared-account baseline and changing it would invalidate Models 1 and 2.
+
 ### Requirement change, 3 August
 
 The original ask was *different* passwords per brand, which is why the tenant

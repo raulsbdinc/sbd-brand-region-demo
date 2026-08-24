@@ -16,6 +16,7 @@ export const POC_NAV_GROUPS: PocNavGroup[] = [
   {
     label: "Sign-in methods",
     links: [
+      { href: "/identity-models", label: "Identity model decision" },
       { href: "/register", label: "Registration journeys" },
       { href: "/journeys", label: "Compare methods" },
       { href: "/pathways", label: "Choose a method" },

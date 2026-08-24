@@ -52,6 +52,12 @@ export function SiteHeader() {
               {item}
             </span>
           ))}
+          <Link
+            href="/identity-models"
+            className="rounded-sm outline-none transition-colors hover:text-[var(--brand-ink-foreground)] focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+          >
+            Identity models
+          </Link>
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
