@@ -8,6 +8,75 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## Connection-aware credentials: env contract + Auth0 matrix (25 August)
+
+This tranche makes the per-email (case 3) and per-brand (case 4) database
+credentials **routable, visible and independently resettable** inside the SAME
+three storefront deployments — DeWalt France, DeWalt Germany, Stanley France.
+It does **not** create deployments or Auth0 applications, and it does **not**
+implement cross-storefront case-4 linking yet. It only routes credentials that
+are already seeded/linked in the tenant.
+
+> **Auth0 is NOT configured for cases 3 and 4 yet.** The app is now driven
+> entirely by the environment contract below; until these connections exist in
+> the tenant and the vars are set, every email continues to resolve to the
+> shared `sbd-eu` connection (cases 1 & 2), unchanged. Nothing here asserts the
+> tenant work is done.
+
+### How resolution works
+
+A submitted email + the deployment's `SITE_BRAND` resolve to **exactly one**
+allow-listed connection **key** server-side (`lib/credential-model.ts` +
+`lib/credential-resolver.ts`). Raw connection **names**/**ids** never cross to
+the browser. Resolution fails **closed**: no match or an ambiguous match falls
+back to the shared connection (or the existing neutral error), so the endpoints
+never become an existence/connection oracle.
+
+- **shared** → root users and verified login aliases (cases 1 & 2), all sites.
+- **per-email** → a case-3 identity, on **all three** storefronts.
+- **dewalt** → a case-4 identity, **only** on the two DeWalt storefronts.
+- **stanley** → a case-4 identity, **only** on the Stanley storefront.
+
+A non-shared binding only routes when it is allow-listed, its connection is
+configured, it is permitted on `SITE_BRAND`, **and** it is backed by a real
+linked Auth0 identity on that connection.
+
+### Environment contract
+
+Per deployment (existing, unchanged): `SITE_BRAND`, `AUTH0_DOMAIN`,
+`AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, and the Management grant.
+
+Connection **names** (the password-realm `realm`), server-side:
+
+| Key | Env var(s), in precedence order | Fallback |
+| --- | --- | --- |
+| shared | `AUTH0_SHARED_CONNECTION` → `AUTH0_CONNECTION` → `NEXT_PUBLIC_AUTH0_CONNECTION` | `sbd-eu` |
+| per-email | `AUTH0_PER_EMAIL_CONNECTION` | none |
+| dewalt | `AUTH0_DEWALT_CONNECTION` | none |
+| stanley | `AUTH0_STANLEY_CONNECTION` | none |
+
+Connection **ids** (Management-API password-change / link calls), server-side,
+**no fallback**: `AUTH0_SHARED_CONNECTION_ID`, `AUTH0_PER_EMAIL_CONNECTION_ID`,
+`AUTH0_DEWALT_CONNECTION_ID`, `AUTH0_STANLEY_CONNECTION_ID`.
+
+`NEXT_PUBLIC_AUTH0_CONNECTION` is retained **only** for backward compatibility
+with the shared connection; no new `NEXT_PUBLIC_*` connection var is introduced,
+because connection identifiers must not reach the browser.
+
+### Auth0 application / connection matrix (to be configured)
+
+| Storefront (`SITE_BRAND`) | Application | Connections it must enable |
+| --- | --- | --- |
+| DeWalt France (`dewalt`) | DeWalt FR app | `shared`, `per-email`, `dewalt` |
+| DeWalt Germany (`dewalt`) | DeWalt DE app | `shared`, `per-email`, `dewalt` |
+| Stanley France (`stanley`) | Stanley FR app | `shared`, `per-email`, `stanley` |
+
+Each per-email/per-brand credential is recorded as a **non-secret**
+`credential_bindings` entry in the primary account's `app_metadata`
+(`{ id, email, connectionKey, auth0UserId, useCase, brand? }`) — never passwords
+or tokens. Seeding those bindings + linking the identities is the remaining
+tenant-side work; the app already reads, routes, surfaces and resets them.
+
 ## Customer profile: identity, MFA and account model (5 August)
 
 The four-part customer-profile work is complete. The durable, off-codebase facts

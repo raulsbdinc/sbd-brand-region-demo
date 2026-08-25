@@ -1,5 +1,5 @@
-import type { ComponentType, SVGProps } from "react"
 import { AU, CA, DE, FR, GB, US } from "country-flag-icons/react/3x2"
+import type { FlagComponent } from "country-flag-icons/react/3x2"
 import type { CountryId } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 // US deployment picks up its flag automatically. Note the id→ISO mapping: our
 // "uk" uses the ISO 3166-1 alpha-2 code GB. Only the flags actually referenced
 // are imported by name, keeping the bundle tree-shaken to these six.
-const FLAGS: Record<CountryId, ComponentType<SVGProps<SVGSVGElement>>> = {
+const FLAGS: Record<CountryId, FlagComponent> = {
   us: US,
   uk: GB,
   ca: CA,

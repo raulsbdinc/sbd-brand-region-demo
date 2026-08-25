@@ -293,6 +293,13 @@ interface LoginMethodView {
   provider?: string
   userId?: string
   methodId?: string
+  // Password-credential enrichment (case 3 per-email / case 4 per-brand).
+  connectionKey?: "shared" | "per-email" | "dewalt" | "stanley"
+  scope?: string
+  brand?: "dewalt" | "craftsman" | "stanley"
+  email?: string
+  resetBindingId?: string
+  canReset?: boolean
 }
 
 /** Demo seed: a primary password plus two removable extras to "forget." */
@@ -1550,21 +1557,34 @@ function SecuritySection({
   live: boolean
   connectionLabel: string
 }) {
-  // Password reset
-  const [pwBusy, setPwBusy] = useState(false)
+  // Password reset. `pwBusyId` tracks WHICH credential is resetting:
+  //   "primary" — the top-level shared credential (no binding id, back-compat)
+  //   <bindingId> — an individual per-email (case 3) or per-brand (case 4) row
+  const [pwBusyId, setPwBusyId] = useState<string | null>(null)
   const [pwResult, setPwResult] = useState<string | null>(null)
   const [pwError, setPwError] = useState<string | null>(null)
 
-  async function resetPassword() {
+  async function resetPassword(bindingId?: string) {
     setPwError(null)
     setPwResult(null)
+    const busyKey = bindingId ?? "primary"
     if (!live) {
       setPwResult("In production this sends an Auth0 password-reset email. This demo doesn't send mail.")
       return
     }
-    setPwBusy(true)
+    setPwBusyId(busyKey)
     try {
-      const res = await fetch("/api/account/password-reset", { method: "POST" })
+      const res = await fetch("/api/account/password-reset", {
+        method: "POST",
+        // A binding id targets ONE credential; no body resets the primary
+        // shared credential exactly as before.
+        ...(bindingId
+          ? {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ bindingId }),
+            }
+          : {}),
+      })
       const json = await res.json()
       if (!res.ok) setPwError(json.error ?? "Could not create reset ticket.")
       else setPwResult(json.ticket ? "A one-time password-reset link was generated. Open it to set a new password." : "Password reset initiated.")
@@ -1572,7 +1592,7 @@ function SecuritySection({
     } catch {
       setPwError("Network error. Please try again.")
     } finally {
-      setPwBusy(false)
+      setPwBusyId(null)
     }
   }
 
@@ -1672,8 +1692,13 @@ function SecuritySection({
               </p>
             </div>
           </div>
-          <Button variant="outline" size="sm" disabled={pwBusy} onClick={resetPassword}>
-            {pwBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={pwBusyId !== null}
+            onClick={() => resetPassword()}
+          >
+            {pwBusyId === "primary" ? <Loader2 className="size-4 animate-spin" /> : null}
             Reset password
           </Button>
         </div>
@@ -1816,6 +1841,15 @@ function SecuritySection({
             <ul className="mt-3 space-y-2">
               {methods.map((m) => {
                 const forgettable = m.removable && total > 1
+                // An INDIVIDUAL reset applies to a non-shared (case-3 per-email
+                // or case-4 per-brand) password credential backed by a binding.
+                // The shared credential keeps the single top-level reset above.
+                const individualReset =
+                  m.kind === "password" &&
+                  m.canReset === true &&
+                  Boolean(m.resetBindingId) &&
+                  m.connectionKey !== undefined &&
+                  m.connectionKey !== "shared"
                 return (
                   <li
                     key={m.key}
@@ -1823,15 +1857,40 @@ function SecuritySection({
                   >
                     <MethodIcon kind={m.kind} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm text-foreground">
-                        {m.label}
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-sm text-foreground">
+                          {m.label}
+                        </span>
+                        {m.brand ? (
+                          <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {m.brand === "dewalt" ? "DeWalt" : m.brand === "stanley" ? "Stanley" : m.brand}
+                          </span>
+                        ) : null}
                       </span>
                       {m.detail ? (
                         <span className="block truncate text-xs text-muted-foreground">
                           {m.detail}
                         </span>
                       ) : null}
+                      {m.scope ? (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {m.scope}
+                        </span>
+                      ) : null}
                     </span>
+                    {individualReset ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={pwBusyId !== null}
+                        onClick={() => resetPassword(m.resetBindingId)}
+                      >
+                        {pwBusyId === m.resetBindingId ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : null}
+                        Reset password
+                      </Button>
+                    ) : null}
                     {m.isPrimary ? (
                       <span
                         className="inline-flex items-center gap-1 text-xs font-medium text-primary"
@@ -1846,14 +1905,14 @@ function SecuritySection({
                         busy={forgetting === m.key}
                         onConfirm={() => forgetMethod(m)}
                       />
-                    ) : (
+                    ) : !individualReset ? (
                       <span
                         className="text-xs text-muted-foreground"
                         title="This is your only remaining way to sign in"
                       >
                         Only method
                       </span>
-                    )}
+                    ) : null}
                   </li>
                 )
               })}

@@ -228,6 +228,50 @@ export function normalizeEmail(email: unknown): string {
   return typeof email === "string" ? email.trim().toLowerCase() : ""
 }
 
+// --- Password-model summary (drives cross-brand recognition copy) -----------
+export interface PasswordModelSummary {
+  /** The account has at least one per-brand (case 4) credential. */
+  perBrand: boolean
+  /** The account has at least one per-email (case 3) credential. */
+  perEmail: boolean
+  /** Distinct brands that have their own password. */
+  brands: BrandId[]
+  /**
+   * True only when the account is a pure shared-password account (cases 1 & 2):
+   * NO per-email and NO per-brand credentials. This is the ONLY case that may
+   * claim "one password" in customer-facing copy.
+   */
+  singleSharedPassword: boolean
+}
+
+/**
+ * Summarize a set of credential bindings into the password topology the account
+ * actually has, so customer-facing copy can stop assuming "one password" when a
+ * case-3/4 credential exists. A binding set with no non-shared credentials
+ * yields `singleSharedPassword: true` (the unchanged cases 1 & 2 wording).
+ */
+export function summarizePasswordModel(
+  bindings: CredentialBinding[],
+): PasswordModelSummary {
+  const brandSet = new Set<BrandId>()
+  let perBrand = false
+  let perEmail = false
+  for (const b of bindings) {
+    if (b.useCase === "per-brand-password") {
+      perBrand = true
+      if (b.brand) brandSet.add(b.brand)
+    } else if (b.useCase === "per-email-password") {
+      perEmail = true
+    }
+  }
+  return {
+    perBrand,
+    perEmail,
+    brands: Array.from(brandSet),
+    singleSharedPassword: !perBrand && !perEmail,
+  }
+}
+
 const BRAND_IDS: ReadonlySet<string> = new Set<BrandId>(["dewalt", "craftsman", "stanley"])
 
 /**

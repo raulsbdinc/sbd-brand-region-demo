@@ -277,8 +277,13 @@ export async function POST(request: NextRequest) {
   const claims = decodeJwtClaims(tokenResponse.id_token)
   const now = Math.floor(Date.now() / 1000)
 
+  // The SDK's SessionData.user requires a string `sub`; the decoded claims type
+  // it only as unknown, so pin it explicitly (it is always present on a verified
+  // id_token) to satisfy the session shape.
+  const sub = typeof claims.sub === "string" ? claims.sub : ""
+
   const session = {
-    user: claims,
+    user: { ...claims, sub },
     tokenSet: {
       accessToken: tokenResponse.access_token,
       idToken: tokenResponse.id_token,

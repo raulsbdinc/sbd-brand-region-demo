@@ -52,6 +52,10 @@ import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
 import {
+  sanitizeCredentialBindings,
+  summarizePasswordModel,
+} from "@/lib/credential-model"
+import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
   DEFAULT_ADDRESS_COUNTRY,
@@ -212,6 +216,17 @@ export function CustomerProfile({ user, sites }: CustomerProfileProps) {
   }>("/api/account/status", fetcher)
   const live = Boolean(status?.managementConfigured)
 
+  // Derive the account's ACTUAL password topology from its (non-secret)
+  // credential bindings so the cross-brand copy reflects per-brand / per-email
+  // credentials instead of always claiming one shared password. A pure
+  // shared-password account (cases 1 & 2) yields the unchanged wording.
+  const passwordModel = summarizePasswordModel(
+    sanitizeCredentialBindings(
+      (user.app_metadata as Record<string, unknown> | undefined)
+        ?.credential_bindings,
+    ),
+  )
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
       <header className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
@@ -242,7 +257,7 @@ export function CustomerProfile({ user, sites }: CustomerProfileProps) {
           account" heading and above "Your details". Renders nothing when the
           account has only ever used this one site, so a first-time user sees no
           gap. Fed by the session claims the server page passed as `sites`. */}
-      <CrossBrandRecognition sites={sites} />
+      <CrossBrandRecognition sites={sites} passwordModel={passwordModel} />
 
       <div className="mt-8 space-y-5">
         <DetailsSection

@@ -16,6 +16,7 @@ import {
   resolvePasscodeFlow,
   startDatabaseChallenge,
 } from "@/lib/auth0-passcode-signin"
+import { resolveSigninCredential } from "@/lib/credential-resolver"
 import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
@@ -44,12 +45,24 @@ export async function POST(request: NextRequest) {
 
   // Decide the flow on the server. This is the ONLY place the decision is made
   // and it never leaves the server.
-  const flow = await resolvePasscodeFlow(email)
+  //
+  // First ask the credential resolver whether this email + SITE_BRAND maps to a
+  // per-email (case 3) or per-brand (case 4) database connection. If it does,
+  // the passcode is a DATABASE challenge on THAT connection. Otherwise fall back
+  // to the original resolver (shared database vs passwordless) so cases 1 & 2
+  // are completely unchanged.
+  let flow = await resolvePasscodeFlow(email)
+  let dbConnectionName: string | undefined
+  const resolved = await resolveSigninCredential(email).catch(() => null)
+  if (resolved && resolved.connectionKey !== "shared") {
+    flow = "database"
+    dbConnectionName = resolved.connectionName
+  }
 
   let authSession: string | undefined
   try {
     if (flow === "database") {
-      authSession = await startDatabaseChallenge(creds, email)
+      authSession = await startDatabaseChallenge(creds, email, dbConnectionName)
     } else {
       await startEmailPasscode(creds, email)
     }

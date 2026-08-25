@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test:claims-action": "node --test auth0/actions/add-sbd-claims.test.js"
+    "test:claims-action": "node --test auth0/actions/add-sbd-claims.test.js",
+    "test:credentials": "node --test lib/credential-model.test.ts",
+    "test": "node --test auth0/actions/add-sbd-claims.test.js lib/credential-model.test.ts"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "4.26.0",

@@ -90,8 +90,12 @@ export async function POST(request: NextRequest) {
   if (!secret) return fail()
 
   const now = Math.floor(Date.now() / 1000)
+  // SessionData.user requires a string `sub`; the decoded claims type it only as
+  // unknown. It is guaranteed present here (the passwordless guard already
+  // rejected a missing/`email|…` sub), so pin it explicitly for the type.
+  const sub = typeof claims.sub === "string" ? claims.sub : ""
   const session = {
-    user: claims,
+    user: { ...claims, sub },
     tokenSet: {
       accessToken: tokens.access_token,
       idToken: tokens.id_token,
