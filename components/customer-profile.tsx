@@ -51,6 +51,7 @@ import { OtpInput } from "@/components/flows/otp-input"
 import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
+import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
 import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
@@ -212,6 +213,23 @@ export function CustomerProfile({ user, sites }: CustomerProfileProps) {
   }>("/api/account/status", fetcher)
   const live = Boolean(status?.managementConfigured)
 
+  // Derive the account's ACTUAL password topology from the Management-backed
+  // login-methods response — NOT from the session user. `app_metadata` (where
+  // credential_bindings live) is NOT present in the OIDC session, so reading it
+  // off `user` would always read as a single shared password and never surface
+  // a case-3/4 credential. The login-methods endpoint is the server result that
+  // legitimately exposes each password credential's connection key/brand to the
+  // browser. A pure shared-password account (cases 1 & 2) yields the unchanged
+  // wording; while loading (or if it can't load) we default to that too.
+  const { data: methodsData } = useSWR<{
+    methods?: { kind?: string; connectionKey?: string | null; brand?: string | null }[]
+  }>(live ? "/api/account/login-methods" : null, fetcher)
+  const passwordModel = summarizePasswordModelFromMethods(
+    (methodsData?.methods ?? []) as Parameters<
+      typeof summarizePasswordModelFromMethods
+    >[0],
+  )
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
       <header className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
@@ -242,7 +260,7 @@ export function CustomerProfile({ user, sites }: CustomerProfileProps) {
           account" heading and above "Your details". Renders nothing when the
           account has only ever used this one site, so a first-time user sees no
           gap. Fed by the session claims the server page passed as `sites`. */}
-      <CrossBrandRecognition sites={sites} />
+      <CrossBrandRecognition sites={sites} passwordModel={passwordModel} />
 
       <div className="mt-8 space-y-5">
         <DetailsSection

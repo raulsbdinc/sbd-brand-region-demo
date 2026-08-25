@@ -8,6 +8,91 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## Connection-aware credentials: env contract + Auth0 matrix (25 August)
+
+This tranche makes the per-email (case 3) and per-brand (case 4) database
+credentials **routable, visible and independently resettable** inside the SAME
+three storefront deployments — DeWalt France, DeWalt Germany, Stanley France.
+It does **not** create deployments or Auth0 applications, and it does **not**
+implement cross-storefront case-4 linking yet. It only routes credentials that
+are already seeded/linked in the tenant.
+
+> **Auth0 is NOT configured for cases 3 and 4 yet.** The app is now driven
+> entirely by the environment contract below; until these connections exist in
+> the tenant and the vars are set, every email continues to resolve to the
+> shared `sbd-eu` connection (cases 1 & 2), unchanged. Nothing here asserts the
+> tenant work is done.
+
+### How resolution works
+
+A submitted email + the deployment's resolved brand (`SITE_BRAND`, derived from
+the `NEXT_PUBLIC_BRAND` / `NEXT_PUBLIC_MARKET` env vars in `lib/site.ts`) resolve
+to **exactly one** allow-listed connection **key** server-side
+(`lib/credential-model.ts` + `lib/credential-resolver.ts`). Raw connection
+**names**/**ids** never cross to the browser. The resolver returns a
+**discriminated** result and fails **closed**:
+
+- **resolved** (a unique, brand-permitted, identity-backed non-shared
+  credential) → attempt **only** that realm.
+- **shared-default** (no non-shared match — root users, verified login aliases,
+  and unknown emails) → the ordinary shared attempt (cases 1 & 2, unchanged).
+- **ambiguous** — the email matches **more than one** credential (a real shared
+  login **and** a non-shared credential, or two non-shared credentials). This
+  fails closed with **no realm attempt at all**: sign-in returns the generic
+  401, public recovery sends **nothing** (it does **not** fall back to shared),
+  and passcode-start issues **no** challenge — each keeping its existing neutral
+  response shape. Ambiguity is **not** a shared fallback.
+
+So the endpoints never become an existence/connection oracle.
+
+- **shared** → root users and verified login aliases (cases 1 & 2), all sites.
+- **per-email** → a case-3 identity, on **all three** storefronts.
+- **dewalt** → a case-4 identity, **only** on the two DeWalt storefronts.
+- **stanley** → a case-4 identity, **only** on the Stanley storefront.
+
+A non-shared binding only routes when it is allow-listed, its connection is
+configured, it is permitted on `SITE_BRAND`, **and** it is backed by a real
+linked Auth0 identity on that connection.
+
+### Environment contract
+
+Per deployment (existing, unchanged): `NEXT_PUBLIC_BRAND` and
+`NEXT_PUBLIC_MARKET` (which `lib/site.ts` resolves into `SITE_BRAND` /
+`SITE_MARKET`), `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, and the
+Management grant. There is **no** `SITE_BRAND` env var — it is a derived
+constant.
+
+Connection **names** (the password-realm `realm`), server-side:
+
+| Key | Env var(s), in precedence order | Fallback |
+| --- | --- | --- |
+| shared | `AUTH0_SHARED_CONNECTION` → `AUTH0_CONNECTION` → `NEXT_PUBLIC_AUTH0_CONNECTION` | `sbd-eu` |
+| per-email | `AUTH0_PER_EMAIL_CONNECTION` | none |
+| dewalt | `AUTH0_DEWALT_CONNECTION` | none |
+| stanley | `AUTH0_STANLEY_CONNECTION` | none |
+
+Connection **ids** (Management-API password-change / link calls), server-side,
+**no fallback**: `AUTH0_SHARED_CONNECTION_ID`, `AUTH0_PER_EMAIL_CONNECTION_ID`,
+`AUTH0_DEWALT_CONNECTION_ID`, `AUTH0_STANLEY_CONNECTION_ID`.
+
+`NEXT_PUBLIC_AUTH0_CONNECTION` is retained **only** for backward compatibility
+with the shared connection; no new `NEXT_PUBLIC_*` connection var is introduced,
+because connection identifiers must not reach the browser.
+
+### Auth0 application / connection matrix (to be configured)
+
+| Storefront (`NEXT_PUBLIC_BRAND`) | Application | Connections it must enable |
+| --- | --- | --- |
+| DeWalt France (`dewalt`) | DeWalt FR app | `shared`, `per-email`, `dewalt` |
+| DeWalt Germany (`dewalt`) | DeWalt DE app | `shared`, `per-email`, `dewalt` |
+| Stanley France (`stanley`) | Stanley FR app | `shared`, `per-email`, `stanley` |
+
+Each per-email/per-brand credential is recorded as a **non-secret**
+`credential_bindings` entry in the primary account's `app_metadata`
+(`{ id, email, connectionKey, auth0UserId, useCase, brand? }`) — never passwords
+or tokens. Seeding those bindings + linking the identities is the remaining
+tenant-side work; the app already reads, routes, surfaces and resets them.
+
 ## Customer profile: identity, MFA and account model (5 August)
 
 The four-part customer-profile work is complete. The durable, off-codebase facts
@@ -88,28 +173,6 @@ that look like the real Polaris storefronts, where:
 - Auth0 bills **one monthly active user** for that person.
 - Login can be done by **password or by a one-time passcode**, and neither ever
   leaves our own branded panel.
-
-### Four identity models for stakeholder decision (24 August)
-
-The stakeholder decision surface is available at `/identity-models` and the
-durable business/technical guide is in Confluence under the 19 August standup:
-**CIAM/Auth0: Four Identity Models for Stakeholder Decision**.
-
-1. **Baseline shared account** is live: one `sbd-eu` identity and one password
-   across all three sites.
-2. **Multiple linked identities with one shared password** is live: verified
-   alternate emails and Google are ways into the same primary account, not
-   separate customer profiles.
-3. **Per-email passwords** is an alternative topology, not an account setting.
-   Each independently passworded email needs its own database identity/connection
-   and explicit account linking after both credentials are proven.
-4. **Per-brand passwords** is also an alternative topology. Each brand needs its
-   own database connection and a connection-aware lifecycle for linking, signup,
-   recovery, reset, Google, duplicate prevention, and reporting.
-
-Models 3 and 4 must use temporary, isolated demo connections and seeded users.
-Do not repurpose or change `sbd-eu` to demonstrate them: it is the working
-shared-account baseline and changing it would invalidate Models 1 and 2.
 
 ### Requirement change, 3 August
 
@@ -258,10 +321,20 @@ matching what `lib/claims.ts` already expected.
   `lastSignIn`. An empty array on the account's first site. Consumed by
   `extractOtherSites` in `lib/claims.ts` and rendered by
   `components/cross-brand-recognition.tsx` on the welcome route.
-- `https://sbd.com/muid` — the Auth0 `user_id`.
-- `https://sbd.com/idp` — the connection name, `sbd-eu`.
-- `https://sbd.com/auth_method` — a friendly label derived from the login method,
-  currently `Password` for the embedded password path.
+- `https://sbd.com/muid` — `app_metadata.muid` when present, otherwise a fallback
+  to the trusted Auth0 `user_id` so live case-1/2 users keep an identity context.
+- `https://sbd.com/idp` — the connection *strategy* from `event.connection.strategy`
+  (e.g. `auth0` for the shared database connection).
+- `https://sbd.com/auth_method` — the authentication method name from the login
+  (e.g. `pwd` for the embedded password path).
+
+  The Action writes `app_metadata.sbd_sites` with the Actions user API
+  (`api.user.setAppMetadata`), which persists at the end of the login
+  transaction — **not** the Management API. It never searches users, links
+  identities, calls `setPrimaryUser`, or infers account ownership from a matching
+  email, so it needs **no** `MGMT_*` Action secrets. It also overrides the
+  outgoing ID-token `email`/`email_verified` from a valid `app_metadata.primary_email`
+  (see the account centre), leaving `sub` unchanged.
 
 The three `sbd.com` claims exist so the existing "SBD identity context" card on
 the welcome page populates instead of showing its "Action not deployed"

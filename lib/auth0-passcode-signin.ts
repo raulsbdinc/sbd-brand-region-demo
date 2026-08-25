@@ -80,10 +80,17 @@ export async function resolvePasscodeFlow(email: string): Promise<PasscodeFlow> 
  * connection. Returns the opaque auth_session the verify step needs. Throws on
  * any non-2xx so the caller collapses it to the generic "we sent a code" shape
  * (the response is identical whether or not the address exists).
+ *
+ * `connectionName` is the RESOLVED tenant connection name (server-side only) —
+ * defaults to the shared connection so cases 1 & 2 are unchanged. Case-3/4
+ * callers pass the per-email / per-brand connection so the code is minted on the
+ * connection that actually holds the credential. The connection is then baked
+ * into the returned auth_session, so the verify step needs no connection info.
  */
 export async function startDatabaseChallenge(
   creds: PasswordlessCreds,
   email: string,
+  connectionName: string = PASSWORD_CONNECTION,
 ): Promise<string> {
   const res = await fetch(`https://${creds.domain}/otp/challenge`, {
     method: "POST",
@@ -91,7 +98,7 @@ export async function startDatabaseChallenge(
     body: JSON.stringify({
       client_id: creds.clientId,
       client_secret: creds.clientSecret,
-      connection: PASSWORD_CONNECTION,
+      connection: connectionName,
       email,
       allow_signup: false,
     }),

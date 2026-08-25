@@ -16,6 +16,8 @@ import {
   resolvePasscodeFlow,
   startDatabaseChallenge,
 } from "@/lib/auth0-passcode-signin"
+import { resolveSigninCredential } from "@/lib/credential-resolver"
+import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
 import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
@@ -44,20 +46,43 @@ export async function POST(request: NextRequest) {
 
   // Decide the flow on the server. This is the ONLY place the decision is made
   // and it never leaves the server.
-  const flow = await resolvePasscodeFlow(email)
+  //
+  // First ask the credential resolver whether this email + SITE_BRAND maps to a
+  // per-email (case 3) or per-brand (case 4) database connection, is ambiguous,
+  // is unavailable, or should take the ordinary shared path. A "resolved"
+  // non-shared credential makes the passcode a DATABASE challenge on THAT
+  // connection; "shared-default" falls back to the original resolver (shared
+  // database vs passwordless) so cases 1 & 2 are completely unchanged.
+  const resolution = await resolveSigninCredential(email).catch(
+    () => ({ kind: "unavailable" }) as const,
+  )
+  const permitsChallenge = signinResolutionPermitsRealmOperation(resolution.kind)
+
+  let flow = await resolvePasscodeFlow(email)
+  let dbConnectionName: string | undefined
+  if (resolution.kind === "resolved") {
+    flow = "database"
+    dbConnectionName = resolution.connectionName
+  }
 
   let authSession: string | undefined
-  try {
-    if (flow === "database") {
-      authSession = await startDatabaseChallenge(creds, email)
-    } else {
-      await startEmailPasscode(creds, email)
+  // AMBIGUOUS or UNAVAILABLE — fail CLOSED: issue NO challenge on ANY realm. We
+  // still set the handoff (with no auth_session) below so the verify step fails
+  // with the same generic message, keeping the response shape identical and
+  // non-revealing.
+  if (permitsChallenge) {
+    try {
+      if (flow === "database") {
+        authSession = await startDatabaseChallenge(creds, email, dbConnectionName)
+      } else {
+        await startEmailPasscode(creds, email)
+      }
+    } catch {
+      // Sending failed (unknown address on the DB challenge, throttling, etc.).
+      // Still return the generic shape — and still set a handoff so the verify
+      // step fails with the same generic message rather than revealing anything
+      // by its absence.
     }
-  } catch {
-    // Sending failed (unknown address on the DB challenge, throttling, etc.).
-    // Still return the generic shape — and still set a handoff so the verify
-    // step fails with the same generic message rather than revealing anything
-    // by its absence.
   }
 
   const response = generic()

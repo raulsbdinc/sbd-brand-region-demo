@@ -20,6 +20,15 @@
 // a client component.
 
 import "server-only"
+import {
+  CONNECTION_KEY_META,
+  connectionKeyForName,
+  resolveConnectionNames,
+  sanitizeCredentialBindings,
+  type ConnectionKey,
+  type CredentialBinding,
+} from "@/lib/credential-model"
+import type { BrandId } from "@/lib/types"
 
 const MGMT_TOKEN_MARGIN_MS = 60_000 // refresh a minute before expiry
 
@@ -222,19 +231,33 @@ export function getUsersByEmail(email: string): Promise<Auth0User[]> {
 }
 
 /**
- * GET /users?search_engine=v3&q=<lucene> — the searchable user index. Unlike
- * /users-by-email (which matches only a record's ROOT email), this indexes
- * app_metadata, so it can resolve a login alias persisted there. NOTE: this
- * index does NOT return linked-identity emails and is EVENTUALLY CONSISTENT, so
- * only query fields we control (app_metadata) or the root email — never a
- * linked identity's address. Returns [] on any failure; never throws into
- * callers (they collapse a miss into the same generic outcome).
+ * GET /users?search_engine=v3&q=<lucene> — the searchable user index, STRICT:
+ * THROWS on any Management error. Unlike /users-by-email (which matches only a
+ * record's ROOT email), this indexes app_metadata, so it can resolve a login
+ * alias persisted there. NOTE: this index does NOT return linked-identity
+ * emails and is EVENTUALLY CONSISTENT, so only query fields we control
+ * (app_metadata) or the root email — never a linked identity's address.
+ *
+ * Use this when a failed search MUST be distinguishable from an empty result —
+ * e.g. credential resolution, which has to fail CLOSED ("unavailable") rather
+ * than mistake a failed lookup for "no matching account". Callers that want the
+ * legacy neutral-empty behavior should use {@link searchUsers} instead.
+ */
+export function searchUsersStrict(query: string): Promise<Auth0User[]> {
+  return mgmtFetch<Auth0User[]>(
+    `/users?search_engine=v3&q=${encodeURIComponent(query)}`,
+  )
+}
+
+/**
+ * Neutral-empty wrapper around {@link searchUsersStrict}: returns [] on any
+ * failure and never throws into callers (they collapse a miss into the same
+ * generic outcome). Kept for legacy callers (signup duplicate-check, the
+ * password route's alias lookup) that treat a failed search as "no match".
  */
 export async function searchUsers(query: string): Promise<Auth0User[]> {
   try {
-    return await mgmtFetch<Auth0User[]>(
-      `/users?search_engine=v3&q=${encodeURIComponent(query)}`,
-    )
+    return await searchUsersStrict(query)
   } catch (err) {
     console.log("[v0] searchUsers failed:", (err as Error).message)
     return []
@@ -416,13 +439,30 @@ export function createOrganizationInvitation(
  * POST /tickets/password-change — create a password-reset ticket. Returns a
  * one-time URL the user can follow. (You can also trigger an email instead via
  * the Authentication API; the ticket approach keeps everything server-side.)
+ *
+ * Two shapes are supported:
+ *   • `{ user_id }` — resets the primary account credential (the default /
+ *     back-compat path used when no binding id is supplied).
+ *   • `{ connection_id, email }` — resets ONE specific database credential on a
+ *     named connection, which is how an individual per-email (case 3) or
+ *     per-brand (case 4) credential is reset independently of the primary.
  */
-export function createPasswordChangeTicket(body: {
-  user_id: string
-  result_url?: string
-  ttl_sec?: number
-  mark_email_as_verified?: boolean
-}): Promise<{ ticket: string }> {
+export function createPasswordChangeTicket(
+  body:
+    | {
+        user_id: string
+        result_url?: string
+        ttl_sec?: number
+        mark_email_as_verified?: boolean
+      }
+    | {
+        connection_id: string
+        email: string
+        result_url?: string
+        ttl_sec?: number
+        mark_email_as_verified?: boolean
+      },
+): Promise<{ ticket: string }> {
   return mgmtFetch<{ ticket: string }>(`/tickets/password-change`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -512,6 +552,23 @@ export interface LoginMethod {
   provider?: string // identity unlink
   userId?: string // identity unlink (secondary id)
   methodId?: string // passkey delete
+  // --- Password-credential enrichment (case 3 / case 4) --------------------
+  /** Allow-listed connection key backing a password credential (kind==="password"). */
+  connectionKey?: ConnectionKey
+  /** Human scope/model line, e.g. the per-brand vs shared description. */
+  scope?: string
+  /** Brand a case-4 credential belongs to (undefined for shared/per-email). */
+  brand?: BrandId
+  /** The email this password credential signs in with. */
+  email?: string
+  /**
+   * The credential-binding id to target an INDIVIDUAL reset. Present only for a
+   * non-shared (case-3/4) credential that is backed by a real binding; the
+   * shared primary credential resets with no binding id (back-compat).
+   */
+  resetBindingId?: string
+  /** Whether this row should expose its own "Reset password" action. */
+  canReset?: boolean
 }
 
 /** Map an Auth0 identity provider to a friendly label + kind. */
@@ -558,10 +615,65 @@ export async function getLoginMethods(sub: string): Promise<{
 
   const methods: LoginMethod[] = []
 
+  // Non-secret binding metadata + the connection allow-list let us present each
+  // linked DATABASE identity as its OWN password credential (case 3 per-email,
+  // case 4 per-brand) with its email, model/scope and brand label — instead of
+  // one generic "Email & password" row. Passwordless email and Google identities
+  // are unaffected.
+  const connectionNames = resolveConnectionNames()
+  const bindings = sanitizeCredentialBindings(
+    user.app_metadata?.credential_bindings,
+  )
+  const bindingFor = (
+    connectionKey: ConnectionKey | null,
+    userId: string,
+  ): CredentialBinding | undefined =>
+    connectionKey
+      ? bindings.find(
+          (b) => b.connectionKey === connectionKey && b.auth0UserId === userId,
+        )
+      : undefined
+
   for (const id of user.identities ?? []) {
     const composite = `${id.provider}|${id.user_id}`
     const isPrimary = composite === sub
     const { label, kind } = providerLabel(id.provider)
+
+    // A database (auth0-provider) identity is a PASSWORD credential. Resolve
+    // which allow-listed connection backs it so per-email / per-brand rows are
+    // distinct and independently resettable.
+    if (kind === "password") {
+      const connectionKey = connectionKeyForName(id.connection, connectionNames)
+      const binding = bindingFor(connectionKey, id.user_id)
+      const meta = connectionKey ? CONNECTION_KEY_META[connectionKey] : undefined
+      const email =
+        binding?.email ??
+        (id.profileData?.email as string | undefined) ??
+        user.email
+      const isShared = !connectionKey || connectionKey === "shared"
+      methods.push({
+        key: composite,
+        kind,
+        label: meta ? meta.label : label,
+        detail: email,
+        isPrimary,
+        removable: !isPrimary,
+        provider: id.provider,
+        userId: id.user_id,
+        connectionKey: connectionKey ?? undefined,
+        scope: meta?.scope,
+        brand: binding?.brand ?? meta?.brand,
+        email,
+        // A non-shared credential resets by its binding id; the shared primary
+        // resets with no binding id (unchanged back-compat path).
+        resetBindingId: !isShared ? binding?.id : undefined,
+        // Shared primary always resettable (as today); a non-shared credential is
+        // resettable only when it is backed by a real binding.
+        canReset: isShared ? true : Boolean(binding),
+      })
+      continue
+    }
+
     methods.push({
       key: composite,
       kind,

@@ -6,6 +6,14 @@ import {
 } from "@/lib/auth0-regions"
 import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
 import { searchUsers, isManagementConfigured } from "@/lib/auth0-management"
+import {
+  connectionNameForKey,
+  resolveSigninCredential,
+} from "@/lib/credential-resolver"
+import {
+  signinResolutionPermitsRealmOperation,
+  type ConnectionKey,
+} from "@/lib/credential-model"
 
 export const runtime = "nodejs"
 
@@ -41,11 +49,16 @@ function decodeJwtClaims(idToken: string): Record<string, unknown> {
 type VerifiedTokenResponse = PasswordRealmTokenResponse & { id_token: string }
 
 /**
- * ONE password-realm exchange against the sbd-eu database connection. Returns
- * the token set on success, or `null` for ANY failure (wrong password, unknown
- * user, blocked, network) — the caller decides what a null means, and every
- * caller-visible failure still collapses to the single generic 401 below. The
- * password is only ever verified here, by Auth0; we never see or store it.
+ * ONE password-realm exchange against a RESOLVED internal connection key.
+ *
+ * The caller passes an allow-listed ConnectionKey (never a raw realm from the
+ * browser); we translate it to the tenant connection name server-side here. A
+ * key that has no configured connection name yields `null` (nothing to try).
+ *
+ * Returns the token set on success, or `null` for ANY failure (wrong password,
+ * unknown user, blocked, network) — the caller decides what a null means, and
+ * every caller-visible failure still collapses to the single generic 401 below.
+ * The password is only ever verified here, by Auth0; we never see or store it.
  */
 async function passwordRealmExchange(params: {
   domain: string
@@ -54,8 +67,12 @@ async function passwordRealmExchange(params: {
   firstHop: string
   username: string
   password: string
+  connectionKey: ConnectionKey
 }): Promise<VerifiedTokenResponse | null> {
-  const { domain, clientId, clientSecret, firstHop, username, password } = params
+  const { domain, clientId, clientSecret, firstHop, username, password, connectionKey } =
+    params
+  const realm = connectionNameForKey(connectionKey)
+  if (!realm) return null
   try {
     const res = await fetch(`https://${domain}/oauth/token`, {
       method: "POST",
@@ -70,7 +87,7 @@ async function passwordRealmExchange(params: {
       },
       body: JSON.stringify({
         grant_type: "http://auth0.com/oauth/grant-type/password-realm",
-        realm: PASSWORD_CONNECTION,
+        realm,
         username,
         password,
         scope: "openid profile email",
@@ -190,35 +207,70 @@ export async function POST(request: NextRequest) {
     .split(",")[0]
     .trim()
 
-  // ATTEMPT 1 — today's behavior, UNCHANGED: verify the password with the email
-  // exactly as typed. This still succeeds for the account's PRIMARY email at no
-  // extra cost, and — crucially — makes NO Management call on a normal login.
-  let tokenResponse = await passwordRealmExchange({
-    domain,
-    clientId,
-    clientSecret,
-    firstHop,
-    username: email,
-    password,
-  })
+  // RESOLVE FIRST — before touching any realm. We must NEVER try shared before
+  // checking whether this email maps to a non-shared credential or is ambiguous:
+  // a shared credential could otherwise win for an email that also has a case-3/4
+  // binding. The resolver is entirely server-side; only a ConnectionKey (never a
+  // raw realm) crosses back. When Management isn't configured it collapses to
+  // "shared-default", so cases 1 & 2 still work with no Management call.
+  const resolution = await resolveSigninCredential(email)
 
-  // ATTEMPT 2 — login-alias fallback. Runs ONLY when attempt 1 failed (a typed
-  // alternate email, or simply a wrong password), so a successful primary-email
-  // login never pays for the extra Management lookup. Treat a VERIFIED alternate
-  // email as an alias for the account's one database credential: resolve it to
-  // the primary login email and let Auth0 verify the single real password
-  // against that. No second password store, no duplicate user, no crypto.
-  if (!tokenResponse && isManagementConfigured()) {
-    const primaryEmail = await resolvePrimaryLoginEmail(email)
-    if (primaryEmail) {
-      tokenResponse = await passwordRealmExchange({
-        domain,
-        clientId,
-        clientSecret,
-        firstHop,
-        username: primaryEmail,
-        password,
-      })
+  // FAIL CLOSED — attempt NO realm and collapse to the same generic 401 as every
+  // other cause when the resolution does not permit a realm operation:
+  //   • "ambiguous"   — the email collides across credentials (a real shared
+  //                     login AND a non-shared credential, or two non-shared).
+  //   • "unavailable" — a Management lookup failed, so an incomplete candidate
+  //                     set cannot prove a collision/case-3/4 is absent.
+  if (!signinResolutionPermitsRealmOperation(resolution.kind)) {
+    return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
+  }
+
+  let tokenResponse: VerifiedTokenResponse | null = null
+
+  if (resolution.kind === "resolved") {
+    // RESOLVED non-shared (case 3 / case 4): attempt ONLY the selected realm,
+    // with the email exactly as typed. No shared attempt, no alias fallback —
+    // this credential is authoritative for this email on this storefront.
+    tokenResponse = await passwordRealmExchange({
+      domain,
+      clientId,
+      clientSecret,
+      firstHop,
+      username: email,
+      password,
+      connectionKey: resolution.connectionKey,
+    })
+  } else {
+    // SHARED-DEFAULT (cases 1 & 2, and unknown emails). ATTEMPT 1 — the typed
+    // email against the SHARED connection, exactly as before.
+    tokenResponse = await passwordRealmExchange({
+      domain,
+      clientId,
+      clientSecret,
+      firstHop,
+      username: email,
+      password,
+      connectionKey: "shared",
+    })
+
+    // ATTEMPT 2 — SHARED login-alias fallback (unchanged): treat a VERIFIED
+    // alternate email as an alias for the account's one shared credential —
+    // resolve it to the primary login email and let Auth0 verify the single real
+    // password against that. Runs only on a failed attempt 1 and only when
+    // Management is configured, so a shared-primary login pays no extra cost.
+    if (!tokenResponse && isManagementConfigured()) {
+      const primaryEmail = await resolvePrimaryLoginEmail(email)
+      if (primaryEmail) {
+        tokenResponse = await passwordRealmExchange({
+          domain,
+          clientId,
+          clientSecret,
+          firstHop,
+          username: primaryEmail,
+          password,
+          connectionKey: "shared",
+        })
+      }
     }
   }
 
@@ -241,8 +293,13 @@ export async function POST(request: NextRequest) {
   const claims = decodeJwtClaims(tokenResponse.id_token)
   const now = Math.floor(Date.now() / 1000)
 
+  // The SDK's SessionData.user requires a string `sub`; the decoded claims type
+  // it only as unknown, so pin it explicitly (it is always present on a verified
+  // id_token) to satisfy the session shape.
+  const sub = typeof claims.sub === "string" ? claims.sub : ""
+
   const session = {
-    user: claims,
+    user: { ...claims, sub },
     tokenSet: {
       accessToken: tokenResponse.access_token,
       idToken: tokenResponse.id_token,

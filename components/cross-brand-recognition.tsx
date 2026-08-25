@@ -2,6 +2,7 @@ import { Fragment } from "react"
 import { UserCheck } from "lucide-react"
 import type { OtherSite } from "@/lib/claims"
 import { SITE_COUNTRY } from "@/lib/site"
+import type { PasswordModelSummary } from "@/lib/credential-model"
 
 // Cross-brand recognition panel.
 //
@@ -65,9 +66,30 @@ function SiteChips({ sites }: { sites: OtherSite[] }) {
   )
 }
 
-export function CrossBrandRecognition({ sites }: { sites: OtherSite[] }) {
+export function CrossBrandRecognition({
+  sites,
+  passwordModel,
+}: {
+  sites: OtherSite[]
+  /**
+   * The account's ACTUAL password topology, derived server-side from its
+   * credential bindings. When omitted or a pure shared-password account, the
+   * copy claims "one account, one password, one record" exactly as before
+   * (cases 1 & 2). When the account has per-brand (case 4) or per-email (case 3)
+   * credentials, the copy stops claiming one password and instead states that
+   * each brand/email keeps its own — derived from the bindings, never assumed.
+   */
+  passwordModel?: PasswordModelSummary
+}) {
   // First site ever for this account: deliberately no panel.
   if (sites.length === 0) return null
+
+  const oneSharedPassword = passwordModel?.singleSharedPassword ?? true
+  const recognitionCopy = oneSharedPassword
+    ? "Each Stanley Black & Decker site keeps its own sign-in, which is why we asked you again here, but it\u2019s one account, one password, one record in the directory."
+    : passwordModel?.perBrand
+      ? "Each Stanley Black & Decker brand keeps its own password here \u2014 the same person, recognised across sites, but with a separate credential per brand."
+      : "This email carries its own password here \u2014 the same person, recognised across sites, with a separate credential for this sign-in."
 
   return (
     <section
@@ -95,9 +117,8 @@ export function CrossBrandRecognition({ sites }: { sites: OtherSite[] }) {
                 the next sentence that the negative left margin would otherwise
                 swallow. This lives on the punctuation, not on SiteChip, so the
                 chip styling and the join logic are untouched. */}
-            <span className="-ml-2 mr-2">.</span>Each Stanley Black &amp; Decker
-            site keeps its own sign-in, which is why we asked you again here,
-            but it&apos;s one account, one password, one record in the directory.
+            <span className="-ml-2 mr-2">.</span>
+            {recognitionCopy}
           </p>
 
           <ul className="mt-4 flex flex-col gap-1 text-sm text-muted-foreground">
