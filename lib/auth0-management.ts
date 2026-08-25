@@ -231,19 +231,33 @@ export function getUsersByEmail(email: string): Promise<Auth0User[]> {
 }
 
 /**
- * GET /users?search_engine=v3&q=<lucene> — the searchable user index. Unlike
- * /users-by-email (which matches only a record's ROOT email), this indexes
- * app_metadata, so it can resolve a login alias persisted there. NOTE: this
- * index does NOT return linked-identity emails and is EVENTUALLY CONSISTENT, so
- * only query fields we control (app_metadata) or the root email — never a
- * linked identity's address. Returns [] on any failure; never throws into
- * callers (they collapse a miss into the same generic outcome).
+ * GET /users?search_engine=v3&q=<lucene> — the searchable user index, STRICT:
+ * THROWS on any Management error. Unlike /users-by-email (which matches only a
+ * record's ROOT email), this indexes app_metadata, so it can resolve a login
+ * alias persisted there. NOTE: this index does NOT return linked-identity
+ * emails and is EVENTUALLY CONSISTENT, so only query fields we control
+ * (app_metadata) or the root email — never a linked identity's address.
+ *
+ * Use this when a failed search MUST be distinguishable from an empty result —
+ * e.g. credential resolution, which has to fail CLOSED ("unavailable") rather
+ * than mistake a failed lookup for "no matching account". Callers that want the
+ * legacy neutral-empty behavior should use {@link searchUsers} instead.
+ */
+export function searchUsersStrict(query: string): Promise<Auth0User[]> {
+  return mgmtFetch<Auth0User[]>(
+    `/users?search_engine=v3&q=${encodeURIComponent(query)}`,
+  )
+}
+
+/**
+ * Neutral-empty wrapper around {@link searchUsersStrict}: returns [] on any
+ * failure and never throws into callers (they collapse a miss into the same
+ * generic outcome). Kept for legacy callers (signup duplicate-check, the
+ * password route's alias lookup) that treat a failed search as "no match".
  */
 export async function searchUsers(query: string): Promise<Auth0User[]> {
   try {
-    return await mgmtFetch<Auth0User[]>(
-      `/users?search_engine=v3&q=${encodeURIComponent(query)}`,
-    )
+    return await searchUsersStrict(query)
   } catch (err) {
     console.log("[v0] searchUsers failed:", (err as Error).message)
     return []

@@ -447,6 +447,39 @@ export interface CandidateAccount {
   identities: LinkedDbIdentity[]
 }
 
+/**
+ * Aggregate the SETTLED results of the candidate-account lookups (the root-email
+ * lookup + the indexed app_metadata search) into a deduped candidate list plus
+ * an `ok` flag. PURE and framework-free so it is unit-testable without the
+ * Management API.
+ *
+ * `ok` is false when ANY lookup was REJECTED: an incomplete candidate set cannot
+ * prove that a case-3/4 credential or a collision is absent, so the caller MUST
+ * fail CLOSED ("unavailable") rather than mistake a failed lookup for "no match"
+ * (which would wrongly become shared-default). Records are deduped by `user_id`;
+ * records without one are skipped.
+ */
+export function aggregateCandidateLookups<T extends { user_id?: string }>(
+  results: PromiseSettledResult<T[]>[],
+): { candidates: T[]; ok: boolean } {
+  let ok = true
+  const seen = new Set<string>()
+  const candidates: T[] = []
+  for (const r of results) {
+    if (r.status !== "fulfilled") {
+      ok = false
+      continue
+    }
+    for (const u of r.value) {
+      const id = u?.user_id
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      candidates.push(u)
+    }
+  }
+  return { candidates, ok }
+}
+
 export interface ResolveCredentialParams {
   email: string
   siteBrand: BrandId

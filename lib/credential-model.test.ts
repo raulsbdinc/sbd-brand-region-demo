@@ -9,6 +9,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import {
+  aggregateCandidateLookups,
   CONNECTION_KEY_META,
   configuredConnectionKeys,
   connectionKeyForName,
@@ -774,4 +775,89 @@ test("decision: resolved and shared-default PERMIT a realm operation", () => {
 test("decision: ambiguous and unavailable FORBID any realm operation (no exchange/challenge/reset)", () => {
   assert.equal(signinResolutionPermitsRealmOperation("ambiguous"), false)
   assert.equal(signinResolutionPermitsRealmOperation("unavailable"), false)
+})
+
+// --- 15. Candidate-lookup aggregation (rejected search fails closed) --------
+// This is the PURE aggregation the server resolver runs over its settled
+// lookups. NOTE: these tests exercise the aggregation + decision LOGIC only —
+// they do NOT invoke the route handlers, so they do not claim the password /
+// passcode / recovery SIDE EFFECTS are unit-tested; those are enforced by the
+// routes calling signinResolutionPermitsRealmOperation on this outcome.
+type FakeUser = { user_id?: string }
+
+const fulfilled = (v: FakeUser[]): PromiseSettledResult<FakeUser[]> => ({
+  status: "fulfilled",
+  value: v,
+})
+const rejected = (): PromiseSettledResult<FakeUser[]> => ({
+  status: "rejected",
+  reason: new Error("management search failed"),
+})
+
+// The resolver's own mapping from an aggregation result to whether a realm
+// operation may run. Kept inline (pure) to prove the FULL chain: a rejected
+// indexed search → ok:false → "unavailable" → NO realm operation.
+function aggregationToDecisionKind(
+  agg: { ok: boolean },
+): "unavailable" | "proceed" {
+  return agg.ok ? "proceed" : "unavailable"
+}
+
+test("aggregate: both lookups fulfilled → ok, deduped candidates by user_id", () => {
+  const agg = aggregateCandidateLookups([
+    fulfilled([{ user_id: "auth0|a" }, { user_id: "auth0|b" }]),
+    fulfilled([{ user_id: "auth0|b" }, { user_id: "auth0|c" }]),
+  ])
+  assert.equal(agg.ok, true)
+  assert.deepEqual(
+    agg.candidates.map((u) => u.user_id),
+    ["auth0|a", "auth0|b", "auth0|c"],
+  )
+})
+
+test("aggregate: a REJECTED indexed search → ok:false (NOT treated as empty match)", () => {
+  const agg = aggregateCandidateLookups([
+    fulfilled([{ user_id: "auth0|a" }]), // root-email lookup succeeded
+    rejected(), // indexed search FAILED
+  ])
+  assert.equal(agg.ok, false)
+  // It still keeps whatever the successful lookup returned, but ok:false is what
+  // forces the caller to fail closed regardless.
+  assert.deepEqual(
+    agg.candidates.map((u) => u.user_id),
+    ["auth0|a"],
+  )
+})
+
+test("aggregate: rejected indexed search maps to 'unavailable' → NO realm operation (not shared-default)", () => {
+  const agg = aggregateCandidateLookups([fulfilled([]), rejected()])
+  const kind = aggregationToDecisionKind(agg)
+  assert.equal(kind, "unavailable")
+  // The resolver returns { kind: "unavailable" } for this; the routes gate on
+  // signinResolutionPermitsRealmOperation, which forbids any realm op here.
+  assert.equal(signinResolutionPermitsRealmOperation("unavailable"), false)
+})
+
+test("aggregate: a REJECTED root-email lookup also → ok:false / unavailable", () => {
+  const agg = aggregateCandidateLookups([rejected(), fulfilled([{ user_id: "auth0|x" }])])
+  assert.equal(agg.ok, false)
+  assert.equal(aggregationToDecisionKind(agg), "unavailable")
+})
+
+test("aggregate: both fulfilled but empty → ok:true → proceed (genuine no-match → shared-default upstream)", () => {
+  const agg = aggregateCandidateLookups([fulfilled([]), fulfilled([])])
+  assert.equal(agg.ok, true)
+  assert.equal(aggregationToDecisionKind(agg), "proceed")
+})
+
+test("aggregate: records without a user_id are skipped", () => {
+  const agg = aggregateCandidateLookups([
+    fulfilled([{ user_id: "auth0|a" }, {}]),
+    fulfilled([{ user_id: undefined }]),
+  ])
+  assert.equal(agg.ok, true)
+  assert.deepEqual(
+    agg.candidates.map((u) => u.user_id),
+    ["auth0|a"],
+  )
 })

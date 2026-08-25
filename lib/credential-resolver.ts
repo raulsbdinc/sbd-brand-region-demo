@@ -12,6 +12,7 @@
 
 import "server-only"
 import {
+  aggregateCandidateLookups,
   CONNECTION_KEY_META,
   configuredConnectionKeys,
   connectionKeyForName,
@@ -28,7 +29,7 @@ import {
 } from "@/lib/credential-model"
 import {
   getUsersByEmail,
-  searchUsers,
+  searchUsersStrict,
   isManagementConfigured,
   type Auth0User,
 } from "@/lib/auth0-management"
@@ -73,7 +74,9 @@ function luceneEscapePhrase(value: string): string {
  * Returns `{ ok }` alongside the candidates. `ok` is false when EITHER lookup
  * failed — an incomplete candidate set cannot prove that a case-3/4 credential
  * or a collision is absent, so the caller must fail CLOSED (never treat a failed
- * lookup as "no non-shared match"). Never throws.
+ * lookup as "no non-shared match"). Uses the STRICT search (which THROWS on a
+ * Management error) — the neutral-empty `searchUsers` would hide a search
+ * failure as an empty result and defeat the fail-closed path. Never throws.
  */
 async function gatherCandidates(
   email: string,
@@ -81,22 +84,11 @@ async function gatherCandidates(
   const typed = email.toLowerCase()
   const q = luceneEscapePhrase(typed)
   const query = `app_metadata.login_alias_emails:"${q}" OR app_metadata.credential_bindings.email:"${q}" OR email:"${q}"`
-  const [byEmailRes, bySearchRes] = await Promise.allSettled([
+  const results = await Promise.allSettled([
     getUsersByEmail(typed),
-    searchUsers(query),
+    searchUsersStrict(query),
   ])
-  const ok =
-    byEmailRes.status === "fulfilled" && bySearchRes.status === "fulfilled"
-  const byEmail = byEmailRes.status === "fulfilled" ? byEmailRes.value : []
-  const bySearch = bySearchRes.status === "fulfilled" ? bySearchRes.value : []
-  const seen = new Set<string>()
-  const out: Auth0User[] = []
-  for (const u of [...byEmail, ...bySearch]) {
-    if (!u?.user_id || seen.has(u.user_id)) continue
-    seen.add(u.user_id)
-    out.push(u)
-  }
-  return { candidates: out, ok }
+  return aggregateCandidateLookups(results)
 }
 
 /**
