@@ -204,45 +204,55 @@ export async function POST(request: NextRequest) {
     .split(",")[0]
     .trim()
 
-  // ATTEMPT 1 — today's behavior, UNCHANGED for cases 1 & 2: verify the password
-  // with the email exactly as typed against the SHARED (sbd-eu) connection. This
-  // still succeeds for the account's PRIMARY email at no extra cost, and —
-  // crucially — makes NO Management call on a normal login.
-  let tokenResponse = await passwordRealmExchange({
-    domain,
-    clientId,
-    clientSecret,
-    firstHop,
-    username: email,
-    password,
-    connectionKey: "shared",
-  })
+  // RESOLVE FIRST — before touching any realm. We must NEVER try shared before
+  // checking whether this email maps to a non-shared credential or is ambiguous:
+  // a shared credential could otherwise win for an email that also has a case-3/4
+  // binding. The resolver is entirely server-side; only a ConnectionKey (never a
+  // raw realm) crosses back. When Management isn't configured it collapses to
+  // "shared-default", so cases 1 & 2 still work with no Management call.
+  const resolution = await resolveSigninCredential(email)
 
-  // ATTEMPT 2 — connection-aware resolution + login-alias fallback. Runs ONLY
-  // when attempt 1 failed (a case-3/4 identity, a typed alternate email, or a
-  // wrong password), so a successful shared-primary login never pays for the
-  // extra Management lookup.
-  if (!tokenResponse && isManagementConfigured()) {
-    // Resolve — entirely server-side — whether this email + SITE_BRAND maps to a
-    // per-email (case 3) or per-brand (case 4) database credential. A unique,
-    // brand-permitted, identity-backed binding resolves to that connection; an
-    // ambiguous/no match resolves to null and we fall through to the shared
-    // alias path. The connection key is the only thing that leaves the resolver.
-    const resolved = await resolveSigninCredential(email)
-    if (resolved && resolved.connectionKey !== "shared") {
-      tokenResponse = await passwordRealmExchange({
-        domain,
-        clientId,
-        clientSecret,
-        firstHop,
-        username: email,
-        password,
-        connectionKey: resolved.connectionKey,
-      })
-    } else {
-      // SHARED alias fallback (unchanged): treat a VERIFIED alternate email as an
-      // alias for the account's one shared credential — resolve it to the primary
-      // login email and let Auth0 verify the single real password against that.
+  // AMBIGUOUS — the email collides across credentials (e.g. a real shared login
+  // AND a non-shared credential, or two non-shared credentials). Fail CLOSED:
+  // attempt NO realm and collapse to the same generic 401 as every other cause.
+  if (resolution.kind === "ambiguous") {
+    return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
+  }
+
+  let tokenResponse: VerifiedTokenResponse | null = null
+
+  if (resolution.kind === "resolved") {
+    // RESOLVED non-shared (case 3 / case 4): attempt ONLY the selected realm,
+    // with the email exactly as typed. No shared attempt, no alias fallback —
+    // this credential is authoritative for this email on this storefront.
+    tokenResponse = await passwordRealmExchange({
+      domain,
+      clientId,
+      clientSecret,
+      firstHop,
+      username: email,
+      password,
+      connectionKey: resolution.connectionKey,
+    })
+  } else {
+    // SHARED-DEFAULT (cases 1 & 2, and unknown emails). ATTEMPT 1 — the typed
+    // email against the SHARED connection, exactly as before.
+    tokenResponse = await passwordRealmExchange({
+      domain,
+      clientId,
+      clientSecret,
+      firstHop,
+      username: email,
+      password,
+      connectionKey: "shared",
+    })
+
+    // ATTEMPT 2 — SHARED login-alias fallback (unchanged): treat a VERIFIED
+    // alternate email as an alias for the account's one shared credential —
+    // resolve it to the primary login email and let Auth0 verify the single real
+    // password against that. Runs only on a failed attempt 1 and only when
+    // Management is configured, so a shared-primary login pays no extra cost.
+    if (!tokenResponse && isManagementConfigured()) {
       const primaryEmail = await resolvePrimaryLoginEmail(email)
       if (primaryEmail) {
         tokenResponse = await passwordRealmExchange({

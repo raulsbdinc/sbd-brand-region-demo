@@ -12,6 +12,7 @@ import {
   CONNECTION_KEY_META,
   configuredConnectionKeys,
   connectionKeyForName,
+  hasSharedPasswordCredential,
   isBrandAllowed,
   isConnectionKey,
   normalizeEmail,
@@ -22,6 +23,7 @@ import {
   sanitizeCredentialBinding,
   sanitizeCredentialBindings,
   summarizePasswordModel,
+  summarizePasswordModelFromMethods,
   SHARED_CONNECTION_FALLBACK,
   type ConnectionKey,
   type CredentialBinding,
@@ -172,8 +174,9 @@ test("resolve: a DeWalt credential does NOT route on a Stanley storefront", () =
     bindings: [b],
     identities,
     configuredKeys: ALL_KEYS,
+    sharedMatch: false,
   })
-  assert.deepEqual(onDewalt, { ok: true, connectionKey: "dewalt", binding: b })
+  assert.deepEqual(onDewalt, { ok: true, kind: "resolved", connectionKey: "dewalt", binding: b })
 
   // On Stanley storefront → brand-restricted, so it falls back to shared.
   const onStanley = resolveCredential({
@@ -182,8 +185,14 @@ test("resolve: a DeWalt credential does NOT route on a Stanley storefront", () =
     bindings: [b],
     identities,
     configuredKeys: ALL_KEYS,
+    sharedMatch: false,
   })
-  assert.deepEqual(onStanley, { ok: true, connectionKey: "shared", binding: null })
+  assert.deepEqual(onStanley, {
+    ok: true,
+    kind: "shared-default",
+    connectionKey: "shared",
+    binding: null,
+  })
 })
 
 // --- 4. Unique + ambiguous resolution --------------------------------------
@@ -195,8 +204,9 @@ test("resolve: a unique backed per-email binding routes to per-email", () => {
     bindings: [b],
     identities: [identity("per-email", b.auth0UserId)],
     configuredKeys: ALL_KEYS,
+    sharedMatch: false,
   })
-  assert.deepEqual(res, { ok: true, connectionKey: "per-email", binding: b })
+  assert.deepEqual(res, { ok: true, kind: "resolved", connectionKey: "per-email", binding: b })
 })
 
 test("resolve: two distinct backed credentials for one email are AMBIGUOUS (fail closed)", () => {
@@ -214,20 +224,74 @@ test("resolve: two distinct backed credentials for one email are AMBIGUOUS (fail
     bindings: [a, b],
     identities: [identity("per-email", "auth0|pe"), identity("dewalt", "auth0|dw")],
     configuredKeys: ALL_KEYS,
+    sharedMatch: false,
   })
   assert.deepEqual(res, { ok: false, reason: "ambiguous" })
 })
 
+test("resolve: a real SHARED login PLUS a non-shared match is AMBIGUOUS (no realm)", () => {
+  // The same email is both a genuine shared login (root/alias, sharedMatch=true)
+  // AND has a single backed non-shared credential. We must NOT prefer either
+  // realm — fail closed.
+  const b = binding() // per-email, backed below
+  const res = resolveCredential({
+    email: b.email,
+    siteBrand: "dewalt",
+    bindings: [b],
+    identities: [identity("per-email", b.auth0UserId), identity("shared", "auth0|root")],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: true,
+  })
+  assert.deepEqual(res, { ok: false, reason: "ambiguous" })
+})
+
+test("resolve: the SAME unique credential resolves when there is NO shared collision", () => {
+  // Identical to the collision test but sharedMatch=false → resolves cleanly.
+  const b = binding()
+  const res = resolveCredential({
+    email: b.email,
+    siteBrand: "dewalt",
+    bindings: [b],
+    identities: [identity("per-email", b.auth0UserId)],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.deepEqual(res, { ok: true, kind: "resolved", connectionKey: "per-email", binding: b })
+})
+
 // --- 5. Shared alias compatibility -----------------------------------------
-test("resolve: a root user with no bindings resolves to shared (cases 1 & 2 unchanged)", () => {
+test("resolve: a root user with no bindings resolves to shared-default (cases 1 & 2)", () => {
   const res = resolveCredential({
     email: "root@example.com",
     siteBrand: "dewalt",
     bindings: [],
     identities: [identity("shared", "auth0|root")],
     configuredKeys: ALL_KEYS,
+    sharedMatch: true,
   })
-  assert.deepEqual(res, { ok: true, connectionKey: "shared", binding: null })
+  assert.deepEqual(res, {
+    ok: true,
+    kind: "shared-default",
+    connectionKey: "shared",
+    binding: null,
+  })
+})
+
+test("resolve: an unknown email still yields a neutral shared-default attempt", () => {
+  const res = resolveCredential({
+    email: "nobody@example.com",
+    siteBrand: "dewalt",
+    bindings: [],
+    identities: [],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.deepEqual(res, {
+    ok: true,
+    kind: "shared-default",
+    connectionKey: "shared",
+    binding: null,
+  })
 })
 
 test("resolve: shared bindings never override the default shared path", () => {
@@ -242,8 +306,14 @@ test("resolve: shared bindings never override the default shared path", () => {
     bindings: [shared],
     identities: [identity("shared", "auth0|root")],
     configuredKeys: ALL_KEYS,
+    sharedMatch: true,
   })
-  assert.deepEqual(res, { ok: true, connectionKey: "shared", binding: null })
+  assert.deepEqual(res, {
+    ok: true,
+    kind: "shared-default",
+    connectionKey: "shared",
+    binding: null,
+  })
 })
 
 // --- 6. Metadata validated against real identities -------------------------
@@ -255,8 +325,14 @@ test("resolve: a binding NOT backed by a linked identity is ignored (falls back 
     bindings: [b],
     identities: [identity("shared", "auth0|root")], // no per-email identity
     configuredKeys: ALL_KEYS,
+    sharedMatch: false,
   })
-  assert.deepEqual(res, { ok: true, connectionKey: "shared", binding: null })
+  assert.deepEqual(res, {
+    ok: true,
+    kind: "shared-default",
+    connectionKey: "shared",
+    binding: null,
+  })
 })
 
 test("resolve: a binding on an UNCONFIGURED connection is ignored", () => {
@@ -268,8 +344,14 @@ test("resolve: a binding on an UNCONFIGURED connection is ignored", () => {
     bindings: [b],
     identities: [identity("dewalt", "auth0|dw")],
     configuredKeys: configured,
+    sharedMatch: false,
   })
-  assert.deepEqual(res, { ok: true, connectionKey: "shared", binding: null })
+  assert.deepEqual(res, {
+    ok: true,
+    kind: "shared-default",
+    connectionKey: "shared",
+    binding: null,
+  })
 })
 
 test("resolve: fails closed with not-configured when shared has no connection", () => {
@@ -279,6 +361,7 @@ test("resolve: fails closed with not-configured when shared has no connection", 
     bindings: [],
     identities: [],
     configuredKeys: new Set<ConnectionKey>(),
+    sharedMatch: false,
   })
   assert.deepEqual(res, { ok: false, reason: "not-configured" })
 })
@@ -338,7 +421,73 @@ test("reset: a binding on an unconfigured connection is not-configured", () => {
   assert.deepEqual(res, { ok: false, reason: "not-configured" })
 })
 
-// --- 8. Password-model summary ---------------------------------------------
+// --- 8. Binding metadata COHERENCE -----------------------------------------
+test("coherence: shared accepts only shared-account / linked-identities and no brand", () => {
+  assert.ok(sanitizeCredentialBinding(binding({ connectionKey: "shared", useCase: "shared-account" })))
+  assert.ok(sanitizeCredentialBinding(binding({ connectionKey: "shared", useCase: "linked-identities" })))
+  // Wrong use case for shared → rejected.
+  assert.equal(
+    sanitizeCredentialBinding(binding({ connectionKey: "shared", useCase: "per-email-password" })),
+    null,
+  )
+  // Shared carrying a brand is incoherent → rejected (not normalized).
+  assert.equal(
+    sanitizeCredentialBinding(binding({ connectionKey: "shared", useCase: "shared-account", brand: "dewalt" })),
+    null,
+  )
+})
+
+test("coherence: per-email accepts only per-email-password and no brand", () => {
+  assert.ok(sanitizeCredentialBinding(binding()))
+  assert.equal(
+    sanitizeCredentialBinding(binding({ useCase: "shared-account" })),
+    null,
+  )
+  assert.equal(
+    sanitizeCredentialBinding(binding({ brand: "dewalt" })),
+    null,
+  )
+})
+
+test("coherence: per-brand keys require per-brand-password and the MATCHING brand", () => {
+  const dw = sanitizeCredentialBinding(
+    binding({ connectionKey: "dewalt", auth0UserId: "auth0|dw", useCase: "per-brand-password", brand: "dewalt" }),
+  )
+  assert.equal(dw?.brand, "dewalt")
+
+  // Brand absent → derived from the key (coherent, key IS the brand).
+  const derived = sanitizeCredentialBinding(
+    binding({ connectionKey: "stanley", auth0UserId: "auth0|st", useCase: "per-brand-password" }),
+  )
+  assert.equal(derived?.brand, "stanley")
+
+  // Mismatched brand → rejected (dewalt key with stanley brand).
+  assert.equal(
+    sanitizeCredentialBinding(
+      binding({ connectionKey: "dewalt", auth0UserId: "auth0|dw", useCase: "per-brand-password", brand: "stanley" }),
+    ),
+    null,
+  )
+
+  // Wrong use case for a per-brand key → rejected.
+  assert.equal(
+    sanitizeCredentialBinding(
+      binding({ connectionKey: "dewalt", auth0UserId: "auth0|dw", useCase: "per-email-password" }),
+    ),
+    null,
+  )
+})
+
+test("coherence: a present but unknown brand string is malformed → rejected", () => {
+  assert.equal(
+    sanitizeCredentialBinding(
+      binding({ connectionKey: "dewalt", auth0UserId: "auth0|dw", useCase: "per-brand-password", brand: "acme" as never }),
+    ),
+    null,
+  )
+})
+
+// --- 9. Password-model summary (from bindings) -----------------------------
 test("summary: no bindings → single shared password", () => {
   const s = summarizePasswordModel([])
   assert.equal(s.singleSharedPassword, true)
@@ -362,7 +511,62 @@ test("summary: per-email binding drops the one-password claim", () => {
   assert.equal(s.perEmail, true)
 })
 
-// --- 9. Metadata sanity -----------------------------------------------------
+// --- 10. Password-model summary (from login METHODS — the client data source)
+test("topology: methods with only a shared password → single shared password", () => {
+  const s = summarizePasswordModelFromMethods([
+    { kind: "password", connectionKey: "shared" },
+    { kind: "social" }, // ignored — not a password
+    { kind: "passkey" }, // ignored
+  ])
+  assert.equal(s.singleSharedPassword, true)
+  assert.equal(s.perBrand, false)
+  assert.equal(s.perEmail, false)
+})
+
+test("topology: an untagged password method still reads as shared (no leak)", () => {
+  const s = summarizePasswordModelFromMethods([{ kind: "password" }])
+  assert.equal(s.singleSharedPassword, true)
+})
+
+test("topology: per-brand + per-email password methods surface the real topology", () => {
+  const s = summarizePasswordModelFromMethods([
+    { kind: "password", connectionKey: "shared" },
+    { kind: "password", connectionKey: "dewalt", brand: "dewalt" },
+    { kind: "password", connectionKey: "per-email" },
+  ])
+  assert.equal(s.singleSharedPassword, false)
+  assert.equal(s.perBrand, true)
+  assert.equal(s.perEmail, true)
+  assert.deepEqual(s.brands, ["dewalt"])
+})
+
+test("topology: an empty methods list defaults to single shared password", () => {
+  assert.equal(summarizePasswordModelFromMethods([]).singleSharedPassword, true)
+})
+
+// --- 11. Shared-reset visibility predicate ---------------------------------
+test("shared-reset: shown when a shared (or untagged) password credential exists", () => {
+  assert.equal(hasSharedPasswordCredential([{ kind: "password", connectionKey: "shared" }]), true)
+  assert.equal(hasSharedPasswordCredential([{ kind: "password" }]), true)
+  assert.equal(hasSharedPasswordCredential([{ kind: "password", connectionKey: null }]), true)
+})
+
+test("shared-reset: HIDDEN for a case-3/4-only account (no shared password)", () => {
+  assert.equal(
+    hasSharedPasswordCredential([
+      { kind: "password", connectionKey: "dewalt", brand: "dewalt" },
+      { kind: "password", connectionKey: "per-email" },
+      { kind: "passkey" },
+    ]),
+    false,
+  )
+})
+
+test("shared-reset: HIDDEN when there is no password credential at all", () => {
+  assert.equal(hasSharedPasswordCredential([{ kind: "social" }, { kind: "passkey" }]), false)
+})
+
+// --- 12. Metadata sanity ----------------------------------------------------
 test("meta: every connection key has metadata and brand keys carry a brand", () => {
   assert.equal(CONNECTION_KEY_META.dewalt.brand, "dewalt")
   assert.equal(CONNECTION_KEY_META.stanley.brand, "stanley")

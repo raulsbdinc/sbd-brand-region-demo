@@ -34,17 +34,22 @@ export async function POST(request: Request) {
   if (!configured || throttled) return genericResponse(configured)
 
   // Resolve the connection the same way sign-in does: a case-3/4 identity on
-  // this storefront gets its reset on its own connection; everything else stays
-  // on the shared connection exactly as today. Any resolution failure silently
-  // falls back to the shared connection — the response never varies, so account
-  // existence and which connection matched remain indistinguishable.
-  let connectionName: string = PASSWORD_CONNECTION
-  try {
-    const resolved = await resolveSigninCredential(email)
-    if (resolved) connectionName = resolved.connectionName
-  } catch {
-    // keep the shared connection
-  }
+  // this storefront gets its reset on its own connection; a shared-default (and
+  // unknown emails) stays on the shared connection exactly as today. The
+  // response never varies, so account existence and which connection matched
+  // remain indistinguishable.
+  //
+  // AMBIGUOUS is the one case we must NOT paper over with a shared fallback:
+  // sending a shared reset for an email that also has a non-shared credential
+  // would leak the shared credential's existence and could reset the wrong
+  // realm. On ambiguity we send NOTHING but keep the identical neutral response.
+  const resolution = await resolveSigninCredential(email).catch(
+    () => ({ kind: "shared-default" }) as const,
+  )
+  if (resolution.kind === "ambiguous") return genericResponse(true)
+
+  const connectionName: string =
+    resolution.kind === "resolved" ? resolution.connectionName : PASSWORD_CONNECTION
 
   try {
     await requestPasswordResetEmail(email, connectionName)

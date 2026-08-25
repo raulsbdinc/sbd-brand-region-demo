@@ -15,6 +15,7 @@ import {
   CONNECTION_KEY_META,
   configuredConnectionKeys,
   connectionKeyForName,
+  normalizeEmail,
   resolveConnectionIds,
   resolveConnectionNames,
   resolveCredential,
@@ -87,25 +88,79 @@ async function gatherCandidates(email: string): Promise<Auth0User[]> {
   return out
 }
 
-export interface ResolvedSigninCredential {
-  connectionKey: ConnectionKey
-  connectionName: string
-  binding: CredentialBinding | null
+/**
+ * Whether the submitted email is a GENUINE shared-connection login: the root
+ * email or a persisted login alias (or a coherent shared binding email) of a
+ * candidate account that ACTUALLY holds a shared-connection identity. This is
+ * the "validate the shared match against the actual shared identity" step — a
+ * login_alias or root email only counts when the account truly has a shared
+ * identity, so a stray alias can never fabricate a shared match.
+ */
+function computeSharedMatch(
+  candidates: Auth0User[],
+  email: string,
+  sharedConnectionName: string | undefined,
+): boolean {
+  if (!sharedConnectionName) return false
+  for (const user of candidates) {
+    const hasSharedIdentity = (user.identities ?? []).some(
+      (id) => id.provider === "auth0" && id.connection === sharedConnectionName,
+    )
+    if (!hasSharedIdentity) continue
+
+    const rootEmail = normalizeEmail(user.email)
+    const aliasList = Array.isArray(user.app_metadata?.login_alias_emails)
+      ? (user.app_metadata!.login_alias_emails as unknown[])
+          .filter((e): e is string => typeof e === "string")
+          .map(normalizeEmail)
+      : []
+    const sharedBindingEmails = readBindings(user)
+      .filter((b) => b.connectionKey === "shared")
+      .map((b) => b.email)
+
+    if (
+      rootEmail === email ||
+      aliasList.includes(email) ||
+      sharedBindingEmails.includes(email)
+    ) {
+      return true
+    }
+  }
+  return false
 }
+
+// Discriminated sign-in resolution so callers can distinguish a resolved
+// non-shared realm, a shared-default attempt, and an ambiguous email that must
+// NOT trigger any realm attempt.
+export type SigninCredentialResolution =
+  | {
+      kind: "resolved"
+      connectionKey: ConnectionKey
+      connectionName: string
+      binding: CredentialBinding | null
+    }
+  | { kind: "shared-default" }
+  | { kind: "ambiguous" }
 
 /**
  * Resolve the database connection to authenticate a submitted email against on
- * THIS storefront. Returns null when nothing resolves, the connection name is
- * missing, or the resolution is ambiguous — every null collapses to the same
- * neutral failure upstream (no enumeration). `siteBrand` defaults to this
- * deployment's brand and is overridable only for tests/tooling.
+ * THIS storefront, as a DISCRIMINATED result:
+ *   • "resolved"       → attempt ONLY the returned non-shared realm.
+ *   • "shared-default" → make the ordinary shared attempt (cases 1 & 2, and
+ *                        unknown emails — a neutral shared attempt is fine).
+ *   • "ambiguous"      → the email collides across credentials; the caller MUST
+ *                        fail closed and attempt NO realm.
+ * Management-not-configured collapses to "shared-default" so cases 1 & 2 keep
+ * working with no Management API. `siteBrand` defaults to this deployment's
+ * brand and is overridable only for tests/tooling.
  */
 export async function resolveSigninCredential(
   email: string,
   siteBrand: BrandId = SITE_BRAND,
-): Promise<ResolvedSigninCredential | null> {
-  if (!isManagementConfigured()) return null
+): Promise<SigninCredentialResolution> {
+  if (!isManagementConfigured()) return { kind: "shared-default" }
 
+  const normalized = normalizeEmail(email)
   const candidates = await gatherCandidates(email)
   const bindings: CredentialBinding[] = []
   const identities: LinkedDbIdentity[] = []
@@ -116,6 +171,7 @@ export async function resolveSigninCredential(
 
   const names = resolveConnectionNames()
   const configuredKeys = configuredConnectionKeys(names)
+  const sharedMatch = computeSharedMatch(candidates, normalized, names.shared)
 
   const resolution = resolveCredential({
     email,
@@ -123,13 +179,23 @@ export async function resolveSigninCredential(
     bindings,
     identities,
     configuredKeys,
+    sharedMatch,
   })
-  if (!resolution.ok) return null
+
+  // Fail CLOSED on ambiguity — never attempt any realm. Any other non-ok
+  // (not-configured) safely degrades to the ordinary shared attempt.
+  if (!resolution.ok) {
+    return resolution.reason === "ambiguous"
+      ? { kind: "ambiguous" }
+      : { kind: "shared-default" }
+  }
+  if (resolution.kind === "shared-default") return { kind: "shared-default" }
 
   const connectionName = names[resolution.connectionKey]
-  if (!connectionName) return null
+  if (!connectionName) return { kind: "shared-default" }
 
   return {
+    kind: "resolved",
     connectionKey: resolution.connectionKey,
     connectionName,
     binding: resolution.binding,

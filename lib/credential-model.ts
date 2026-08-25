@@ -272,12 +272,76 @@ export function summarizePasswordModel(
   }
 }
 
+/** A login-method-ish shape carrying the fields the topology summary needs. */
+export interface PasswordCredentialLike {
+  kind?: string
+  connectionKey?: ConnectionKey | null
+  brand?: BrandId | null
+}
+
+/**
+ * Summarize the password topology from the Management-backed LOGIN METHODS the
+ * account actually exposes (the source the browser can legitimately see, via
+ * /api/account/login-methods). Used by the customer profile because
+ * `app_metadata` is NOT present in the OIDC session — deriving topology from
+ * the session user would always read as a single shared password. Only
+ * password-kind methods with a per-email / per-brand connection key count.
+ */
+export function summarizePasswordModelFromMethods(
+  methods: PasswordCredentialLike[],
+): PasswordModelSummary {
+  const brandSet = new Set<BrandId>()
+  let perBrand = false
+  let perEmail = false
+  for (const m of methods) {
+    if (m.kind && m.kind !== "password") continue
+    if (m.connectionKey === "per-email") {
+      perEmail = true
+    } else if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
+      perBrand = true
+      if (m.brand) brandSet.add(m.brand)
+    }
+  }
+  return {
+    perBrand,
+    perEmail,
+    brands: Array.from(brandSet),
+    singleSharedPassword: !perBrand && !perEmail,
+  }
+}
+
+/**
+ * Whether a set of login methods contains a REAL shared password credential —
+ * a password-kind method whose connection key is `shared` or is untagged (the
+ * shared demo account). Drives whether the account view shows the single
+ * top-level (shared) password reset; a case-3/4-only account has none, so it
+ * must reset through its per-row actions instead of a misleading global button.
+ */
+export function hasSharedPasswordCredential(
+  methods: PasswordCredentialLike[],
+): boolean {
+  return methods.some(
+    (m) =>
+      (!m.kind || m.kind === "password") &&
+      (m.connectionKey === undefined ||
+        m.connectionKey === null ||
+        m.connectionKey === "shared"),
+  )
+}
+
 const BRAND_IDS: ReadonlySet<string> = new Set<BrandId>(["dewalt", "craftsman", "stanley"])
 
 /**
  * Read one raw binding-ish value into a valid CredentialBinding, or null when
- * it is malformed or carries an unknown (non-allow-listed) connection key /
- * use case. Never throws — junk is silently dropped.
+ * it is malformed, carries an unknown (non-allow-listed) connection key / use
+ * case, OR is INCOHERENT. Coherence is enforced, never normalized away — a
+ * binding whose (connectionKey, useCase, brand) do not agree is REJECTED rather
+ * than silently coerced into a misleading UI row:
+ *   • shared    → useCase shared-account | linked-identities, and NO brand.
+ *   • per-email → useCase per-email-password, and NO brand.
+ *   • dewalt    → useCase per-brand-password, and brand dewalt (or absent).
+ *   • stanley   → useCase per-brand-password, and brand stanley (or absent).
+ * Never throws — junk is silently dropped.
  */
 export function sanitizeCredentialBinding(input: unknown): CredentialBinding | null {
   if (!input || typeof input !== "object") return null
@@ -295,12 +359,40 @@ export function sanitizeCredentialBinding(input: unknown): CredentialBinding | n
   const auth0UserId = typeof raw.auth0UserId === "string" ? raw.auth0UserId.trim() : ""
   if (!auth0UserId) return null
 
-  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `${connectionKey}:${auth0UserId}`
+  // A brand value, if present, must itself be a known brand id. A present but
+  // unknown brand string is malformed → reject.
+  let rawBrand: BrandId | undefined
+  if (raw.brand !== undefined && raw.brand !== null) {
+    if (typeof raw.brand !== "string" || !BRAND_IDS.has(raw.brand)) return null
+    rawBrand = raw.brand as BrandId
+  }
 
-  const brand =
-    typeof raw.brand === "string" && BRAND_IDS.has(raw.brand)
-      ? (raw.brand as BrandId)
-      : CONNECTION_KEY_META[connectionKey].brand
+  // Coherence: (connectionKey, useCase, brand) must agree. Reject mismatches.
+  let brand: BrandId | undefined
+  switch (connectionKey) {
+    case "shared":
+      if (useCase !== "shared-account" && useCase !== "linked-identities") return null
+      if (rawBrand !== undefined) return null
+      brand = undefined
+      break
+    case "per-email":
+      if (useCase !== "per-email-password") return null
+      if (rawBrand !== undefined) return null
+      brand = undefined
+      break
+    case "dewalt":
+      if (useCase !== "per-brand-password") return null
+      if (rawBrand !== undefined && rawBrand !== "dewalt") return null
+      brand = "dewalt"
+      break
+    case "stanley":
+      if (useCase !== "per-brand-password") return null
+      if (rawBrand !== undefined && rawBrand !== "stanley") return null
+      brand = "stanley"
+      break
+  }
+
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `${connectionKey}:${auth0UserId}`
 
   return { id, email, connectionKey, auth0UserId, useCase, brand }
 }
@@ -328,9 +420,22 @@ export interface LinkedDbIdentity {
   userId: string
 }
 
+// Discriminated result so callers can distinguish a resolved NON-SHARED
+// credential from a shared-default attempt from an AMBIGUOUS email:
+//   • kind "resolved"       → a unique, backed, brand-permitted non-shared
+//                             credential; attempt ONLY that realm.
+//   • kind "shared-default" → no non-shared match; the caller may make the
+//                             ordinary shared attempt (cases 1 & 2, and unknown
+//                             emails — a neutral shared attempt is still fine).
+//   • reason "ambiguous"    → the email matches more than one credential (e.g. a
+//                             real shared login AND a non-shared credential, or
+//                             two non-shared credentials); the caller MUST fail
+//                             closed and attempt NO realm.
+//   • reason "not-configured" → the shared connection itself is not configured.
 export type CredentialResolution =
-  | { ok: true; connectionKey: ConnectionKey; binding: CredentialBinding | null }
-  | { ok: false; reason: "no-match" | "ambiguous" | "not-configured" | "brand-restricted" }
+  | { ok: true; kind: "resolved"; connectionKey: ConnectionKey; binding: CredentialBinding }
+  | { ok: true; kind: "shared-default"; connectionKey: "shared"; binding: null }
+  | { ok: false; reason: "ambiguous" | "not-configured" }
 
 export interface ResolveCredentialParams {
   email: string
@@ -341,6 +446,14 @@ export interface ResolveCredentialParams {
   identities: LinkedDbIdentity[]
   /** Connection keys that have a configured connection name. */
   configuredKeys: ReadonlySet<ConnectionKey>
+  /**
+   * Whether the submitted email is a GENUINE shared-connection login — i.e. it
+   * is the root email or a persisted login alias of an account that actually
+   * has a shared-connection identity (validated by the server bridge against
+   * the real identities). A shared match that coincides with a non-shared match
+   * is AMBIGUOUS: we must never silently prefer one realm over the other.
+   */
+  sharedMatch: boolean
 }
 
 /**
@@ -351,10 +464,13 @@ export interface ResolveCredentialParams {
  *   • A non-shared binding counts only when it is allow-listed, its connection
  *     is configured, it is permitted on SITE_BRAND, AND it is backed by a real
  *     linked identity on that connection (metadata validated against identities).
- *   • Exactly one such binding → that connection (case 3 / case 4).
- *   • More than one → AMBIGUOUS, fail closed (neutral error upstream).
- *   • None → the shared connection (root users and login aliases — cases 1 & 2,
- *     unchanged) when it is configured; otherwise not-configured.
+ *   • Exactly one such binding AND no genuine shared match → that connection.
+ *   • More than one non-shared match → AMBIGUOUS, fail closed.
+ *   • Exactly one non-shared match BUT a genuine shared login for the same
+ *     email → AMBIGUOUS, fail closed (never prefer shared or non-shared).
+ *   • No non-shared match → shared-default (root users and login aliases —
+ *     cases 1 & 2, unchanged, and unknown emails) when shared is configured;
+ *     otherwise not-configured.
  */
 export function resolveCredential(params: ResolveCredentialParams): CredentialResolution {
   const email = normalizeEmail(params.email)
@@ -377,17 +493,25 @@ export function resolveCredential(params: ResolveCredentialParams): CredentialRe
     matches.push(b)
   }
 
-  if (matches.length === 1) {
-    return { ok: true, connectionKey: matches[0].connectionKey, binding: matches[0] }
-  }
+  // Two or more distinct non-shared credentials → ambiguous.
   if (matches.length > 1) {
     return { ok: false, reason: "ambiguous" }
   }
 
-  // No routable per-email/per-brand credential: fall through to the shared
-  // connection exactly as today (root user or login alias, cases 1 & 2).
+  // Exactly one non-shared credential.
+  if (matches.length === 1) {
+    // …but if the same email is ALSO a genuine shared login, we cannot choose:
+    // fail closed rather than silently preferring the non-shared realm.
+    if (params.sharedMatch) {
+      return { ok: false, reason: "ambiguous" }
+    }
+    return { ok: true, kind: "resolved", connectionKey: matches[0].connectionKey, binding: matches[0] }
+  }
+
+  // No routable per-email/per-brand credential: the ordinary shared attempt
+  // (root user or login alias — cases 1 & 2 — and unknown emails, unchanged).
   if (params.configuredKeys.has("shared")) {
-    return { ok: true, connectionKey: "shared", binding: null }
+    return { ok: true, kind: "shared-default", connectionKey: "shared", binding: null }
   }
   return { ok: false, reason: "not-configured" }
 }

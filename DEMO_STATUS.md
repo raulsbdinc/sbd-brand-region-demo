@@ -25,12 +25,25 @@ are already seeded/linked in the tenant.
 
 ### How resolution works
 
-A submitted email + the deployment's `SITE_BRAND` resolve to **exactly one**
-allow-listed connection **key** server-side (`lib/credential-model.ts` +
-`lib/credential-resolver.ts`). Raw connection **names**/**ids** never cross to
-the browser. Resolution fails **closed**: no match or an ambiguous match falls
-back to the shared connection (or the existing neutral error), so the endpoints
-never become an existence/connection oracle.
+A submitted email + the deployment's resolved brand (`SITE_BRAND`, derived from
+the `NEXT_PUBLIC_BRAND` / `NEXT_PUBLIC_MARKET` env vars in `lib/site.ts`) resolve
+to **exactly one** allow-listed connection **key** server-side
+(`lib/credential-model.ts` + `lib/credential-resolver.ts`). Raw connection
+**names**/**ids** never cross to the browser. The resolver returns a
+**discriminated** result and fails **closed**:
+
+- **resolved** (a unique, brand-permitted, identity-backed non-shared
+  credential) → attempt **only** that realm.
+- **shared-default** (no non-shared match — root users, verified login aliases,
+  and unknown emails) → the ordinary shared attempt (cases 1 & 2, unchanged).
+- **ambiguous** — the email matches **more than one** credential (a real shared
+  login **and** a non-shared credential, or two non-shared credentials). This
+  fails closed with **no realm attempt at all**: sign-in returns the generic
+  401, public recovery sends **nothing** (it does **not** fall back to shared),
+  and passcode-start issues **no** challenge — each keeping its existing neutral
+  response shape. Ambiguity is **not** a shared fallback.
+
+So the endpoints never become an existence/connection oracle.
 
 - **shared** → root users and verified login aliases (cases 1 & 2), all sites.
 - **per-email** → a case-3 identity, on **all three** storefronts.
@@ -43,8 +56,11 @@ linked Auth0 identity on that connection.
 
 ### Environment contract
 
-Per deployment (existing, unchanged): `SITE_BRAND`, `AUTH0_DOMAIN`,
-`AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, and the Management grant.
+Per deployment (existing, unchanged): `NEXT_PUBLIC_BRAND` and
+`NEXT_PUBLIC_MARKET` (which `lib/site.ts` resolves into `SITE_BRAND` /
+`SITE_MARKET`), `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, and the
+Management grant. There is **no** `SITE_BRAND` env var — it is a derived
+constant.
 
 Connection **names** (the password-realm `realm`), server-side:
 
@@ -65,7 +81,7 @@ because connection identifiers must not reach the browser.
 
 ### Auth0 application / connection matrix (to be configured)
 
-| Storefront (`SITE_BRAND`) | Application | Connections it must enable |
+| Storefront (`NEXT_PUBLIC_BRAND`) | Application | Connections it must enable |
 | --- | --- | --- |
 | DeWalt France (`dewalt`) | DeWalt FR app | `shared`, `per-email`, `dewalt` |
 | DeWalt Germany (`dewalt`) | DeWalt DE app | `shared`, `per-email`, `dewalt` |

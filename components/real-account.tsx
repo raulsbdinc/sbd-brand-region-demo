@@ -50,6 +50,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { hasSharedPasswordCredential } from "@/lib/credential-model"
 import { buildAuthLoginUrl, startAuthRedirect } from "@/lib/auth0-connections"
 import {
   DOWNSTREAM_CATEGORY_LABELS,
@@ -1632,6 +1633,14 @@ function SecuritySection({
   const methods = live ? loginMethods.data?.methods ?? [] : demoMethods
   const total = methods.length
 
+  // The top-level primary reset resets the SHARED credential, so only show it
+  // when the loaded methods actually contain a real shared password credential
+  // (connectionKey shared, or an untagged primary password — the shared demo
+  // account). A case-3/4-only account has NO shared password, so it must reset
+  // through its per-row actions instead of this misleading top-level button. In
+  // demo mode the shared reset is preserved unchanged.
+  const hasSharedPassword = live ? hasSharedPasswordCredential(methods) : true
+
   async function removeMfa(id: string) {
     await fetch(`/api/account/mfa?id=${encodeURIComponent(id)}`, { method: "DELETE" })
     mfa.mutate()
@@ -1679,29 +1688,40 @@ function SecuritySection({
       }
     >
       <div className="space-y-4">
-        {/* Password */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <KeyRound className="size-4 text-muted-foreground" />
-            <div>
-              <p className="text-sm font-medium text-foreground">Password</p>
-              <p className="text-xs text-muted-foreground">
-                {connectionLabel === "Email & password"
-                  ? "Managed by Auth0"
-                  : "No password — you sign in with " + connectionLabel}
-              </p>
+        {/* Password — the top-level SHARED reset. Rendered only when the account
+            actually has a shared password credential; case-3/4-only accounts
+            reset through their per-row "Reset password" actions below instead. */}
+        {hasSharedPassword ? (
+          <>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <KeyRound className="size-4 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium text-foreground">Password</p>
+                  <p className="text-xs text-muted-foreground">
+                    {connectionLabel === "Email & password"
+                      ? "Managed by Auth0"
+                      : "No password — you sign in with " + connectionLabel}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pwBusyId !== null}
+                onClick={() => resetPassword()}
+              >
+                {pwBusyId === "primary" ? <Loader2 className="size-4 animate-spin" /> : null}
+                Reset password
+              </Button>
             </div>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pwBusyId !== null}
-            onClick={() => resetPassword()}
-          >
-            {pwBusyId === "primary" ? <Loader2 className="size-4 animate-spin" /> : null}
-            Reset password
-          </Button>
-        </div>
+            <Separator />
+          </>
+        ) : null}
+
+        {/* Reset feedback is GLOBAL: it also carries the result of the per-row
+            (case-3/4) individual resets, so it must render whether or not the
+            shared password row above is shown. */}
         {pwError ? <Note tone="error">{pwError}</Note> : null}
         {pwResult ? (
           pwResult.startsWith("http") ? (
@@ -1715,8 +1735,6 @@ function SecuritySection({
             <Note>{pwResult}</Note>
           )
         ) : null}
-
-        <Separator />
 
         {/* MFA */}
         <div>
@@ -1862,7 +1880,7 @@ function SecuritySection({
                           {m.label}
                         </span>
                         {m.brand ? (
-                          <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
                             {m.brand === "dewalt" ? "DeWalt" : m.brand === "stanley" ? "Stanley" : m.brand}
                           </span>
                         ) : null}
