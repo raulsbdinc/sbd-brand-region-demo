@@ -321,10 +321,20 @@ matching what `lib/claims.ts` already expected.
   `lastSignIn`. An empty array on the account's first site. Consumed by
   `extractOtherSites` in `lib/claims.ts` and rendered by
   `components/cross-brand-recognition.tsx` on the welcome route.
-- `https://sbd.com/muid` — the Auth0 `user_id`.
-- `https://sbd.com/idp` — the connection name, `sbd-eu`.
-- `https://sbd.com/auth_method` — a friendly label derived from the login method,
-  currently `Password` for the embedded password path.
+- `https://sbd.com/muid` — `app_metadata.muid` when present, otherwise a fallback
+  to the trusted Auth0 `user_id` so live case-1/2 users keep an identity context.
+- `https://sbd.com/idp` — the connection *strategy* from `event.connection.strategy`
+  (e.g. `auth0` for the shared database connection).
+- `https://sbd.com/auth_method` — the authentication method name from the login
+  (e.g. `pwd` for the embedded password path).
+
+  The Action writes `app_metadata.sbd_sites` with the Actions user API
+  (`api.user.setAppMetadata`), which persists at the end of the login
+  transaction — **not** the Management API. It never searches users, links
+  identities, calls `setPrimaryUser`, or infers account ownership from a matching
+  email, so it needs **no** `MGMT_*` Action secrets. It also overrides the
+  outgoing ID-token `email`/`email_verified` from a valid `app_metadata.primary_email`
+  (see the account centre), leaving `sub` unchanged.
 
 The three `sbd.com` claims exist so the existing "SBD identity context" card on
 the welcome page populates instead of showing its "Action not deployed"
