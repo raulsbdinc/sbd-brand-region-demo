@@ -10,6 +10,7 @@ import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
 import { isAuthConfigured } from "@/lib/auth0"
 import { requestPasswordResetEmail } from "@/lib/auth0-management"
 import { resolveSigninCredential } from "@/lib/credential-resolver"
+import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
 
 const genericResponse = (configured: boolean) =>
   NextResponse.json({ ok: true, configured, message: GENERIC_RECOVERY_MESSAGE })
@@ -39,14 +40,17 @@ export async function POST(request: Request) {
   // response never varies, so account existence and which connection matched
   // remain indistinguishable.
   //
-  // AMBIGUOUS is the one case we must NOT paper over with a shared fallback:
-  // sending a shared reset for an email that also has a non-shared credential
-  // would leak the shared credential's existence and could reset the wrong
-  // realm. On ambiguity we send NOTHING but keep the identical neutral response.
+  // AMBIGUOUS / UNAVAILABLE are the cases we must NOT paper over with a shared
+  // fallback: sending a shared reset for an email that also has (or might have —
+  // when a lookup failed) a non-shared credential would leak the shared
+  // credential's existence and could reset the wrong realm. We send NOTHING but
+  // keep the identical neutral response. A resolver error also fails closed.
   const resolution = await resolveSigninCredential(email).catch(
-    () => ({ kind: "shared-default" }) as const,
+    () => ({ kind: "unavailable" }) as const,
   )
-  if (resolution.kind === "ambiguous") return genericResponse(true)
+  if (!signinResolutionPermitsRealmOperation(resolution.kind)) {
+    return genericResponse(true)
+  }
 
   const connectionName: string =
     resolution.kind === "resolved" ? resolution.connectionName : PASSWORD_CONNECTION

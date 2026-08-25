@@ -10,7 +10,10 @@ import {
   connectionNameForKey,
   resolveSigninCredential,
 } from "@/lib/credential-resolver"
-import type { ConnectionKey } from "@/lib/credential-model"
+import {
+  signinResolutionPermitsRealmOperation,
+  type ConnectionKey,
+} from "@/lib/credential-model"
 
 export const runtime = "nodejs"
 
@@ -212,10 +215,13 @@ export async function POST(request: NextRequest) {
   // "shared-default", so cases 1 & 2 still work with no Management call.
   const resolution = await resolveSigninCredential(email)
 
-  // AMBIGUOUS — the email collides across credentials (e.g. a real shared login
-  // AND a non-shared credential, or two non-shared credentials). Fail CLOSED:
-  // attempt NO realm and collapse to the same generic 401 as every other cause.
-  if (resolution.kind === "ambiguous") {
+  // FAIL CLOSED — attempt NO realm and collapse to the same generic 401 as every
+  // other cause when the resolution does not permit a realm operation:
+  //   • "ambiguous"   — the email collides across credentials (a real shared
+  //                     login AND a non-shared credential, or two non-shared).
+  //   • "unavailable" — a Management lookup failed, so an incomplete candidate
+  //                     set cannot prove a collision/case-3/4 is absent.
+  if (!signinResolutionPermitsRealmOperation(resolution.kind)) {
     return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
   }
 

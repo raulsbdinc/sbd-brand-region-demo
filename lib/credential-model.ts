@@ -437,6 +437,16 @@ export type CredentialResolution =
   | { ok: true; kind: "shared-default"; connectionKey: "shared"; binding: null }
   | { ok: false; reason: "ambiguous" | "not-configured" }
 
+/**
+ * ONE candidate Auth0 record: the bindings it owns (from ITS app_metadata) and
+ * the linked database identities it actually has. Ownership is scoped to this
+ * record — a binding here may only be validated by an identity here.
+ */
+export interface CandidateAccount {
+  bindings: CredentialBinding[]
+  identities: LinkedDbIdentity[]
+}
+
 export interface ResolveCredentialParams {
   email: string
   siteBrand: BrandId
@@ -456,41 +466,61 @@ export interface ResolveCredentialParams {
   sharedMatch: boolean
 }
 
+export interface ResolveCredentialFromCandidatesParams {
+  email: string
+  siteBrand: BrandId
+  /** Candidate Auth0 records; ownership is preserved per-record (no flattening). */
+  candidates: CandidateAccount[]
+  configuredKeys: ReadonlySet<ConnectionKey>
+  sharedMatch: boolean
+}
+
 /**
  * Resolve exactly ONE database connection key for a submitted email on this
- * storefront, failing CLOSED on anything ambiguous.
+ * storefront across a set of CANDIDATE accounts, failing CLOSED on anything
+ * ambiguous.
  *
- * Rules:
+ * ACCOUNT OWNERSHIP IS PRESERVED: a non-shared binding is only ever validated
+ * against identities on the SAME candidate record that owns it. We must NOT let
+ * a binding from account A be "backed" by an identity that exists only on
+ * account B — that would let one customer's metadata borrow another's identity.
+ *
+ * Rules (applied to the same-account-validated matches across all candidates):
  *   • A non-shared binding counts only when it is allow-listed, its connection
  *     is configured, it is permitted on SITE_BRAND, AND it is backed by a real
- *     linked identity on that connection (metadata validated against identities).
- *   • Exactly one such binding AND no genuine shared match → that connection.
- *   • More than one non-shared match → AMBIGUOUS, fail closed.
- *   • Exactly one non-shared match BUT a genuine shared login for the same
- *     email → AMBIGUOUS, fail closed (never prefer shared or non-shared).
- *   • No non-shared match → shared-default (root users and login aliases —
- *     cases 1 & 2, unchanged, and unknown emails) when shared is configured;
- *     otherwise not-configured.
+ *     linked identity ON ITS OWN account.
+ *   • Exactly one such match AND no genuine shared match → that connection.
+ *   • More than one distinct match → AMBIGUOUS, fail closed.
+ *   • Exactly one match BUT a genuine shared login for the same email →
+ *     AMBIGUOUS, fail closed (never prefer shared or non-shared).
+ *   • No match → shared-default (root users and login aliases — cases 1 & 2,
+ *     unchanged, and unknown emails) when shared is configured; otherwise
+ *     not-configured.
  */
-export function resolveCredential(params: ResolveCredentialParams): CredentialResolution {
+export function resolveCredentialFromCandidates(
+  params: ResolveCredentialFromCandidatesParams,
+): CredentialResolution {
   const email = normalizeEmail(params.email)
 
   const matches: CredentialBinding[] = []
   const seen = new Set<string>()
-  for (const b of params.bindings) {
-    if (normalizeEmail(b.email) !== email) continue
-    if (!isConnectionKey(b.connectionKey)) continue
-    if (b.connectionKey === "shared") continue // shared is the default, below
-    if (!params.configuredKeys.has(b.connectionKey)) continue
-    if (!isBrandAllowed(b.connectionKey, params.siteBrand)) continue
-    const backed = params.identities.some(
-      (i) => i.connectionKey === b.connectionKey && i.userId === b.auth0UserId,
-    )
-    if (!backed) continue
-    const dedupeKey = `${b.connectionKey}|${b.auth0UserId}`
-    if (seen.has(dedupeKey)) continue
-    seen.add(dedupeKey)
-    matches.push(b)
+  for (const account of params.candidates) {
+    for (const b of account.bindings) {
+      if (normalizeEmail(b.email) !== email) continue
+      if (!isConnectionKey(b.connectionKey)) continue
+      if (b.connectionKey === "shared") continue // shared is the default, below
+      if (!params.configuredKeys.has(b.connectionKey)) continue
+      if (!isBrandAllowed(b.connectionKey, params.siteBrand)) continue
+      // SAME-ACCOUNT validation: the backing identity must be on THIS record.
+      const backed = account.identities.some(
+        (i) => i.connectionKey === b.connectionKey && i.userId === b.auth0UserId,
+      )
+      if (!backed) continue
+      const dedupeKey = `${b.connectionKey}|${b.auth0UserId}`
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+      matches.push(b)
+    }
   }
 
   // Two or more distinct non-shared credentials → ambiguous.
@@ -514,6 +544,48 @@ export function resolveCredential(params: ResolveCredentialParams): CredentialRe
     return { ok: true, kind: "shared-default", connectionKey: "shared", binding: null }
   }
   return { ok: false, reason: "not-configured" }
+}
+
+/**
+ * Single-account convenience wrapper around {@link resolveCredentialFromCandidates}.
+ * The supplied bindings + identities are treated as ONE candidate record, so
+ * ownership is trivially preserved. Prefer the candidates form when more than
+ * one Auth0 record is in play.
+ */
+export function resolveCredential(params: ResolveCredentialParams): CredentialResolution {
+  return resolveCredentialFromCandidates({
+    email: params.email,
+    siteBrand: params.siteBrand,
+    candidates: [{ bindings: params.bindings, identities: params.identities }],
+    configuredKeys: params.configuredKeys,
+    sharedMatch: params.sharedMatch,
+  })
+}
+
+// --- Sign-in realm decision (shared by server callers, pure + testable) -----
+/**
+ * The outcome kinds a sign-in resolution can take once the server bridge has
+ * consulted Auth0. `unavailable` means the candidate set could not be fully
+ * gathered (a Management lookup/search failed while Management IS configured),
+ * so absence of a case-3/4 credential or a collision cannot be proven — it must
+ * fail closed exactly like `ambiguous`.
+ */
+export type SigninRealmDecisionKind =
+  | "resolved"
+  | "shared-default"
+  | "ambiguous"
+  | "unavailable"
+
+/**
+ * Whether a sign-in resolution permits ANY realm operation (a password
+ * exchange, a passcode challenge, or a recovery reset). Only a positively
+ * resolved non-shared credential or the ordinary shared-default attempt do;
+ * `ambiguous` and `unavailable` both fail closed with NO realm operation.
+ */
+export function signinResolutionPermitsRealmOperation(
+  kind: SigninRealmDecisionKind,
+): boolean {
+  return kind === "resolved" || kind === "shared-default"
 }
 
 // --- Reset-binding validation (authenticated password reset) ----------------

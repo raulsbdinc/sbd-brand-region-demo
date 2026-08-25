@@ -17,6 +17,7 @@ import {
   startDatabaseChallenge,
 } from "@/lib/auth0-passcode-signin"
 import { resolveSigninCredential } from "@/lib/credential-resolver"
+import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
 import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
@@ -48,14 +49,14 @@ export async function POST(request: NextRequest) {
   //
   // First ask the credential resolver whether this email + SITE_BRAND maps to a
   // per-email (case 3) or per-brand (case 4) database connection, is ambiguous,
-  // or should take the ordinary shared path. A "resolved" non-shared credential
-  // makes the passcode a DATABASE challenge on THAT connection; "shared-default"
-  // falls back to the original resolver (shared database vs passwordless) so
-  // cases 1 & 2 are completely unchanged.
+  // is unavailable, or should take the ordinary shared path. A "resolved"
+  // non-shared credential makes the passcode a DATABASE challenge on THAT
+  // connection; "shared-default" falls back to the original resolver (shared
+  // database vs passwordless) so cases 1 & 2 are completely unchanged.
   const resolution = await resolveSigninCredential(email).catch(
-    () => ({ kind: "shared-default" }) as const,
+    () => ({ kind: "unavailable" }) as const,
   )
-  const ambiguous = resolution.kind === "ambiguous"
+  const permitsChallenge = signinResolutionPermitsRealmOperation(resolution.kind)
 
   let flow = await resolvePasscodeFlow(email)
   let dbConnectionName: string | undefined
@@ -65,10 +66,11 @@ export async function POST(request: NextRequest) {
   }
 
   let authSession: string | undefined
-  // AMBIGUOUS — fail CLOSED: issue NO challenge on ANY realm. We still set the
-  // handoff (with no auth_session) below so the verify step fails with the same
-  // generic message, keeping the response shape identical and non-revealing.
-  if (!ambiguous) {
+  // AMBIGUOUS or UNAVAILABLE — fail CLOSED: issue NO challenge on ANY realm. We
+  // still set the handoff (with no auth_session) below so the verify step fails
+  // with the same generic message, keeping the response shape identical and
+  // non-revealing.
+  if (permitsChallenge) {
     try {
       if (flow === "database") {
         authSession = await startDatabaseChallenge(creds, email, dbConnectionName)

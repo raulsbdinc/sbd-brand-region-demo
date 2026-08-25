@@ -19,12 +19,15 @@ import {
   resolveConnectionIds,
   resolveConnectionNames,
   resolveCredential,
+  resolveCredentialFromCandidates,
   resolveResetBinding,
   sanitizeCredentialBinding,
   sanitizeCredentialBindings,
+  signinResolutionPermitsRealmOperation,
   summarizePasswordModel,
   summarizePasswordModelFromMethods,
   SHARED_CONNECTION_FALLBACK,
+  type CandidateAccount,
   type ConnectionKey,
   type CredentialBinding,
   type LinkedDbIdentity,
@@ -578,4 +581,197 @@ test("meta: every connection key has metadata and brand keys carry a brand", () 
 test("normalizeEmail lowercases and trims, tolerating non-strings", () => {
   assert.equal(normalizeEmail("  A@B.com "), "a@b.com")
   assert.equal(normalizeEmail(123 as unknown), "")
+})
+
+// --- 13. Account ownership: no cross-account binding/identity matching ------
+// The email under test on all of these.
+const OWN_EMAIL = "owner@example.com"
+
+function candidate(
+  bindings: CredentialBinding[],
+  identities: LinkedDbIdentity[],
+): CandidateAccount {
+  return { bindings, identities }
+}
+
+test("ownership: a binding on account A is NOT backed by an identity that exists only on account B", () => {
+  // Account A OWNS the per-email binding but has NO backing identity of its own.
+  const accountA = candidate(
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "per-email",
+        auth0UserId: "auth0|per-email-1",
+        useCase: "per-email-password",
+      }),
+    ],
+    [identity("shared", "auth0|shared-a")], // only a shared identity, no per-email
+  )
+  // Account B HAS the matching per-email identity, but owns NO such binding.
+  const accountB = candidate(
+    [],
+    [identity("per-email", "auth0|per-email-1")],
+  )
+
+  const res = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [accountA, accountB],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+
+  // The binding must NOT be validated by B's identity → no non-shared match →
+  // shared-default (NOT "resolved").
+  assert.equal(res.ok, true)
+  assert.equal(res.ok && res.kind, "shared-default")
+})
+
+test("ownership: same flattened data WOULD have cross-matched — proving the per-account guard matters", () => {
+  // Sanity check: if we (incorrectly) flattened A's binding with B's identity,
+  // the single-account resolver resolves. This documents the exact bug the
+  // per-account form prevents.
+  const flattenedResolves = resolveCredential({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    bindings: [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "per-email",
+        auth0UserId: "auth0|per-email-1",
+        useCase: "per-email-password",
+      }),
+    ],
+    identities: [identity("per-email", "auth0|per-email-1")],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.equal(flattenedResolves.ok && flattenedResolves.kind, "resolved")
+})
+
+test("ownership: a binding backed by an identity on ITS OWN account resolves", () => {
+  const account = candidate(
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "dewalt",
+        auth0UserId: "auth0|dw-1",
+        useCase: "per-brand-password",
+        brand: "dewalt",
+      }),
+    ],
+    [identity("dewalt", "auth0|dw-1")],
+  )
+  const res = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.equal(res.ok && res.kind, "resolved")
+  assert.equal(res.ok && res.kind === "resolved" && res.connectionKey, "dewalt")
+})
+
+test("ownership: two independently valid same-owner candidates remain AMBIGUOUS", () => {
+  // Two DIFFERENT accounts, each with its OWN valid non-shared credential for
+  // the same email (e.g. a per-email account and a dewalt account). Each is
+  // same-account-validated, but together they are a collision → ambiguous.
+  const perEmailAccount = candidate(
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "per-email",
+        auth0UserId: "auth0|pe-1",
+        useCase: "per-email-password",
+      }),
+    ],
+    [identity("per-email", "auth0|pe-1")],
+  )
+  const dewaltAccount = candidate(
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "dewalt",
+        auth0UserId: "auth0|dw-1",
+        useCase: "per-brand-password",
+        brand: "dewalt",
+      }),
+    ],
+    [identity("dewalt", "auth0|dw-1")],
+  )
+  const res = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [perEmailAccount, dewaltAccount],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.equal(res.ok, false)
+  assert.equal(res.ok === false && res.reason, "ambiguous")
+})
+
+test("ownership: a valid non-shared match PLUS a genuine shared match is AMBIGUOUS", () => {
+  const account = candidate(
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "per-email",
+        auth0UserId: "auth0|pe-1",
+        useCase: "per-email-password",
+      }),
+    ],
+    [identity("per-email", "auth0|pe-1")],
+  )
+  const res = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: true, // a genuine shared login for the same email
+  })
+  assert.equal(res.ok, false)
+  assert.equal(res.ok === false && res.reason, "ambiguous")
+})
+
+test("ownership: no candidates at all → shared-default (unknown email)", () => {
+  const res = resolveCredentialFromCandidates({
+    email: "nobody@example.com",
+    siteBrand: "dewalt",
+    candidates: [],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.equal(res.ok && res.kind, "shared-default")
+})
+
+test("ownership: resolveCredential delegates as a single candidate (same-account) — unchanged", () => {
+  const res = resolveCredential({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    bindings: [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "dewalt",
+        auth0UserId: "auth0|dw-1",
+        useCase: "per-brand-password",
+        brand: "dewalt",
+      }),
+    ],
+    identities: [identity("dewalt", "auth0|dw-1")],
+    configuredKeys: ALL_KEYS,
+    sharedMatch: false,
+  })
+  assert.equal(res.ok && res.kind === "resolved" && res.connectionKey, "dewalt")
+})
+
+// --- 14. Sign-in realm decision helper (unavailable fails closed) -----------
+test("decision: resolved and shared-default PERMIT a realm operation", () => {
+  assert.equal(signinResolutionPermitsRealmOperation("resolved"), true)
+  assert.equal(signinResolutionPermitsRealmOperation("shared-default"), true)
+})
+
+test("decision: ambiguous and unavailable FORBID any realm operation (no exchange/challenge/reset)", () => {
+  assert.equal(signinResolutionPermitsRealmOperation("ambiguous"), false)
+  assert.equal(signinResolutionPermitsRealmOperation("unavailable"), false)
 })

@@ -18,9 +18,10 @@ import {
   normalizeEmail,
   resolveConnectionIds,
   resolveConnectionNames,
-  resolveCredential,
+  resolveCredentialFromCandidates,
   resolveResetBinding,
   sanitizeCredentialBindings,
+  type CandidateAccount,
   type ConnectionKey,
   type CredentialBinding,
   type LinkedDbIdentity,
@@ -67,17 +68,27 @@ function luceneEscapePhrase(value: string): string {
 /**
  * Gather candidate account records for a submitted email: the direct root-email
  * lookup PLUS a search over the fields we control (persisted login aliases and
- * seeded credential-binding emails). Mirrors the alias resolver's defensive
- * approach; returns [] and never throws on any lookup failure.
+ * seeded credential-binding emails).
+ *
+ * Returns `{ ok }` alongside the candidates. `ok` is false when EITHER lookup
+ * failed — an incomplete candidate set cannot prove that a case-3/4 credential
+ * or a collision is absent, so the caller must fail CLOSED (never treat a failed
+ * lookup as "no non-shared match"). Never throws.
  */
-async function gatherCandidates(email: string): Promise<Auth0User[]> {
+async function gatherCandidates(
+  email: string,
+): Promise<{ candidates: Auth0User[]; ok: boolean }> {
   const typed = email.toLowerCase()
   const q = luceneEscapePhrase(typed)
   const query = `app_metadata.login_alias_emails:"${q}" OR app_metadata.credential_bindings.email:"${q}" OR email:"${q}"`
-  const [byEmail, bySearch] = await Promise.all([
-    getUsersByEmail(typed).catch(() => [] as Auth0User[]),
-    searchUsers(query).catch(() => [] as Auth0User[]),
+  const [byEmailRes, bySearchRes] = await Promise.allSettled([
+    getUsersByEmail(typed),
+    searchUsers(query),
   ])
+  const ok =
+    byEmailRes.status === "fulfilled" && bySearchRes.status === "fulfilled"
+  const byEmail = byEmailRes.status === "fulfilled" ? byEmailRes.value : []
+  const bySearch = bySearchRes.status === "fulfilled" ? bySearchRes.value : []
   const seen = new Set<string>()
   const out: Auth0User[] = []
   for (const u of [...byEmail, ...bySearch]) {
@@ -85,7 +96,7 @@ async function gatherCandidates(email: string): Promise<Auth0User[]> {
     seen.add(u.user_id)
     out.push(u)
   }
-  return out
+  return { candidates: out, ok }
 }
 
 /**
@@ -130,8 +141,8 @@ function computeSharedMatch(
 }
 
 // Discriminated sign-in resolution so callers can distinguish a resolved
-// non-shared realm, a shared-default attempt, and an ambiguous email that must
-// NOT trigger any realm attempt.
+// non-shared realm, a shared-default attempt, an ambiguous email, and an
+// unavailable lookup — the last two BOTH fail closed with no realm attempt.
 export type SigninCredentialResolution =
   | {
       kind: "resolved"
@@ -141,6 +152,7 @@ export type SigninCredentialResolution =
     }
   | { kind: "shared-default" }
   | { kind: "ambiguous" }
+  | { kind: "unavailable" }
 
 /**
  * Resolve the database connection to authenticate a submitted email against on
@@ -150,9 +162,17 @@ export type SigninCredentialResolution =
  *                        unknown emails — a neutral shared attempt is fine).
  *   • "ambiguous"      → the email collides across credentials; the caller MUST
  *                        fail closed and attempt NO realm.
+ *   • "unavailable"    → a Management lookup failed while Management is
+ *                        configured, so the candidate set is incomplete and
+ *                        absence of a collision cannot be proven; the caller
+ *                        MUST fail closed and attempt NO realm.
  * Management-not-configured collapses to "shared-default" so cases 1 & 2 keep
  * working with no Management API. `siteBrand` defaults to this deployment's
  * brand and is overridable only for tests/tooling.
+ *
+ * ACCOUNT OWNERSHIP: candidate records are passed to the pure resolver WITHOUT
+ * flattening, so a binding on one account can only be validated by an identity
+ * on that SAME account.
  */
 export async function resolveSigninCredential(
   email: string,
@@ -161,23 +181,27 @@ export async function resolveSigninCredential(
   if (!isManagementConfigured()) return { kind: "shared-default" }
 
   const normalized = normalizeEmail(email)
-  const candidates = await gatherCandidates(email)
-  const bindings: CredentialBinding[] = []
-  const identities: LinkedDbIdentity[] = []
-  for (const user of candidates) {
-    bindings.push(...readBindings(user))
-    identities.push(...mapIdentities(user))
-  }
+  const { candidates: users, ok } = await gatherCandidates(email)
+
+  // Incomplete candidate set (a lookup failed while Management is configured):
+  // we cannot prove a case-3/4 credential or collision is absent → fail closed.
+  if (!ok) return { kind: "unavailable" }
+
+  // Preserve per-account ownership: each Auth0 record's bindings are paired ONLY
+  // with that same record's identities — never cross-matched.
+  const candidates: CandidateAccount[] = users.map((user) => ({
+    bindings: readBindings(user),
+    identities: mapIdentities(user),
+  }))
 
   const names = resolveConnectionNames()
   const configuredKeys = configuredConnectionKeys(names)
-  const sharedMatch = computeSharedMatch(candidates, normalized, names.shared)
+  const sharedMatch = computeSharedMatch(users, normalized, names.shared)
 
-  const resolution = resolveCredential({
+  const resolution = resolveCredentialFromCandidates({
     email,
     siteBrand,
-    bindings,
-    identities,
+    candidates,
     configuredKeys,
     sharedMatch,
   })
