@@ -214,6 +214,14 @@ export function appendCredentialBinding(
 
 /** What the /profile "Add password" dialog needs to render its two outcomes. */
 export interface AddPasswordAvailability {
+  /**
+   * The current deployment's brand (SITE_BRAND), ALWAYS present and concrete
+   * (e.g. "dewalt" / "stanley") — even when `thisBrand.available` is false
+   * because that credential already exists. The UI uses this so Add-password
+   * copy can always name the brand concretely and never fall back to a vague
+   * "this brand" phrase on these deployments.
+   */
+  deploymentBrand: BrandId
   anotherEmail: {
     /** Verified emails that can still receive their own password. */
     eligibleEmails: string[]
@@ -248,6 +256,7 @@ export function computeAddPasswordAvailability(
   const brandResolution = resolveProvisioning("this-brand", null, context)
 
   return {
+    deploymentBrand: context.siteBrand,
     anotherEmail: {
       eligibleEmails,
       available:

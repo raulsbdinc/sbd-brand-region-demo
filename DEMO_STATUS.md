@@ -144,6 +144,16 @@ rejected as a limitation.
     `<li>` children** of the surrounding `<ul>` (each `MethodRow` is an `<li>`,
     and the Add-password action is its own `<li>`) — no `<li>` nested in `<li>`
     and no wrapping `<div>`.
+  - **Add vs completed state**: a pure `addPasswordDisplayState()`
+    (`lib/password-credential-labels.ts`, unit-tested) decides the add area.
+    When **both** outcomes are already set up it renders a concise completed row
+    ("All available passwords are already set up.") instead of an Add trigger
+    whose dialog would only offer disabled choices.
+  - **Concrete deployment brand**: `computeAddPasswordAvailability` now always
+    returns `deploymentBrand` (the `SITE_BRAND`), so Add-password copy names the
+    brand **concretely as DeWalt/Stanley even when the this-brand option is
+    unavailable** because that credential already exists — it never falls back
+    to the vague "this brand" phrase on these deployments.
   - **No internal vocabulary** ("case 3/4", "per-email", connection names,
     bindings, Auth0) ever reaches the screen.
 - **Forgot password**: the sign-in drawer's "Forgot password?" now navigates to

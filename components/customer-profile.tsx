@@ -57,7 +57,7 @@ import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
 import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
 import {
-  brandDisplay,
+  addPasswordDisplayState,
   passwordCredentialLabel,
   passwordCredentialLine,
 } from "@/lib/password-credential-labels"
@@ -2548,6 +2548,7 @@ interface PasswordMethodView {
 }
 
 interface AddAvailability {
+  deploymentBrand?: string
   anotherEmail: { eligibleEmails: string[]; available: boolean }
   thisBrand: { available: boolean; brand?: string; email?: string; reason?: string }
 }
@@ -3008,9 +3009,11 @@ function PasswordCredentials({ live }: { live: boolean }) {
   const passwords = (methodsData?.methods ?? []).filter((m) => m.kind === "password")
   const availability = availData?.availability
 
-  // The DEPLOYMENT brand for the "Add — this brand" option only, from the server
-  // availability answer. (Per-credential rows derive their OWN brand instead.)
-  const addBrandName = brandDisplay(availability?.thisBrand.brand)
+  // Decide the Add-password area's state from the server availability. When
+  // BOTH outcomes are already set up we show a concise completed row instead of
+  // an Add trigger whose dialog would only offer disabled choices. The brand is
+  // always resolved concretely (DeWalt/Stanley) — never the vague "this brand".
+  const addState = availability ? addPasswordDisplayState(availability) : null
 
   function afterCreate() {
     // Refresh both the credential list and what the dialog may still offer.
@@ -3031,16 +3034,22 @@ function PasswordCredentials({ live }: { live: boolean }) {
           <PasswordCredentialRow key={m.key} method={m} live={live} />
         ))
       )}
-      {availability ? (
+      {addState?.kind === "add" ? (
         <li className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Add a separate password for another verified email or just for {addBrandName} sites.
+            Add a separate password for another verified email or just for{" "}
+            {addState.deploymentBrandName} sites.
           </p>
           <AddPasswordDialog
-            availability={availability}
-            brandName={addBrandName}
+            availability={availability!}
+            brandName={addState.deploymentBrandName}
             onCreated={afterCreate}
           />
+        </li>
+      ) : addState?.kind === "complete" ? (
+        <li className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-3">
+          <ShieldCheck className="size-4 text-primary" aria-hidden />
+          <p className="text-xs leading-relaxed text-muted-foreground">{addState.message}</p>
         </li>
       ) : null}
     </>

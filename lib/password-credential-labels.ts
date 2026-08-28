@@ -50,3 +50,42 @@ export function passwordCredentialLine(m: PasswordCredentialView): string {
   }
   return "Works with your verified account emails across DeWalt and Stanley sites."
 }
+
+// ADD-PASSWORD DISPLAY STATE
+// ==========================
+// Decides whether the /profile "Add password" area should present the ADD
+// trigger (at least one outcome is still available) or a concise COMPLETED-state
+// row (both outcomes already set up). Keeping this pure means we never render an
+// "Add password" dialog whose only choices are disabled.
+
+/** The minimal availability shape this helper reads — structural, decoupled. */
+export interface AddPasswordAvailabilityView {
+  anotherEmail: { available: boolean }
+  thisBrand: { available: boolean }
+  /** Concrete deployment brand id (e.g. "dewalt" / "stanley"). */
+  deploymentBrand?: string
+}
+
+export type AddPasswordDisplayState =
+  | { kind: "add"; deploymentBrandName: string }
+  | { kind: "complete"; message: string }
+
+/** Shown when every add-password outcome is already set up. */
+export const ADD_PASSWORD_COMPLETE_MESSAGE = "All available passwords are already set up."
+
+/**
+ * Decide the Add-password area's display state. When NOTHING can be added, we
+ * return the completed state (no dialog with only-disabled choices). Otherwise
+ * we return the add state with the deployment brand resolved CONCRETELY — this
+ * always names DeWalt/Stanley and never the vague "this brand" fallback, even
+ * when the this-brand option itself is unavailable because it already exists.
+ */
+export function addPasswordDisplayState(
+  a: AddPasswordAvailabilityView,
+): AddPasswordDisplayState {
+  const anythingAvailable = a.anotherEmail.available || a.thisBrand.available
+  if (!anythingAvailable) {
+    return { kind: "complete", message: ADD_PASSWORD_COMPLETE_MESSAGE }
+  }
+  return { kind: "add", deploymentBrandName: brandDisplay(a.deploymentBrand) }
+}

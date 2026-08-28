@@ -276,6 +276,14 @@ test("availability: fresh Model 1/2 account offers BOTH another-email and this-b
   assert.equal(a.thisBrand.email, "primary@example.com")
 })
 
+test("availability always carries the concrete deployment brand (SITE_BRAND)", () => {
+  assert.equal(computeAddPasswordAvailability(ctx()).deploymentBrand, "dewalt")
+  assert.equal(
+    computeAddPasswordAvailability(ctx({ siteBrand: "stanley" })).deploymentBrand,
+    "stanley",
+  )
+})
+
 test("availability: emails that already have a password drop out of the eligible list", () => {
   const a = computeAddPasswordAvailability(
     ctx({ existingBindings: [perEmailBinding("alt@example.com")] }),
