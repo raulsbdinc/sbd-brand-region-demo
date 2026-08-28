@@ -92,20 +92,26 @@ async function gatherCandidates(
 }
 
 /**
- * Whether the submitted email is a GENUINE shared-connection login: the root
- * email or a persisted login alias (or a coherent shared binding email) of a
- * candidate account that ACTUALLY holds a shared-connection identity. This is
- * the "validate the shared match against the actual shared identity" step — a
- * login_alias or root email only counts when the account truly has a shared
- * identity, so a stray alias can never fabricate a shared match.
+ * The set of candidate account ids (`user_id`) for which the submitted email is
+ * a GENUINE shared-connection login: the root email or a persisted login alias
+ * (or a coherent shared binding email) of a candidate account that ACTUALLY
+ * holds a shared-connection identity. This is the "validate the shared match
+ * against the actual shared identity" step — a login_alias or root email only
+ * counts when the account truly has a shared identity, so a stray alias can
+ * never fabricate a shared match.
+ *
+ * Returning the OWNING account ids (not just a boolean) lets the pure resolver
+ * distinguish a same-account scoped override from a cross-account collision.
  */
-function computeSharedMatch(
+function computeSharedMatchAccountIds(
   candidates: Auth0User[],
   email: string,
   sharedConnectionName: string | undefined,
-): boolean {
-  if (!sharedConnectionName) return false
+): Set<string> {
+  const ids = new Set<string>()
+  if (!sharedConnectionName) return ids
   for (const user of candidates) {
+    if (!user.user_id) continue
     const hasSharedIdentity = (user.identities ?? []).some(
       (id) => id.provider === "auth0" && id.connection === sharedConnectionName,
     )
@@ -126,10 +132,10 @@ function computeSharedMatch(
       aliasList.includes(email) ||
       sharedBindingEmails.includes(email)
     ) {
-      return true
+      ids.add(user.user_id)
     }
   }
-  return false
+  return ids
 }
 
 // Discriminated sign-in resolution so callers can distinguish a resolved
@@ -179,23 +185,27 @@ export async function resolveSigninCredential(
   // we cannot prove a case-3/4 credential or collision is absent → fail closed.
   if (!ok) return { kind: "unavailable" }
 
-  // Preserve per-account ownership: each Auth0 record's bindings are paired ONLY
-  // with that same record's identities — never cross-matched.
-  const candidates: CandidateAccount[] = users.map((user) => ({
-    bindings: readBindings(user),
-    identities: mapIdentities(user),
-  }))
-
   const names = resolveConnectionNames()
   const configuredKeys = configuredConnectionKeys(names)
-  const sharedMatch = computeSharedMatch(users, normalized, names.shared)
+  const sharedMatchIds = computeSharedMatchAccountIds(users, normalized, names.shared)
+
+  // Preserve per-account ownership: each Auth0 record's bindings are paired ONLY
+  // with that same record's identities — never cross-matched. `accountId` +
+  // per-account `sharedMatch` let the pure resolver tell a same-account scoped
+  // override (the normal Model 1/2 → scoped transition) apart from a real
+  // cross-account collision.
+  const candidates: CandidateAccount[] = users.map((user) => ({
+    accountId: user.user_id ?? "",
+    bindings: readBindings(user),
+    identities: mapIdentities(user),
+    sharedMatch: user.user_id ? sharedMatchIds.has(user.user_id) : false,
+  }))
 
   const resolution = resolveCredentialFromCandidates({
     email,
     siteBrand,
     candidates,
     configuredKeys,
-    sharedMatch,
   })
 
   // Fail CLOSED on ambiguity — never attempt any realm. Any other non-ok

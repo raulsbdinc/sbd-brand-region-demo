@@ -441,10 +441,19 @@ export type CredentialResolution =
  * ONE candidate Auth0 record: the bindings it owns (from ITS app_metadata) and
  * the linked database identities it actually has. Ownership is scoped to this
  * record — a binding here may only be validated by an identity here.
+ *
+ * `accountId` is the opaque owner key (the Auth0 primary `user_id`). It lets the
+ * resolver tell a SAME-account shared+scoped arrangement (an intentional scoped
+ * credential the customer provisioned on their OWN account) apart from a
+ * CROSS-account collision (a different person's account matching the same
+ * email). `sharedMatch` records whether THIS account is a genuine
+ * shared-connection login for the submitted email.
  */
 export interface CandidateAccount {
+  accountId: string
   bindings: CredentialBinding[]
   identities: LinkedDbIdentity[]
+  sharedMatch?: boolean
 }
 
 /**
@@ -505,13 +514,15 @@ export interface ResolveCredentialFromCandidatesParams {
   /** Candidate Auth0 records; ownership is preserved per-record (no flattening). */
   candidates: CandidateAccount[]
   configuredKeys: ReadonlySet<ConnectionKey>
-  sharedMatch: boolean
 }
+
+/** Synthetic owner id for the single-account {@link resolveCredential} wrapper. */
+const SINGLE_ACCOUNT_ID = "__single__"
 
 /**
  * Resolve exactly ONE database connection key for a submitted email on this
- * storefront across a set of CANDIDATE accounts, failing CLOSED on anything
- * ambiguous.
+ * storefront across a set of CANDIDATE accounts, failing CLOSED on any GENUINE
+ * ambiguity while intentionally honoring a customer's OWN scoped credential.
  *
  * ACCOUNT OWNERSHIP IS PRESERVED: a non-shared binding is only ever validated
  * against identities on the SAME candidate record that owns it. We must NOT let
@@ -522,12 +533,20 @@ export interface ResolveCredentialFromCandidatesParams {
  *   • A non-shared binding counts only when it is allow-listed, its connection
  *     is configured, it is permitted on SITE_BRAND, AND it is backed by a real
  *     linked identity ON ITS OWN account.
- *   • Exactly one such match AND no genuine shared match → that connection.
- *   • More than one distinct match → AMBIGUOUS, fail closed.
- *   • Exactly one match BUT a genuine shared login for the same email →
- *     AMBIGUOUS, fail closed (never prefer shared or non-shared).
- *   • No match → shared-default (root users and login aliases — cases 1 & 2,
- *     unchanged, and unknown emails) when shared is configured; otherwise
+ *   • More than one distinct scoped match → AMBIGUOUS, fail closed.
+ *   • Exactly one scoped match, owned by account A:
+ *       – if a genuine shared login exists on a DIFFERENT account B → AMBIGUOUS,
+ *         fail closed (a real cross-account collision — never guess whose it is);
+ *       – otherwise (no shared match, or the shared match is on A itself) →
+ *         RESOLVED to that scoped connection. This is the SAME-ACCOUNT OVERRIDE:
+ *         the customer intentionally gave this email (per-email) or this brand
+ *         (per-brand) its own password on their own account, so that scoped
+ *         credential wins for its allowed scope. Because scoped matches are
+ *         already filtered by `isBrandAllowed`, a brand credential only wins on
+ *         its own brand's sites; the shared password keeps working elsewhere and
+ *         for the account's other verified emails.
+ *   • No scoped match → shared-default (root users and login aliases — Models
+ *     1 & 2, unchanged, and unknown emails) when shared is configured; otherwise
  *     not-configured.
  */
 export function resolveCredentialFromCandidates(
@@ -535,9 +554,11 @@ export function resolveCredentialFromCandidates(
 ): CredentialResolution {
   const email = normalizeEmail(params.email)
 
-  const matches: CredentialBinding[] = []
+  const matches: { binding: CredentialBinding; accountId: string }[] = []
   const seen = new Set<string>()
+  const sharedAccountIds = new Set<string>()
   for (const account of params.candidates) {
+    if (account.sharedMatch) sharedAccountIds.add(account.accountId)
     for (const b of account.bindings) {
       if (normalizeEmail(b.email) !== email) continue
       if (!isConnectionKey(b.connectionKey)) continue
@@ -552,27 +573,29 @@ export function resolveCredentialFromCandidates(
       const dedupeKey = `${b.connectionKey}|${b.auth0UserId}`
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
-      matches.push(b)
+      matches.push({ binding: b, accountId: account.accountId })
     }
   }
 
-  // Two or more distinct non-shared credentials → ambiguous.
+  // Two or more distinct scoped credentials → ambiguous.
   if (matches.length > 1) {
     return { ok: false, reason: "ambiguous" }
   }
 
-  // Exactly one non-shared credential.
+  // Exactly one scoped credential.
   if (matches.length === 1) {
-    // …but if the same email is ALSO a genuine shared login, we cannot choose:
-    // fail closed rather than silently preferring the non-shared realm.
-    if (params.sharedMatch) {
-      return { ok: false, reason: "ambiguous" }
+    const owner = matches[0].accountId
+    // A genuine shared login on a DIFFERENT account is a real cross-account
+    // collision → fail closed. A shared login on the SAME account (the normal
+    // Model 1/2 → scoped transition) is an intentional override, not a clash.
+    for (const sharedId of sharedAccountIds) {
+      if (sharedId !== owner) return { ok: false, reason: "ambiguous" }
     }
-    return { ok: true, kind: "resolved", connectionKey: matches[0].connectionKey, binding: matches[0] }
+    return { ok: true, kind: "resolved", connectionKey: matches[0].binding.connectionKey, binding: matches[0].binding }
   }
 
   // No routable per-email/per-brand credential: the ordinary shared attempt
-  // (root user or login alias — cases 1 & 2 — and unknown emails, unchanged).
+  // (root user or login alias — Models 1 & 2 — and unknown emails, unchanged).
   if (params.configuredKeys.has("shared")) {
     return { ok: true, kind: "shared-default", connectionKey: "shared", binding: null }
   }
@@ -582,16 +605,23 @@ export function resolveCredentialFromCandidates(
 /**
  * Single-account convenience wrapper around {@link resolveCredentialFromCandidates}.
  * The supplied bindings + identities are treated as ONE candidate record, so
- * ownership is trivially preserved. Prefer the candidates form when more than
- * one Auth0 record is in play.
+ * ownership is trivially preserved and a `sharedMatch` here is by definition a
+ * SAME-account shared login (an intentional override, not a collision). Prefer
+ * the candidates form when more than one Auth0 record is in play.
  */
 export function resolveCredential(params: ResolveCredentialParams): CredentialResolution {
   return resolveCredentialFromCandidates({
     email: params.email,
     siteBrand: params.siteBrand,
-    candidates: [{ bindings: params.bindings, identities: params.identities }],
     configuredKeys: params.configuredKeys,
-    sharedMatch: params.sharedMatch,
+    candidates: [
+      {
+        accountId: SINGLE_ACCOUNT_ID,
+        bindings: params.bindings,
+        identities: params.identities,
+        sharedMatch: params.sharedMatch,
+      },
+    ],
   })
 }
 
