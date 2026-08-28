@@ -8,6 +8,66 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## Model 3 / Model 4 registration + Google reconcile (28 August)
+
+Adds the customer-facing journeys that CREATE and LINK the case-3 (per-email)
+and case-4 (per-brand) credentials, plus cold-Google duplicate prevention. All
+of this is UK-only (`SITE_MARKET==="uk"`), fails closed, and leaves the live EU
+Model 1/2 flows behaviorally unchanged.
+
+**Architecture.** Every journey is split into a PURE, unit-tested planner
+(`lib/account-model.ts`, `lib/google-reconcile.ts`) that decides what may happen,
+and a server executor (`lib/model-registration.ts`) that performs
+create → link → bind with best-effort ROLLBACK. The executor takes the
+Management API as an injected `ManagementDeps` and imports auth0-management only
+as TYPES, so its rollback sequencing is exercised against a fake tenant in
+`lib/model-registration.test.ts` (node:test can't mock ESM). Real deps live in
+the server-only `lib/model-registration-deps.ts`. Connection names/ids are ALWAYS
+resolved server-side (`credential-resolver`); the browser never names a
+connection. Signed, single-purpose, expiring handoffs (`lib/handoff-token.ts` +
+server cookie wrapper `lib/journey-handoff.ts`, secret = `AUTH0_SECRET`) carry
+NON-secret routing facts between journey steps — never a password, OTP, or token.
+
+**Endpoints.**
+- `POST /api/registration/per-email` — Model 3 sign-up (primary + optional 2nd email).
+- `POST /api/registration/per-email/complete/start` + `/complete` — add a
+  deferred 2nd email later: send a one-time email code, then verify + link.
+- `POST /api/registration/brand` — Model 4: first registration, OR (email already
+  exists) respond "proof required".
+- `POST /api/registration/brand/proof/start` + `/proof` — prove ownership of the
+  existing account (password or one-time email code), then link the 2nd brand.
+- `GET /api/signin/google/reconcile` — cold Google logins return here instead of
+  /profile; detects a duplicate collision and diverts to /link-google (or fails
+  closed to /auth-error with `link_ambiguous`/`link_unavailable`, deleting the
+  standalone Google duplicate and clearing its session).
+- `/link-google` (page) + `POST …/reconcile/proof/start`, `/proof`, `/cancel` —
+  the proof UI: verify the existing account (password OR email code) then link
+  Google and swap into the primary session; cancel signs out with no duplicate.
+
+**Shared cores (no duplication).** The password-realm grant is extracted to
+`lib/auth0-password-grant.ts` and imported by BOTH sign-in and the Model-4/Google
+proofs (sign-in behavior byte-identical). The Google link + primary-session
+restore + "already attached elsewhere" refusal live in `lib/google-link-core.ts`,
+shared by the existing signed-in "Connect Google" flow and the new cold-login
+reconcile.
+
+**Guardrails proven by tests (195 total, all passing).** Planners fail closed on:
+non-UK market, malformed email, unconfigured connection, unproven ownership,
+model conflict (never mix per-email with per-brand), duplicate credential,
+ambiguous existing-account match, and forged/expired handoff. The shared signup
+route additionally rejects any browser-supplied `connection` or UK `accountModel`
+(`validateSharedSignupRequest`). Google is NEVER linked on an email match alone —
+only after a password/OTP proof of the existing account.
+
+> **Auth0 is NOT configured for cases 3 and 4 yet** (see the env contract below).
+> These endpoints ROUTE, PROVE and LINK; they do not create the tenant
+> connections. Until the per-email / per-brand connections exist and the vars are
+> set, resolution short-circuits to the shared `sbd-eu` connection and these UK
+> journeys report "not configured" rather than acting. The `/link-google` page
+> verified in-browser correctly shows its neutral "nothing to confirm" state on a
+> direct visit; the proven-ownership happy path needs a real Google session +
+> configured tenant to exercise end-to-end.
+
 ## Connection-aware credentials: env contract + Auth0 matrix (25 August)
 
 This tranche makes the per-email (case 3) and per-brand (case 4) database

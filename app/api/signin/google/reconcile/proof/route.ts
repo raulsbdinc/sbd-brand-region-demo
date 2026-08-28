@@ -47,6 +47,36 @@ function clearHandoff(res: NextResponse) {
   })
 }
 
+/** Mask an email for display: `jane.doe@x.com` → `j•••e@x.com`. */
+function maskEmail(email: string): string {
+  const at = email.indexOf("@")
+  if (at <= 0) return "your email"
+  const name = email.slice(0, at)
+  const domain = email.slice(at)
+  if (name.length <= 2) return `${name[0] ?? "•"}•••${domain}`
+  return `${name[0]}•••${name[name.length - 1]}${domain}`
+}
+
+// GET — non-secret summary for the /link-google page. Reads ONLY the signed
+// handoff cookie (HttpOnly, so the page itself can't); never reveals the raw
+// email or which account matched. Both proof methods are always offered: the
+// existing account has a connection password, and a one-time code can go to its
+// verified email.
+export async function GET(request: NextRequest) {
+  const handoff = readJourneyToken<GoogleReconcileHandoff>(
+    GOOGLE_LINK_PURPOSE,
+    request.cookies.get(journeyCookieName(GOOGLE_LINK_PURPOSE))?.value,
+  )
+  if (!handoff.ok) {
+    return NextResponse.json({ pending: false }, { status: 200 })
+  }
+  return NextResponse.json({
+    pending: true,
+    maskedEmail: maskEmail(handoff.data.email),
+    methods: ["password", "code"] as const,
+  })
+}
+
 export async function POST(request: NextRequest) {
   const cookieHeader = request.headers.get("cookie")
 
