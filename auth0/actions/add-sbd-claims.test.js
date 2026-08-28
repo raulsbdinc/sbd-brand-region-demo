@@ -11,6 +11,8 @@ const OTHER_SITES_CLAIM = "https://sbd.demo/other_sites"
 const DEWALT_FR_CLIENT = "BGDDy2XQqKEoHkjCaHcDyddwEB3yM1Va"
 const DEWALT_DE_CLIENT = "nucmPspqRd7fh8m77mvhx0VipdIx9zyP"
 const STANLEY_FR_CLIENT = "3aKESYWk19d4bd9JBb2CF9rUJz6l2tGI"
+const DEWALT_UK_CLIENT = "cedhRGRJ6HieqXNIrEdWdhzcfKEO2lFy"
+const STANLEY_UK_CLIENT = "EkDKdrKZ5X0JPRMRuTXcd14YXmVxlORF"
 
 function actionApi() {
   const idClaims = {}
@@ -72,11 +74,45 @@ describe("SBD custom claims Action — scoping", () => {
     assert.deepEqual(appMetadata, {})
   })
 
-  it("recognises all three demo client ids", () => {
+  it("recognises all five demo client ids", () => {
     assert.equal(_test.resolveDemoSite({ client: { client_id: DEWALT_FR_CLIENT } }).id, "dewalt-fr")
     assert.equal(_test.resolveDemoSite({ client: { client_id: DEWALT_DE_CLIENT } }).id, "dewalt-de")
     assert.equal(_test.resolveDemoSite({ client: { client_id: STANLEY_FR_CLIENT } }).id, "stanley-fr")
+    assert.equal(_test.resolveDemoSite({ client: { client_id: DEWALT_UK_CLIENT } }).id, "dewalt-uk")
+    assert.equal(_test.resolveDemoSite({ client: { client_id: STANLEY_UK_CLIENT } }).id, "stanley-uk")
     assert.equal(_test.resolveDemoSite({ client: { client_id: "nope" } }), null)
+  })
+
+  it("maps the UK client ids to their exact labels", () => {
+    assert.deepEqual(_test.resolveDemoSite({ client: { client_id: DEWALT_UK_CLIENT } }), {
+      id: "dewalt-uk",
+      label: "DeWalt UK",
+    })
+    assert.deepEqual(_test.resolveDemoSite({ client: { client_id: STANLEY_UK_CLIENT } }), {
+      id: "stanley-uk",
+      label: "Stanley UK",
+    })
+  })
+
+  it("surfaces a UK site in cross-site recognition history with its label", () => {
+    // Signing into DeWalt UK, having previously used Stanley UK, must list the
+    // Stanley UK visit as a known other site (proves the label map picked up the
+    // new entries end-to-end, not just resolveDemoSite).
+    const { api, idClaims } = actionApi()
+    return onExecutePostLogin(
+      demoEvent({
+        client: { client_id: DEWALT_UK_CLIENT },
+        user: {
+          user_id: "auth0|abc123",
+          app_metadata: { sbd_sites: { "stanley-uk": "2026-01-02T10:00:00.000Z" } },
+        },
+      }),
+      api,
+    ).then(() => {
+      assert.deepEqual(idClaims[OTHER_SITES_CLAIM], [
+        { id: "stanley-uk", label: "Stanley UK", lastSignIn: "2026-01-02T10:00:00.000Z" },
+      ])
+    })
   })
 })
 

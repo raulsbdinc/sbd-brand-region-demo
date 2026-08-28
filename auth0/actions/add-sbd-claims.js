@@ -3,10 +3,10 @@
 /**
  * Auth0 Post-Login Action: "Recognise SBD sites across brands".
  *
- * Scoped strictly to the three demo applications (DeWalt France, DeWalt Germany,
- * Stanley France) by client id. For ANY other client — including the older CIAM
- * proof of concept sharing this tenant — it returns immediately and touches
- * nothing.
+ * Scoped strictly to the demo storefront applications (DeWalt France, DeWalt
+ * Germany, Stanley France, DeWalt UK, Stanley UK) by client id. For ANY other
+ * client — including the older CIAM proof of concept sharing this tenant — it
+ * returns immediately and touches nothing.
  *
  * On a demo login it emits, on the ID token:
  *   • https://sbd.com/muid, /auth_method, /idp  — display/session identity.
@@ -45,13 +45,16 @@ const SAFE_MUID = /^[a-zA-Z0-9._:@/|-]+$/
 const SAFE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 /**
- * The three demo applications this Action is scoped to, mapped to their stable
- * site id and human label. Any client id absent from this map is untouched.
+ * The demo storefront applications this Action is scoped to, mapped to their
+ * stable site id and human label. Any client id absent from this map is
+ * untouched.
  */
 const DEMO_SITES_BY_CLIENT_ID = {
   BGDDy2XQqKEoHkjCaHcDyddwEB3yM1Va: { id: "dewalt-fr", label: "DeWalt France" },
   nucmPspqRd7fh8m77mvhx0VipdIx9zyP: { id: "dewalt-de", label: "DeWalt Germany" },
   "3aKESYWk19d4bd9JBb2CF9rUJz6l2tGI": { id: "stanley-fr", label: "Stanley France" },
+  cedhRGRJ6HieqXNIrEdWdhzcfKEO2lFy: { id: "dewalt-uk", label: "DeWalt UK" },
+  EkDKdrKZ5X0JPRMRuTXcd14YXmVxlORF: { id: "stanley-uk", label: "Stanley UK" },
 }
 
 /** Known demo site id -> label, for labelling history entries other than the current site. */
