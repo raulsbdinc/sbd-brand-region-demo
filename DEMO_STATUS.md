@@ -1238,6 +1238,46 @@ does not include `delete:users`; granting that scope would make the cleanup live
 Until then, reconnecting the same standalone Google user still works because the
 link flow can merge it back into the primary account.
 
+## UK registration UI (28 August)
+
+The connection-aware credential architecture now has a customer-facing front
+end for the two UK account models, at a dedicated `/register/uk` route.
+
+**Strict UK gate.** The page renders the journeys only when
+`accountModelSelectionAvailable(market)` is true; every other market gets a
+neutral "not available for this storefront" notice. Because `SITE_MARKET` is
+fixed per deployment (fr/de today), a non-production `?market=uk` override lets
+you walk the journeys on a non-UK preview — a "Preview only" banner makes this
+explicit. The override is **display gating only**: `lib/preview-market.ts`
+(`effectiveMarket` / `previewOverrideAllowed`, pure + unit-tested) decides which
+UI to show, while the registration API routes independently re-gate on the real
+`SITE_MARKET`. So on the fr preview the forms submit and honestly report "That
+option isn't available here" rather than faking success.
+
+**Account-model choice.** `components/uk-registration.tsx` presents an
+accessible radiogroup (native radio inputs inside styled cards, no custom
+`radio-group` primitive) built from `ACCOUNT_MODEL_META`:
+
+- **Different email and password (Model 3 / per-email).** Collects a primary
+  email + password and, optionally inline, a second email + password. Submits to
+  `POST /api/registration/per-email`. On success it offers the authenticated
+  completion journey when a second sign-in is still available.
+- **Same email, different brand password (Model 4 / per-brand).** Collects the
+  email + this brand's password and submits to `POST /api/registration/brand`.
+  When the email already owns the other brand the API answers `proof-required`
+  and the UI drops into an ownership-proof step (existing password *or* a
+  one-time email code) before linking the new brand.
+
+**Model 3 completion journey.** `/account/add-email` (authenticated;
+`components/add-email-journey.tsx`) lets a signed-in per-email customer add a
+further sign-in email: enter the address → one-time code emailed
+(`/complete/start`) → verify code + set a password (`/complete`). The page gates
+on a real Auth0 session and otherwise shows a sign-in prompt; the endpoints
+require the session regardless.
+
+All states — `{configured:false}`, neutral rejects, and success — are surfaced
+honestly; the UI never fabricates a created/linked outcome.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only
