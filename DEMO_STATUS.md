@@ -1259,14 +1259,32 @@ accessible radiogroup (native radio inputs inside styled cards, no custom
 `radio-group` primitive) built from `ACCOUNT_MODEL_META`:
 
 - **Different email and password (Model 3 / per-email).** Collects a primary
-  email + password and, optionally inline, a second email + password. Submits to
-  `POST /api/registration/per-email`. On success it offers the authenticated
-  completion journey when a second sign-in is still available.
+  email + password and, optionally inline, a second email + password, then
+  **proves ownership of EVERY email with a one-time code before anything is
+  created**. The UI walks each address (send code → enter code) via
+  `POST /api/registration/per-email/verify/start` and `.../verify`; only once
+  all are confirmed does it call `POST /api/registration/per-email`, which
+  independently re-checks the signed proof. On success it offers the
+  authenticated completion journey when a second sign-in is still available.
 - **Same email, different brand password (Model 4 / per-brand).** Collects the
   email + this brand's password and submits to `POST /api/registration/brand`.
   When the email already owns the other brand the API answers `proof-required`
   and the UI drops into an ownership-proof step (existing password *or* a
   one-time email code) before linking the new brand.
+
+**No account before proof (security).** Model-3 registration NEVER mints an
+identity from a collected password. Ownership proof is carried across the
+signed-out sign-up in a signed, httpOnly `model3-register` handoff that lists
+only the candidate emails and which have completed a one-time code — never a
+password, code, or token. The pure `gateModel3Create()` requires the proof to
+cover EXACTLY the emails being provisioned before the create route calls the
+provisioning executor, and the executor **independently refuses** to create any
+identity whose `email_verified` isn't a proven `true` (it stamps
+`email_verified` from that proven flag rather than inferring it). A missing,
+expired, replayed, tampered, wrong-purpose, or wrong-email proof fails closed
+with no Auth0 call, and the handoff is cleared one-time on success so it can't
+be replayed. `createUser()` now *requires* an explicit `emailVerified` argument
+— there is no hard-coded `true` anywhere.
 
 **Model 3 completion journey.** `/account/add-email` (authenticated;
 `components/add-email-journey.tsx`) lets a signed-in per-email customer add a
@@ -1277,6 +1295,14 @@ require the session regardless.
 
 All states — `{configured:false}`, neutral rejects, and success — are surfaced
 honestly; the UI never fabricates a created/linked outcome.
+
+**Tests.** `lib/account-model.test.ts` covers `gateModel3Create` (no-proof /
+incomplete / email-mismatch / case-insensitive / stray-entry). `lib/model3-
+register-proof.test.ts` composes the real handoff codec + gate exactly as the
+route does and proves invalid/expired/replayed/tampered/wrong-purpose/wrong-
+email proof is rejected and nothing is created. `lib/model-registration.test.ts`
+proves the executor refuses to mint an unproven identity (403, zero tenant IO)
+and stamps `email_verified` from the proven flag.
 
 ## Working with the v0 chat
 

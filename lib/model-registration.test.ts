@@ -30,17 +30,28 @@ interface FakeState {
   linked: string[] // secondary user_ids linked
   unlinked: string[] // secondary user_ids unlinked (rollback)
   updated: Array<{ id: string; bindings: unknown }>
+  // Every createUser call's email + the email_verified flag we sent to Auth0,
+  // so tests can prove we NEVER mint an unverified identity.
+  createdVerified: Array<{ email: string; emailVerified: boolean }>
 }
 
 function makeFake(opts: FakeOptions = {}): { deps: ManagementDeps; state: FakeState } {
-  const state: FakeState = { created: [], deleted: [], linked: [], unlinked: [], updated: [] }
+  const state: FakeState = {
+    created: [],
+    deleted: [],
+    linked: [],
+    unlinked: [],
+    updated: [],
+    createdVerified: [],
+  }
   const store = new Map<string, Auth0User>()
   for (const u of opts.existing ?? []) store.set(u.user_id, u)
   let seq = 0
   let linkCount = 0
 
   const deps: ManagementDeps = {
-    async createUser({ connection, email }) {
+    async createUser({ connection, email, emailVerified }) {
+      state.createdVerified.push({ email, emailVerified })
       if (opts.failCreateFor === email) throw new Error("create failed")
       const id = `auth0|new-${++seq}`
       const identities =
@@ -97,7 +108,7 @@ test("per-email registration: primary only creates one user + one binding", asyn
     {
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
-      identities: [{ email: "a@example.com", password: "supersecret1", role: "primary" }],
+      identities: [{ email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true }],
     },
     deps,
   )
@@ -120,8 +131,8 @@ test("per-email registration: primary + second creates two users, links + binds 
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
       identities: [
-        { email: "a@example.com", password: "supersecret1", role: "primary" },
-        { email: "b@example.com", password: "supersecret2", role: "secondary" },
+        { email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true },
+        { email: "b@example.com", password: "supersecret2", role: "secondary", emailVerified: true },
       ],
     },
     deps,
@@ -145,8 +156,8 @@ test("per-email registration: ROLLBACK when the second create fails (primary is 
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
       identities: [
-        { email: "a@example.com", password: "supersecret1", role: "primary" },
-        { email: "b@example.com", password: "supersecret2", role: "secondary" },
+        { email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true },
+        { email: "b@example.com", password: "supersecret2", role: "secondary", emailVerified: true },
       ],
     },
     deps,
@@ -167,8 +178,8 @@ test("per-email registration: ROLLBACK when linking the second fails (both users
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
       identities: [
-        { email: "a@example.com", password: "supersecret1", role: "primary" },
-        { email: "b@example.com", password: "supersecret2", role: "secondary" },
+        { email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true },
+        { email: "b@example.com", password: "supersecret2", role: "secondary", emailVerified: true },
       ],
     },
     deps,
@@ -188,8 +199,8 @@ test("per-email registration: ROLLBACK when persisting bindings fails (unlink + 
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
       identities: [
-        { email: "a@example.com", password: "supersecret1", role: "primary" },
-        { email: "b@example.com", password: "supersecret2", role: "secondary" },
+        { email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true },
+        { email: "b@example.com", password: "supersecret2", role: "secondary", emailVerified: true },
       ],
     },
     deps,
@@ -213,7 +224,7 @@ test("per-email registration: fails closed on collision without creating anythin
     {
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
-      identities: [{ email: "a@example.com", password: "supersecret1", role: "primary" }],
+      identities: [{ email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true }],
     },
     deps,
   )
@@ -230,13 +241,69 @@ test("per-email registration: rejects a short password with no tenant calls", as
     {
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
-      identities: [{ email: "a@example.com", password: "short", role: "primary" }],
+      identities: [{ email: "a@example.com", password: "short", role: "primary", emailVerified: true }],
     },
     deps,
   )
   assert.equal(out.ok, false)
   if (!out.ok) assert.equal(out.status, 400)
   assert.equal(state.created.length, 0)
+})
+
+// --- Model 3: NEVER mint an unverified identity -----------------------------
+
+test("per-email registration: refuses to create when an identity is unproven (email_verified false)", async () => {
+  const { deps, state } = makeFake()
+  const out = await executePerEmailRegistration(
+    {
+      connectionKey: "per-email",
+      connectionName: "sbd-demo-per-email",
+      identities: [{ email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: false }],
+    },
+    deps,
+  )
+  assert.equal(out.ok, false)
+  if (!out.ok) assert.equal(out.status, 403)
+  // The guard runs BEFORE any tenant IO — nothing was created.
+  assert.equal(state.created.length, 0)
+  assert.equal(state.createdVerified.length, 0)
+})
+
+test("per-email registration: refuses if EITHER email in a pair is unproven (all-or-nothing)", async () => {
+  const { deps, state } = makeFake()
+  const out = await executePerEmailRegistration(
+    {
+      connectionKey: "per-email",
+      connectionName: "sbd-demo-per-email",
+      identities: [
+        { email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true },
+        { email: "b@example.com", password: "supersecret2", role: "secondary", emailVerified: false },
+      ],
+    },
+    deps,
+  )
+  assert.equal(out.ok, false)
+  if (!out.ok) assert.equal(out.status, 403)
+  assert.equal(state.created.length, 0)
+})
+
+test("per-email registration: proven identities are minted email_verified true (stamped, not inferred)", async () => {
+  const { deps, state } = makeFake()
+  const out = await executePerEmailRegistration(
+    {
+      connectionKey: "per-email",
+      connectionName: "sbd-demo-per-email",
+      identities: [
+        { email: "a@example.com", password: "supersecret1", role: "primary", emailVerified: true },
+        { email: "b@example.com", password: "supersecret2", role: "secondary", emailVerified: true },
+      ],
+    },
+    deps,
+  )
+  assert.equal(out.ok, true)
+  // Both createUser calls received email_verified: true from the executor.
+  assert.equal(state.createdVerified.length, 2)
+  assert.ok(state.createdVerified.every((c) => c.emailVerified === true))
 })
 
 // --- Model 4: first-brand registration --------------------------------------

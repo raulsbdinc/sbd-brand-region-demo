@@ -12,6 +12,8 @@ import {
   isAccountModel,
   parseAccountModel,
   validateSharedSignupRequest,
+  gateModel3Create,
+  type Model3RegisterProof,
   planModel3Completion,
   planModel3Registration,
   planModel4CrossBrandLink,
@@ -440,5 +442,113 @@ test("planModel3Completion: market + email + config guards", () => {
       completionCtx({ connectionNames: { ...ALL_CONNECTIONS, "per-email": undefined } }),
     ),
     { ok: false, reason: "not-configured" },
+  )
+})
+
+// --- gateModel3Create: no create before proof -------------------------------
+
+const proofFor = (
+  emails: { primaryEmail: string; secondaryEmail?: string },
+  verified: string[],
+): Model3RegisterProof => ({ ...emails, verified })
+
+test("gateModel3Create: no signed proof at all fails closed", () => {
+  assert.deepEqual(
+    gateModel3Create({ submittedEmails: ["a@example.com"], proof: null }),
+    { ok: false, reason: "no-proof" },
+  )
+})
+
+test("gateModel3Create: single proven email passes", () => {
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com" }, ["a@example.com"]),
+    }),
+    { ok: true },
+  )
+})
+
+test("gateModel3Create: submitted email not yet proven fails (incomplete-proof)", () => {
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com" }, []),
+    }),
+    { ok: false, reason: "incomplete-proof" },
+  )
+})
+
+test("gateModel3Create: pair where only one is proven fails (incomplete-proof)", () => {
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com", "b@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" }, [
+        "a@example.com",
+      ]),
+    }),
+    { ok: false, reason: "incomplete-proof" },
+  )
+})
+
+test("gateModel3Create: both proven passes", () => {
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com", "b@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" }, [
+        "a@example.com",
+        "b@example.com",
+      ]),
+    }),
+    { ok: true },
+  )
+})
+
+test("gateModel3Create: swapping in a different email after proving another fails (email-mismatch)", () => {
+  // Proof was earned for a@ + b@, but the create submits a@ + evil@.
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com", "evil@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" }, [
+        "a@example.com",
+        "b@example.com",
+      ]),
+    }),
+    { ok: false, reason: "email-mismatch" },
+  )
+})
+
+test("gateModel3Create: proving a pair then submitting only the primary fails (email-mismatch)", () => {
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" }, [
+        "a@example.com",
+        "b@example.com",
+      ]),
+    }),
+    { ok: false, reason: "email-mismatch" },
+  )
+})
+
+test("gateModel3Create: case/whitespace-insensitive matching", () => {
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["  A@Example.com "],
+      proof: proofFor({ primaryEmail: "a@example.com" }, ["a@example.com"]),
+    }),
+    { ok: true },
+  )
+})
+
+test("gateModel3Create: a stray verified entry not in the submitted set is ignored", () => {
+  // verified carries an extra email (e.g. from an earlier plan), but the current
+  // submit + proof email set is exactly {a@}. Extra entries must not block.
+  assert.deepEqual(
+    gateModel3Create({
+      submittedEmails: ["a@example.com"],
+      proof: proofFor({ primaryEmail: "a@example.com" }, ["a@example.com", "old@example.com"]),
+    }),
+    { ok: true },
   )
 })

@@ -2,7 +2,8 @@
 // =====================================
 // Thin server wrapper around the pure lib/handoff-token.ts codec. It supplies
 // the signing secret (AUTH0_SECRET) and standardises the httpOnly cookie
-// attributes for the three cross-request journeys:
+// attributes for the cross-request journeys:
+//   - model3-register : ownership proof carried across the signed-out sign-up
 //   - model3-complete : add a deferred second per-email identity
 //   - model4-proof     : proven ownership before linking a second brand
 //   - google-link      : proven ownership before linking a cold Google identity
