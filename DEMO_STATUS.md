@@ -100,25 +100,52 @@ rejected as a limitation.
   key not configured, out of brand scope, a scoped credential already exists,
   etc.). It also computes the dialog's **availability** (which options are
   offerable and why).
+- **"Another email" is an ALTERNATE-email option.** It targets a *second/alt*
+  verified email, so the account's **primary/root email is excluded** from
+  `availability.anotherEmail.eligibleEmails`, and `resolveProvisioning` rejects
+  the primary under that intent (`email-not-eligible`) even though it is a
+  verified email — the client cannot submit it. The primary's password is
+  governed by the account / this-brand options instead. Covered by section-5b
+  tests.
 - **Route**: `POST /api/account/passwords` (session-guarded). It re-reads the
   primary user server-side, derives verified-email ownership from trusted
   sources only (`collectAccountVerifiedEmails` — root verified email, verified
   linked-identity emails, trusted persisted aliases; **never** a browser flag),
   runs the pure plan, then: `createUser` on the target connection →
   `linkIdentity` under the primary → persist the binding in
-  `app_metadata.credential_bindings`. **Rollback**: if link or persist fails,
-  the freshly created user is `deleteUser`-d so no orphan identity is left.
-  Passwords are passed to Auth0 for hashing and are **never** logged or stored
-  by us. Weak-password and conflict responses map to neutral messages; a
-  cross-account/target collision fails closed. `GET` returns availability only.
+  `app_metadata.credential_bindings`.
+  - **Linking mechanism**: `link_with` on the Management link API expects a
+    **secondary-account ID token (JWT)**, which we do not have and never mint.
+    So we link **by reference** with the exact created identity's `provider` +
+    `user_id` (+ `connection_id` when configured via `connectionIdForKey`) —
+    never by passing a user id as `link_with`, and never by matching an existing
+    identity by email.
+  - **Rollback**: if the link or the metadata persist fails, the freshly created
+    user is `deleteUser`-d so no orphan identity is left. Passwords are passed to
+    Auth0 for hashing and are **never** logged or stored by us. Weak-password and
+    conflict responses map to neutral messages; a cross-account/target collision
+    fails closed. `GET` returns availability only.
 - **UI** (`components/customer-profile.tsx`): the "How you sign in" password
-  row is now data-driven from `/api/account/login-methods` — one row **per real
+  area is now data-driven from `/api/account/login-methods` — one row **per real
   credential** with its **own** "Reset password" (reusing the binding-targeted
   `/api/account/password-reset`), plus a restrained "Add password" dialog driven
-  by server availability. All copy is customer-language; **no** internal
-  vocabulary ("case 3/4", "per-email", connection names, bindings, Auth0) ever
-  reaches the screen, and the brand name shown is the **deployment** brand from
-  the server response (not the simulated skin).
+  by server availability. Details:
+  - **Per-row brand labels**: each credential row derives its display brand from
+    that row's OWN `brand`/`connectionKey` (`rowBrandName`/`passwordCredential*`
+    in `lib/password-credential-labels.ts`, unit-tested), so on a DeWalt
+    deployment an account holding **both** brand credentials shows a "DeWalt
+    password" **and** a "Stanley password" row. The deployment brand is used
+    **only** for the "Add — this brand" option.
+  - **Honest loading/error/empty**: while login-methods is loading it shows a
+    restrained spinner row, on failure a neutral "couldn't load — refresh"
+    row, and a genuinely password-less account an honest "No password yet" row.
+    It **never** fabricates an "Account password".
+  - **Valid list semantics**: `PasswordCredentials` returns its rows as **direct
+    `<li>` children** of the surrounding `<ul>` (each `MethodRow` is an `<li>`,
+    and the Add-password action is its own `<li>`) — no `<li>` nested in `<li>`
+    and no wrapping `<div>`.
+  - **No internal vocabulary** ("case 3/4", "per-email", connection names,
+    bindings, Auth0) ever reaches the screen.
 - **Forgot password**: the sign-in drawer's "Forgot password?" now navigates to
   `/recover`, carrying the typed email as `?email=` **only** when it is a valid
   address (`lib/recovery-href.ts`, unit-tested). `/recover` reads the param
@@ -324,9 +351,23 @@ Access now comes from a dedicated, least-privilege machine-to-machine app:
   `create:organization_invitations`, `create:user_tickets`,
   `read:organization_members`, `read:organization_invitations`.
 
-**`delete:users` was withheld on purpose.** Without it the account centre can
-never hard-delete the single shared demo user, whatever the deletion flow tries
-to call.
+**`delete:users` was withheld on purpose** for the account-centre *deletion*
+flow. Without it the account centre can never hard-delete the single shared demo
+user, whatever the deletion flow tries to call.
+
+**Additional-password provisioning needs `create:users`, `update:users`, and
+`delete:users`** (plus the existing `read:users` / `*_app_metadata` reads).
+`POST /api/account/passwords` (28 August) mints an isolated database identity
+(`create:users`), links it under the primary, persists the binding in
+`app_metadata.credential_bindings` (`update:users` + `update:users_app_metadata`),
+and — on link/persist failure — **rolls back** by hard-deleting the just-created
+user (`delete:users`). `update:users` is already granted; **`create:users` and
+`delete:users` must be added to the M2M grant for provisioning to work live.**
+Until they are, the route fails closed on the create/rollback calls (it never
+leaves an orphan) and the "Add password" option is only offerable where the
+target connections + scopes are actually configured. Adding `delete:users` here
+also happens to be what would make the account-centre deletion cleanup live
+(previously withheld), so granting it is a deliberate, documented trade-off.
 
 **Why a separate application, not scopes on the login apps.** The three site apps
 are internet-facing and already carry the `password-realm` grant. Giving them
