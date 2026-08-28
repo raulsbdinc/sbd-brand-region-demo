@@ -1,37 +1,50 @@
-// SERVER-ONLY MODEL 3 / MODEL 4 PROVISIONING EXECUTOR
-// ===================================================
+// MODEL 3 / MODEL 4 PROVISIONING EXECUTOR
+// =======================================
 // The Auth0-side executor for the UK account models, sitting BEHIND the pure
 // planners in lib/account-model.ts. Given a plan the pure module already
-// approved (connection resolved server-side, market/brand/coherence enforced),
-// it performs the create → link → bind sequence with best-effort rollback, and
-// maps every tenant error to a neutral, customer-safe message. It NEVER accepts
-// a connection name/id, user id, use case, or brand from the browser — the route
-// hands it only an already-resolved plan plus the password(s).
+// approved (connection name + id resolved server-side, market/brand/coherence
+// enforced), it performs the create → link → bind sequence with best-effort
+// rollback, and maps every tenant error to a neutral, customer-safe message. It
+// NEVER accepts a connection name/id, user id, use case, or brand from the
+// browser — the route hands it only an already-resolved plan plus password(s).
 //
-// Shape mirrors app/api/account/passwords/route.ts exactly (the reviewed
+// Shape mirrors app/api/account/passwords/route.ts (the reviewed
 // create/link/bind/rollback reference); the two share buildCredentialBinding /
 // appendCredentialBinding and the same rollback discipline so a partial failure
 // never leaves a dangling identity or a linked-but-unbound credential.
+//
+// IMPORT DISCIPLINE: this module takes the Management API as an INJECTED
+// `ManagementDeps` and imports auth0-management / credential-resolver ONLY as
+// TYPES. That keeps it free of any top-level `server-only` import so its
+// create/link/bind/ROLLBACK sequencing is unit-testable with a fake tenant
+// (node:test cannot mock ESM imports). The real, server-only deps live in
+// lib/model-registration-deps.ts; routes pass them in.
 
-import "server-only"
-import {
-  createUser,
-  deleteUser,
-  getUser,
-  getUsersByEmail,
-  linkIdentity,
-  unlinkIdentity,
-  updateUser,
-  ManagementError,
-  type Auth0User,
-} from "@/lib/auth0-management"
 import {
   appendCredentialBinding,
   buildCredentialBinding,
-} from "@/lib/credential-provisioning"
-import { connectionIdForKey, readBindings } from "@/lib/credential-resolver"
-import type { ConnectionKey, CredentialBinding, DemoUseCase } from "@/lib/credential-model"
-import type { BrandId } from "@/lib/types"
+} from "./credential-provisioning.ts"
+import type { Auth0User } from "./auth0-management.ts"
+import type { ConnectionKey, CredentialBinding, DemoUseCase } from "./credential-model.ts"
+import type { BrandId } from "./types"
+
+/**
+ * The exact slice of the Management API this executor touches, injected so the
+ * rollback sequencing can be exercised against a fake tenant. Production wiring
+ * is lib/model-registration-deps.ts (server-only); tests pass a fake.
+ */
+export interface ManagementDeps {
+  createUser(body: { connection: string; email: string; password: string }): Promise<Auth0User>
+  deleteUser(userId: string): Promise<unknown>
+  getUser(userId: string): Promise<Auth0User>
+  getUsersByEmail(email: string): Promise<Auth0User[]>
+  linkIdentity(
+    primaryUserId: string,
+    body: { provider: string; user_id: string; connection_id?: string },
+  ): Promise<unknown>
+  unlinkIdentity(primaryUserId: string, provider: string, secondaryUserId: string): Promise<unknown>
+  updateUser(userId: string, body: { app_metadata?: Record<string, unknown> }): Promise<Auth0User>
+}
 
 const MIN_PASSWORD_LENGTH = 8
 
@@ -46,6 +59,13 @@ export type ExecOutcome =
   | { ok: true; primaryUserId: string; credentials: CreatedCredential[] }
   | { ok: false; status: number; error: string }
 
+/** Read the persisted bindings off a user record (pure; no server import). */
+function readBindingsFrom(user: Auth0User): CredentialBinding[] {
+  const raw = (user.app_metadata as { credential_bindings?: unknown } | undefined)
+    ?.credential_bindings
+  return Array.isArray(raw) ? (raw as CredentialBinding[]) : []
+}
+
 /** Light pre-check; the connection's real policy is enforced by Auth0 on create. */
 function passwordError(password: unknown): string | null {
   if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
@@ -55,27 +75,37 @@ function passwordError(password: unknown): string | null {
   return null
 }
 
-/** Map a tenant create error to a neutral customer message (never raw). */
+/**
+ * Map a tenant create error to a neutral customer message (never raw). Uses
+ * duck typing (a `status` number + message text) instead of `instanceof
+ * ManagementError`, so this module needs no runtime import of the server-only
+ * management client.
+ */
 function neutralCreateError(err: unknown): { status: number; error: string } {
-  if (err instanceof ManagementError) {
-    const msg = err.message.toLowerCase()
-    if (
-      msg.includes("passwordstrength") ||
-      msg.includes("invalid_password") ||
-      msg.includes("password is too weak")
-    ) {
-      return { status: 400, error: "That password doesn't meet the requirements. Try a stronger one." }
-    }
-    if (err.status === 409) {
-      return { status: 409, error: "An account already uses that email here." }
-    }
+  const status = typeof (err as { status?: unknown })?.status === "number"
+    ? (err as { status: number }).status
+    : undefined
+  const msg = (err instanceof Error ? err.message : "").toLowerCase()
+  if (
+    msg.includes("passwordstrength") ||
+    msg.includes("invalid_password") ||
+    msg.includes("password is too weak")
+  ) {
+    return { status: 400, error: "That password doesn't meet the requirements. Try a stronger one." }
+  }
+  if (status === 409) {
+    return { status: 409, error: "An account already uses that email here." }
   }
   return { status: 502, error: "We couldn't complete that right now. Please try again." }
 }
 
 /** True when ANY existing record already holds `email` on `connectionName`. */
-async function hasCollision(email: string, connectionName: string): Promise<boolean> {
-  const existing = await getUsersByEmail(email)
+async function hasCollision(
+  deps: ManagementDeps,
+  email: string,
+  connectionName: string,
+): Promise<boolean> {
+  const existing = await deps.getUsersByEmail(email)
   return existing.some((u) =>
     (u.identities ?? []).some(
       (id) => id.provider === "auth0" && id.connection === connectionName,
@@ -83,17 +113,22 @@ async function hasCollision(email: string, connectionName: string): Promise<bool
   )
 }
 
-async function safeDelete(userId: string): Promise<void> {
+async function safeDelete(deps: ManagementDeps, userId: string): Promise<void> {
   try {
-    await deleteUser(userId)
+    await deps.deleteUser(userId)
   } catch (err) {
     console.log("[v0] model-registration rollback: delete failed:", (err as Error).message)
   }
 }
 
-async function safeUnlink(primaryId: string, provider: string, secondaryId: string): Promise<void> {
+async function safeUnlink(
+  deps: ManagementDeps,
+  primaryId: string,
+  provider: string,
+  secondaryId: string,
+): Promise<void> {
   try {
-    await unlinkIdentity(primaryId, provider, secondaryId)
+    await deps.unlinkIdentity(primaryId, provider, secondaryId)
   } catch (err) {
     console.log("[v0] model-registration rollback: unlink failed:", (err as Error).message)
   }
@@ -111,12 +146,17 @@ export interface IdentityToCreate {
  * The first identity becomes the primary Auth0 profile; every later identity is
  * linked under it. Fails closed with rollback on any collision or partial error.
  */
-export async function executePerEmailRegistration(params: {
-  connectionKey: "per-email"
-  connectionName: string
-  identities: IdentityToCreate[]
-}): Promise<ExecOutcome> {
-  const { connectionKey, connectionName, identities } = params
+export async function executePerEmailRegistration(
+  params: {
+    connectionKey: "per-email"
+    connectionName: string
+    /** Connection id resolved server-side; baked into each link. */
+    connectionId?: string
+    identities: IdentityToCreate[]
+  },
+  deps: ManagementDeps,
+): Promise<ExecOutcome> {
+  const { connectionKey, connectionName, connectionId, identities } = params
   if (identities.length === 0 || identities[0].role !== "primary") {
     return { ok: false, status: 400, error: "That request isn't valid." }
   }
@@ -128,7 +168,7 @@ export async function executePerEmailRegistration(params: {
   // Collision guard for every email BEFORE creating anything.
   for (const id of identities) {
     try {
-      if (await hasCollision(id.email, connectionName)) {
+      if (await hasCollision(deps, id.email, connectionName)) {
         return { ok: false, status: 409, error: "An account already uses that email here." }
       }
     } catch {
@@ -139,7 +179,7 @@ export async function executePerEmailRegistration(params: {
   // --- Create primary ------------------------------------------------------
   let primary: Auth0User
   try {
-    primary = await createUser({
+    primary = await deps.createUser({
       connection: connectionName,
       email: identities[0].email,
       password: identities[0].password,
@@ -150,7 +190,7 @@ export async function executePerEmailRegistration(params: {
   const primaryId = primary.user_id
   const primaryIdentity = (primary.identities ?? [])[0]
   if (!primaryId || !primaryIdentity) {
-    if (primaryId) await safeDelete(primaryId)
+    if (primaryId) await safeDelete(deps, primaryId)
     return { ok: false, status: 502, error: "We couldn't complete that right now. Please try again." }
   }
 
@@ -169,17 +209,17 @@ export async function executePerEmailRegistration(params: {
   credentials.push({ bindingId: primaryBinding.id, connectionKey, email: identities[0].email })
 
   const rollbackAll = async () => {
-    for (const l of linked) await safeUnlink(primaryId, l.provider, l.userId)
+    for (const l of linked) await safeUnlink(deps, primaryId, l.provider, l.userId)
     // Delete secondaries first, then the primary profile.
-    for (const uid of createdUserIds.slice(1)) await safeDelete(uid)
-    await safeDelete(primaryId)
+    for (const uid of createdUserIds.slice(1)) await safeDelete(deps, uid)
+    await safeDelete(deps, primaryId)
   }
 
   // --- Create + link each secondary ---------------------------------------
   for (const id of identities.slice(1)) {
     let secondary: Auth0User
     try {
-      secondary = await createUser({ connection: connectionName, email: id.email, password: id.password })
+      secondary = await deps.createUser({ connection: connectionName, email: id.email, password: id.password })
     } catch (err) {
       await rollbackAll()
       return { ok: false, ...neutralCreateError(err) }
@@ -190,12 +230,11 @@ export async function executePerEmailRegistration(params: {
       await rollbackAll()
       return { ok: false, status: 502, error: "We couldn't complete that right now. Please try again." }
     }
-    const connId = connectionIdForKey(connectionKey)
     try {
-      await linkIdentity(primaryId, {
+      await deps.linkIdentity(primaryId, {
         provider: secondaryIdentity.provider,
         user_id: secondaryIdentity.user_id,
-        ...(connId ? { connection_id: connId } : {}),
+        ...(connectionId ? { connection_id: connectionId } : {}),
       })
       linked.push({ provider: secondaryIdentity.provider, userId: secondaryIdentity.user_id })
     } catch {
@@ -214,7 +253,7 @@ export async function executePerEmailRegistration(params: {
 
   // --- Persist all bindings on the primary --------------------------------
   try {
-    await updateUser(primaryId, {
+    await deps.updateUser(primaryId, {
       app_metadata: {
         ...(primary.app_metadata ?? {}),
         credential_bindings: bindings,
@@ -236,29 +275,34 @@ export async function executePerEmailRegistration(params: {
  * AND confirmed (via the pure planner) that this neither mixes models nor
  * duplicates the target. Collision-guarded, with best-effort rollback.
  */
-async function linkCredentialToPrimary(params: {
-  primaryUserId: string
-  connectionKey: ConnectionKey
-  connectionName: string
-  email: string
-  password: string
-  useCase: DemoUseCase
-  brand?: BrandId
-  duplicateMessage: string
-}): Promise<ExecOutcome> {
-  const { primaryUserId, connectionKey, connectionName, email, password, useCase, brand } = params
+async function linkCredentialToPrimary(
+  params: {
+    primaryUserId: string
+    connectionKey: ConnectionKey
+    connectionName: string
+    connectionId?: string
+    email: string
+    password: string
+    useCase: DemoUseCase
+    brand?: BrandId
+    duplicateMessage: string
+  },
+  deps: ManagementDeps,
+): Promise<ExecOutcome> {
+  const { primaryUserId, connectionKey, connectionName, connectionId, email, password, useCase, brand } =
+    params
   const pwErr = passwordError(password)
   if (pwErr) return { ok: false, status: 400, error: pwErr }
 
   let primary: Auth0User
   try {
-    primary = await getUser(primaryUserId)
+    primary = await deps.getUser(primaryUserId)
   } catch {
     return { ok: false, status: 502, error: "We couldn't complete that right now. Please try again." }
   }
 
   try {
-    if (await hasCollision(email, connectionName)) {
+    if (await hasCollision(deps, email, connectionName)) {
       return { ok: false, status: 409, error: params.duplicateMessage }
     }
   } catch {
@@ -267,26 +311,25 @@ async function linkCredentialToPrimary(params: {
 
   let created: Auth0User
   try {
-    created = await createUser({ connection: connectionName, email, password })
+    created = await deps.createUser({ connection: connectionName, email, password })
   } catch (err) {
     return { ok: false, ...neutralCreateError(err) }
   }
   const createdId = created.user_id
   const createdIdentity = (created.identities ?? [])[0]
   if (!createdId || !createdIdentity) {
-    if (createdId) await safeDelete(createdId)
+    if (createdId) await safeDelete(deps, createdId)
     return { ok: false, status: 502, error: "We couldn't complete that right now. Please try again." }
   }
 
-  const connId = connectionIdForKey(connectionKey)
   try {
-    await linkIdentity(primaryUserId, {
+    await deps.linkIdentity(primaryUserId, {
       provider: createdIdentity.provider,
       user_id: createdIdentity.user_id,
-      ...(connId ? { connection_id: connId } : {}),
+      ...(connectionId ? { connection_id: connectionId } : {}),
     })
   } catch {
-    await safeDelete(createdId)
+    await safeDelete(deps, createdId)
     return { ok: false, status: 502, error: "We couldn't link that credential. Please try again." }
   }
 
@@ -297,18 +340,18 @@ async function linkCredentialToPrimary(params: {
     auth0UserId: createdIdentity.user_id,
     brand,
   })
-  const nextBindings = appendCredentialBinding(readBindings(primary), binding)
+  const nextBindings = appendCredentialBinding(readBindingsFrom(primary), binding)
 
   try {
-    await updateUser(primaryUserId, {
+    await deps.updateUser(primaryUserId, {
       app_metadata: {
         ...(primary.app_metadata ?? {}),
         credential_bindings: nextBindings,
       },
     })
   } catch {
-    await safeUnlink(primaryUserId, createdIdentity.provider, createdIdentity.user_id)
-    await safeDelete(createdId)
+    await safeUnlink(deps, primaryUserId, createdIdentity.provider, createdIdentity.user_id)
+    await safeDelete(deps, createdId)
     return { ok: false, status: 502, error: "We couldn't finish setting up that credential. Please try again." }
   }
 
@@ -323,19 +366,26 @@ async function linkCredentialToPrimary(params: {
  * Model 4 (per-brand): create THIS brand's identity for `email` and link it
  * under an existing primary account. Ownership of the primary is already proven.
  */
-export async function executeBrandLink(params: {
-  primaryUserId: string
-  connectionKey: "dewalt" | "stanley"
-  connectionName: string
-  email: string
-  password: string
-  brand: BrandId
-}): Promise<ExecOutcome> {
-  return linkCredentialToPrimary({
-    ...params,
-    useCase: "per-brand-password",
-    duplicateMessage: "A different password is already set up for that brand.",
-  })
+export async function executeBrandLink(
+  params: {
+    primaryUserId: string
+    connectionKey: "dewalt" | "stanley"
+    connectionName: string
+    connectionId?: string
+    email: string
+    password: string
+    brand: BrandId
+  },
+  deps: ManagementDeps,
+): Promise<ExecOutcome> {
+  return linkCredentialToPrimary(
+    {
+      ...params,
+      useCase: "per-brand-password",
+      duplicateMessage: "A different password is already set up for that brand.",
+    },
+    deps,
+  )
 }
 
 /**
@@ -343,16 +393,23 @@ export async function executeBrandLink(params: {
  * existing per-email primary. Ownership of the second email is proven by the
  * calling route (one-time email code) before this runs.
  */
-export async function executePerEmailLink(params: {
-  primaryUserId: string
-  connectionName: string
-  email: string
-  password: string
-}): Promise<ExecOutcome> {
-  return linkCredentialToPrimary({
-    ...params,
-    connectionKey: "per-email",
-    useCase: "per-email-password",
-    duplicateMessage: "That email already has its own password.",
-  })
+export async function executePerEmailLink(
+  params: {
+    primaryUserId: string
+    connectionName: string
+    connectionId?: string
+    email: string
+    password: string
+  },
+  deps: ManagementDeps,
+): Promise<ExecOutcome> {
+  return linkCredentialToPrimary(
+    {
+      ...params,
+      connectionKey: "per-email",
+      useCase: "per-email-password",
+      duplicateMessage: "That email already has its own password.",
+    },
+    deps,
+  )
 }
