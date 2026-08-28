@@ -37,9 +37,9 @@ const OPTIONS: Array<{
   },
 ]
 
-export function RecoveryCenter() {
+export function RecoveryCenter({ initialEmail = "" }: { initialEmail?: string }) {
   const [intent, setIntent] = useState<RecoveryIntent>("password")
-  const [email, setEmail] = useState("")
+  const [email, setEmail] = useState(initialEmail)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [complete, setComplete] = useState(false)
