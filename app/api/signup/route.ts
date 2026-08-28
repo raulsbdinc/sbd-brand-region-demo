@@ -10,6 +10,7 @@ import {
   isManagementConfigured,
   type Auth0User,
 } from "@/lib/auth0-management"
+import { validateSharedSignupRequest } from "@/lib/account-model"
 
 export const runtime = "nodejs"
 
@@ -92,10 +93,11 @@ async function emailBelongsToExistingDbAccount(email: string): Promise<boolean> 
 export async function POST(request: NextRequest) {
   let email: string
   let password: string
+  let rawBody: Record<string, unknown>
   try {
-    const body = await request.json()
-    email = typeof body?.email === "string" ? body.email.trim() : ""
-    password = typeof body?.password === "string" ? body.password : ""
+    rawBody = (await request.json()) as Record<string, unknown>
+    email = typeof rawBody?.email === "string" ? (rawBody.email as string).trim() : ""
+    password = typeof rawBody?.password === "string" ? (rawBody.password as string) : ""
   } catch {
     return NextResponse.json<{ status: SignupStatus }>(
       { status: "error" },
@@ -104,6 +106,19 @@ export async function POST(request: NextRequest) {
   }
 
   if (!email || !password) {
+    return NextResponse.json<{ status: SignupStatus }>(
+      { status: "error" },
+      { status: 400 },
+    )
+  }
+
+  // Defensive contract guard: the shared route resolves its connection
+  // server-side and only ever handles the shared (Model 1/2) signup. Refuse a
+  // browser-supplied connection name, and refuse a UK account-model id (those
+  // must use the dedicated /api/registration/* endpoints). This can never
+  // change EU behaviour — legitimate EU signups send neither field.
+  const contract = validateSharedSignupRequest(rawBody)
+  if (contract !== null) {
     return NextResponse.json<{ status: SignupStatus }>(
       { status: "error" },
       { status: 400 },

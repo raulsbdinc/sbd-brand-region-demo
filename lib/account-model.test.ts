@@ -11,6 +11,8 @@ import {
   brandConnectionKey,
   isAccountModel,
   parseAccountModel,
+  validateSharedSignupRequest,
+  planModel3Completion,
   planModel3Registration,
   planModel4CrossBrandLink,
   planModel4Registration,
@@ -77,6 +79,33 @@ test("ACCOUNT_MODEL_META maps each model to the right connection family", () => 
   assert.deepEqual(ACCOUNT_MODEL_META["per-brand"].connectionKeys, ["dewalt", "stanley"])
   assert.equal(ACCOUNT_MODEL_META["per-email"].useCase, "per-email-password")
   assert.equal(ACCOUNT_MODEL_META["per-brand"].useCase, "per-brand-password")
+})
+
+test("validateSharedSignupRequest: plain EU signup body is accepted", () => {
+  assert.equal(validateSharedSignupRequest({ email: "a@b.com", password: "x" }), null)
+})
+
+test("validateSharedSignupRequest: a browser-supplied connection is refused", () => {
+  assert.equal(
+    validateSharedSignupRequest({ email: "a@b.com", password: "x", connection: "sbd-demo-dewalt" }),
+    "connection-not-allowed",
+  )
+})
+
+test("validateSharedSignupRequest: a UK account-model id must use the dedicated endpoint", () => {
+  assert.equal(
+    validateSharedSignupRequest({ email: "a@b.com", password: "x", accountModel: "per-email" }),
+    "wrong-endpoint",
+  )
+  assert.equal(
+    validateSharedSignupRequest({ email: "a@b.com", password: "x", accountModel: "per-brand" }),
+    "wrong-endpoint",
+  )
+  // An unknown/garbage accountModel is ignored (treated as a plain shared signup).
+  assert.equal(
+    validateSharedSignupRequest({ email: "a@b.com", password: "x", accountModel: "nonsense" }),
+    null,
+  )
 })
 
 // --- 2. market gating -------------------------------------------------------
@@ -335,4 +364,81 @@ test("planModel4CrossBrandLink: other guards (market, brand, config, email)", ()
     ok: false,
     reason: "invalid-email",
   })
+})
+
+// --- Model 3 completion (deferred second email) -----------------------------
+
+function completionCtx(over: Record<string, unknown> = {}) {
+  return {
+    market: "uk" as CountryId,
+    primaryUserId: "auth0|primary",
+    existingBindings: [binding("per-email", "first@example.com")],
+    email: "second@example.com",
+    ownershipVerified: true,
+    connectionNames: { ...ALL_CONNECTIONS },
+    ...over,
+  }
+}
+
+test("planModel3Completion: verified second email on a per-email account → plan", () => {
+  assert.deepEqual(planModel3Completion(completionCtx()), {
+    ok: true,
+    connectionKey: "per-email",
+    connectionName: "sbd-demo-per-email",
+    useCase: "per-email-password",
+    email: "second@example.com",
+    primaryUserId: "auth0|primary",
+  })
+})
+
+test("planModel3Completion: unproven ownership fails closed", () => {
+  assert.deepEqual(planModel3Completion(completionCtx({ ownershipVerified: false })), {
+    ok: false,
+    reason: "ownership-required",
+  })
+})
+
+test("planModel3Completion: refuses onto a per-brand account (model conflict)", () => {
+  assert.deepEqual(
+    planModel3Completion(completionCtx({ existingBindings: [binding("dewalt")] })),
+    { ok: false, reason: "model-conflict" },
+  )
+})
+
+test("planModel3Completion: refuses an already-mixed account", () => {
+  assert.deepEqual(
+    planModel3Completion(
+      completionCtx({ existingBindings: [binding("per-email"), binding("dewalt")] }),
+    ),
+    { ok: false, reason: "model-conflict" },
+  )
+})
+
+test("planModel3Completion: duplicate email credential is rejected", () => {
+  assert.deepEqual(
+    planModel3Completion(
+      completionCtx({
+        email: "First@Example.com", // case-insensitive match of an existing binding
+        existingBindings: [binding("per-email", "first@example.com")],
+      }),
+    ),
+    { ok: false, reason: "duplicate-email-credential" },
+  )
+})
+
+test("planModel3Completion: market + email + config guards", () => {
+  assert.deepEqual(planModel3Completion(completionCtx({ market: "fr" })), {
+    ok: false,
+    reason: "market-unavailable",
+  })
+  assert.deepEqual(planModel3Completion(completionCtx({ email: "nope" })), {
+    ok: false,
+    reason: "invalid-email",
+  })
+  assert.deepEqual(
+    planModel3Completion(
+      completionCtx({ connectionNames: { ...ALL_CONNECTIONS, "per-email": undefined } }),
+    ),
+    { ok: false, reason: "not-configured" },
+  )
 })

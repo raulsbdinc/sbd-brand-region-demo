@@ -49,6 +49,32 @@ export function parseAccountModel(value: unknown): AccountModel | null {
   return isAccountModel(value) ? value : null
 }
 
+export type SharedSignupRejectReason = "connection-not-allowed" | "wrong-endpoint"
+
+/**
+ * Guard for the shared (EU Model 1/2) signup route. Enforces two invariants on
+ * the raw request body before it can create a shared-connection user:
+ *
+ *   1. The browser may NEVER name an Auth0 connection — the shared route always
+ *      resolves the connection server-side. Any `connection` field is refused.
+ *   2. A UK account-model id (`per-email` / `per-brand`) must go through the
+ *      dedicated registration endpoints, never this shared route — so a client
+ *      can't smuggle a Model-3/4 signup onto the shared connection.
+ *
+ * Returns null when the body is acceptable for the shared route.
+ */
+export function validateSharedSignupRequest(
+  body: Record<string, unknown>,
+): SharedSignupRejectReason | null {
+  if ("connection" in body && body.connection != null && body.connection !== "") {
+    return "connection-not-allowed"
+  }
+  if (parseAccountModel(body.accountModel) !== null) {
+    return "wrong-endpoint"
+  }
+  return null
+}
+
 export interface AccountModelMeta {
   model: AccountModel
   /** The demo use case this model embodies. */
@@ -439,5 +465,87 @@ export function planModel4CrossBrandLink(
     useCase: "per-brand-password",
     email,
     primaryUserId: ctx.existingAccount.auth0UserId,
+  }
+}
+
+// --- Model 3 completion (add the deferred second email later) ---------------
+
+export interface Model3CompletionContext {
+  market: CountryId
+  /** The signed-in primary account's Auth0 user id. */
+  primaryUserId: string
+  /** The account's existing bindings (used for coherence + duplicate checks). */
+  existingBindings: CredentialBinding[]
+  /** The second email being added (raw; normalized here). */
+  email: unknown
+  /** Whether ownership of `email` has been proven (one-time email code). */
+  ownershipVerified: boolean
+  connectionNames: Record<ConnectionKey, string | undefined>
+}
+
+export type Model3CompletionRejectReason =
+  | "market-unavailable"
+  | "invalid-email"
+  | "not-configured"
+  | "ownership-required"
+  | "duplicate-email-credential"
+  | "model-conflict"
+
+export interface Model3CompletionPlan {
+  ok: true
+  connectionKey: "per-email"
+  connectionName: string
+  useCase: "per-email-password"
+  email: string
+  primaryUserId: string
+}
+
+export type Model3CompletionResolution =
+  | Model3CompletionPlan
+  | { ok: false; reason: Model3CompletionRejectReason }
+
+/**
+ * Plan linking a deferred SECOND per-email identity onto an existing Model-3
+ * account (the completion journey for a sign-up where the second email was
+ * skipped). Fails closed unless: the market is UK, the email is well-formed, the
+ * per-email connection is configured, ownership of the new email is proven, the
+ * account is NOT a per-brand (Model-4) account (that would mix models), and the
+ * email does not already have a per-email credential on the account.
+ */
+export function planModel3Completion(
+  ctx: Model3CompletionContext,
+): Model3CompletionResolution {
+  if (!accountModelSelectionAvailable(ctx.market)) {
+    return { ok: false, reason: "market-unavailable" }
+  }
+
+  const email = normalizeEmail(ctx.email)
+  if (!email || !emailShaped(email)) return { ok: false, reason: "invalid-email" }
+
+  const name = ctx.connectionNames["per-email"]
+  const connectionName = name && name.trim() ? name.trim() : undefined
+  if (!connectionName) return { ok: false, reason: "not-configured" }
+
+  if (!ctx.ownershipVerified) return { ok: false, reason: "ownership-required" }
+
+  // Adding a per-email credential must keep the account coherent (never mix with
+  // an existing per-brand family, and never onto an already-mixed set).
+  if (!accountModelAdditionAllowed("per-email", ctx.existingBindings)) {
+    return { ok: false, reason: "model-conflict" }
+  }
+
+  // The email must not already have its own per-email credential here.
+  const alreadyBound = ctx.existingBindings.some(
+    (b) => b.connectionKey === "per-email" && normalizeEmail(b.email) === email,
+  )
+  if (alreadyBound) return { ok: false, reason: "duplicate-email-credential" }
+
+  return {
+    ok: true,
+    connectionKey: "per-email",
+    connectionName,
+    useCase: "per-email-password",
+    email,
+    primaryUserId: ctx.primaryUserId,
   }
 }
