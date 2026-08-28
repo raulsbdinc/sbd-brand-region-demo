@@ -33,17 +33,48 @@ to **exactly one** allow-listed connection **key** server-side
 **discriminated** result and fails **closed**:
 
 - **resolved** (a unique, brand-permitted, identity-backed non-shared
-  credential) → attempt **only** that realm.
+  credential) → attempt **only** that realm. This includes the **same-account
+  override** (see below): a customer who gave their own email/brand a scoped
+  password resolves to that scoped realm even though their account is also a
+  shared login.
 - **shared-default** (no non-shared match — root users, verified login aliases,
-  and unknown emails) → the ordinary shared attempt (cases 1 & 2, unchanged).
-- **ambiguous** — the email matches **more than one** credential (a real shared
-  login **and** a non-shared credential, or two non-shared credentials). This
-  fails closed with **no realm attempt at all**: sign-in returns the generic
-  401, public recovery sends **nothing** (it does **not** fall back to shared),
-  and passcode-start issues **no** challenge — each keeping its existing neutral
+  the account's *other* verified emails, and unknown emails) → the ordinary
+  shared attempt (cases 1 & 2, unchanged).
+- **ambiguous** — a **genuine cross-account collision**: two different accounts
+  match, or a scoped credential on account A collides with a shared login on a
+  **different** account B, or two distinct scoped credentials match. This fails
+  closed with **no realm attempt at all**: sign-in returns the generic 401,
+  public recovery sends **nothing** (it does **not** fall back to shared), and
+  passcode-start issues **no** challenge — each keeping its existing neutral
   response shape. Ambiguity is **not** a shared fallback.
 
 So the endpoints never become an existence/connection oracle.
+
+#### Same-account scoped override vs cross-account collision (28 August)
+
+The resolver does **not** treat "a scoped credential + a shared login for the
+same email" as ambiguous when both belong to the **same primary account**. That
+arrangement is the *intended* Model 1/2 → scoped transition: after Auth0
+identity-linking, a customer's scoped (per-email / per-brand) credential lives as
+an extra database identity **under their own primary user**. So:
+
+- Assigning an alternate email its **own** password intentionally stops **that
+  email** from using the shared password; the account's **other** verified emails
+  keep using the shared password.
+- A **brand** credential overrides the shared password **only on that brand's
+  sites** (it is filtered by `SITE_BRAND` before it can win); the shared password
+  keeps working on the other brands.
+- Ownership is proven by `accountId` (the Auth0 primary `user_id`):
+  `resolveCredentialFromCandidates` carries a per-account `sharedMatch` and only
+  fails closed when a shared login is found on a **different** account than the
+  one owning the scoped credential. Same-account = override (resolve);
+  different-account = collision (fail closed). Everything else that was
+  fail-closed before — unbacked/incoherent bindings, multiple scoped matches,
+  cross-account matches, incomplete lookups — still fails closed. Covered by the
+  section-13/13a ownership tests in `lib/credential-model.test.ts`.
+
+This is behavioral-parity safe for cases 1 & 2: an account with **no** scoped
+credential is untouched and still resolves to `shared-default`.
 
 - **shared** → root users and verified login aliases (cases 1 & 2), all sites.
 - **per-email** → a case-3 identity, on **all three** storefronts.
@@ -53,6 +84,51 @@ So the endpoints never become an existence/connection oracle.
 A non-shared binding only routes when it is allow-listed, its connection is
 configured, it is permitted on `SITE_BRAND`, **and** it is backed by a real
 linked Auth0 identity on that connection.
+
+### Provisioning a scoped password (28 August)
+
+Customers can now **create** an additional password credential from
+`/profile` → "How you sign in", so Model 1/2 accounts gain routable Model 3/4
+credentials on their own — the core options are offered, never hidden or
+rejected as a limitation.
+
+- **Pure plan**: `lib/credential-provisioning.ts` (framework-free,
+  unit-tested in `lib/credential-provisioning.test.ts`) turns an intent
+  (`another-email` | `this-brand`) + the account's **server-proven** verified
+  emails into a `ProvisioningPlan` — the target `connectionKey`, email, and the
+  `CredentialBinding` to persist — or a fail-closed rejection (email not owned,
+  key not configured, out of brand scope, a scoped credential already exists,
+  etc.). It also computes the dialog's **availability** (which options are
+  offerable and why).
+- **Route**: `POST /api/account/passwords` (session-guarded). It re-reads the
+  primary user server-side, derives verified-email ownership from trusted
+  sources only (`collectAccountVerifiedEmails` — root verified email, verified
+  linked-identity emails, trusted persisted aliases; **never** a browser flag),
+  runs the pure plan, then: `createUser` on the target connection →
+  `linkIdentity` under the primary → persist the binding in
+  `app_metadata.credential_bindings`. **Rollback**: if link or persist fails,
+  the freshly created user is `deleteUser`-d so no orphan identity is left.
+  Passwords are passed to Auth0 for hashing and are **never** logged or stored
+  by us. Weak-password and conflict responses map to neutral messages; a
+  cross-account/target collision fails closed. `GET` returns availability only.
+- **UI** (`components/customer-profile.tsx`): the "How you sign in" password
+  row is now data-driven from `/api/account/login-methods` — one row **per real
+  credential** with its **own** "Reset password" (reusing the binding-targeted
+  `/api/account/password-reset`), plus a restrained "Add password" dialog driven
+  by server availability. All copy is customer-language; **no** internal
+  vocabulary ("case 3/4", "per-email", connection names, bindings, Auth0) ever
+  reaches the screen, and the brand name shown is the **deployment** brand from
+  the server response (not the simulated skin).
+- **Forgot password**: the sign-in drawer's "Forgot password?" now navigates to
+  `/recover`, carrying the typed email as `?email=` **only** when it is a valid
+  address (`lib/recovery-href.ts`, unit-tested). `/recover` reads the param
+  server-side (`searchParams`, no client `useSearchParams`) and prefills
+  `RecoveryCenter` via a new `initialEmail` prop.
+
+Still **not** done (future tranche): cross-storefront case-4 linking, and
+seeding the tenant connections themselves. Provisioning creates + links + binds
+a credential, but the target connections must exist and be configured in env for
+it to be offerable.
 
 ### Environment contract
 
