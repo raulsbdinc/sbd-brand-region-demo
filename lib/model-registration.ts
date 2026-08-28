@@ -268,6 +268,76 @@ export async function executePerEmailRegistration(
 }
 
 /**
+ * Model 4 (per-brand), FIRST brand: create a brand-new primary account whose
+ * sole identity lives on this brand's connection, with one coherent per-brand
+ * binding. Used when no existing account holds the email yet — the cross-brand
+ * LINK path (executeBrandLink) handles the second brand. Collision-guarded with
+ * rollback on a partial failure.
+ */
+export async function executeBrandRegistration(
+  params: {
+    connectionKey: "dewalt" | "stanley"
+    connectionName: string
+    connectionId?: string
+    email: string
+    password: string
+    brand: BrandId
+  },
+  deps: ManagementDeps,
+): Promise<ExecOutcome> {
+  const { connectionKey, connectionName, email, password, brand } = params
+  const pwErr = passwordError(password)
+  if (pwErr) return { ok: false, status: 400, error: pwErr }
+
+  try {
+    if (await hasCollision(deps, email, connectionName)) {
+      return { ok: false, status: 409, error: "A different password is already set up for that brand." }
+    }
+  } catch {
+    return { ok: false, status: 502, error: "We couldn't verify that right now. Please try again." }
+  }
+
+  let primary: Auth0User
+  try {
+    primary = await deps.createUser({ connection: connectionName, email, password })
+  } catch (err) {
+    return { ok: false, ...neutralCreateError(err) }
+  }
+  const primaryId = primary.user_id
+  const primaryIdentity = (primary.identities ?? [])[0]
+  if (!primaryId || !primaryIdentity) {
+    if (primaryId) await safeDelete(deps, primaryId)
+    return { ok: false, status: 502, error: "We couldn't complete that right now. Please try again." }
+  }
+
+  const binding = buildCredentialBinding({
+    connectionKey,
+    email,
+    useCase: "per-brand-password" as DemoUseCase,
+    auth0UserId: primaryIdentity.user_id,
+    brand,
+  })
+
+  try {
+    await deps.updateUser(primaryId, {
+      app_metadata: {
+        ...(primary.app_metadata ?? {}),
+        credential_bindings: [binding],
+      },
+    })
+  } catch {
+    await safeDelete(deps, primaryId)
+    return { ok: false, status: 502, error: "We couldn't finish setting up your account. Please try again." }
+  }
+
+  return {
+    ok: true,
+    primaryUserId: primaryId,
+    credentials: [{ bindingId: binding.id, connectionKey, email, brand }],
+  }
+}
+
+/**
  * Create ONE new database identity for `email` on the resolved connection and
  * link it under an existing, already-owned primary account, appending one
  * coherent binding. Shared by the Model-4 cross-brand link and the Model-3

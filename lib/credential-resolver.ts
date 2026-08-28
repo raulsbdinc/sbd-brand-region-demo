@@ -278,6 +278,72 @@ export function primaryAccountEmail(primaryUser: Auth0User): string {
   return normalizeEmail(primaryUser.email)
 }
 
+// --- Existing-account resolution (Model 4 cross-brand + duplicate guards) ---
+
+export interface ExistingAccountRef {
+  auth0UserId: string
+  bindings: CredentialBinding[]
+  /** The account's verified/owned emails (for a same-mailbox proof choice). */
+  verifiedEmails: string[]
+}
+
+/**
+ * Resolve THE single existing account that OWNS a submitted email on this
+ * storefront, as a discriminated result the cross-brand link + Google flows use
+ * to decide "first registration" vs "prove ownership then link":
+ *   • "configured-off" → Management API absent; caller degrades gracefully.
+ *   • "unavailable"    → a lookup failed, so absence of an account can't be
+ *                        proven; the caller MUST fail closed.
+ *   • "none"           → no account owns the email → a first registration.
+ *   • "ambiguous"      → more than one account owns it → fail closed (never pick).
+ *   • "single"         → exactly one owning account (its id + bindings).
+ *
+ * "Owns" means a candidate whose normalized ROOT email equals the submitted
+ * email, or that carries a credential binding for it — the same trusted signals
+ * the sign-in resolver validates against. Never trusts a browser-supplied id.
+ */
+export type ExistingAccountResolution =
+  | { kind: "configured-off" }
+  | { kind: "unavailable" }
+  | { kind: "none" }
+  | { kind: "ambiguous" }
+  | { kind: "single"; account: ExistingAccountRef }
+
+export async function resolveExistingAccountByEmail(
+  email: string,
+): Promise<ExistingAccountResolution> {
+  if (!isManagementConfigured()) return { kind: "configured-off" }
+
+  const normalized = normalizeEmail(email)
+  if (!normalized) return { kind: "none" }
+
+  const { candidates, ok } = await gatherCandidates(email)
+  if (!ok) return { kind: "unavailable" }
+
+  const owning = candidates.filter((user) => {
+    if (!user.user_id) return false
+    if (normalizeEmail(user.email) === normalized) return true
+    return readBindings(user).some((b) => normalizeEmail(b.email) === normalized)
+  })
+
+  // De-dupe by user_id (the two lookups can return the same record twice).
+  const byId = new Map<string, Auth0User>()
+  for (const u of owning) if (u.user_id) byId.set(u.user_id, u)
+
+  if (byId.size === 0) return { kind: "none" }
+  if (byId.size > 1) return { kind: "ambiguous" }
+
+  const [user] = [...byId.values()]
+  return {
+    kind: "single",
+    account: {
+      auth0UserId: user.user_id!,
+      bindings: readBindings(user),
+      verifiedEmails: collectAccountVerifiedEmails(user),
+    },
+  }
+}
+
 export interface ResolvedResetTarget {
   binding: CredentialBinding
   connectionId: string

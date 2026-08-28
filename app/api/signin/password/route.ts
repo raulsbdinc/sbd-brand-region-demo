@@ -6,14 +6,12 @@ import {
 } from "@/lib/auth0-regions"
 import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
 import { searchUsers, isManagementConfigured } from "@/lib/auth0-management"
+import { resolveSigninCredential } from "@/lib/credential-resolver"
+import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
 import {
-  connectionNameForKey,
-  resolveSigninCredential,
-} from "@/lib/credential-resolver"
-import {
-  signinResolutionPermitsRealmOperation,
-  type ConnectionKey,
-} from "@/lib/credential-model"
+  passwordRealmExchange,
+  type VerifiedTokenResponse,
+} from "@/lib/auth0-password-grant"
 
 export const runtime = "nodejs"
 
@@ -27,14 +25,6 @@ const SESSION_COOKIE_NAME = "__session"
 // address exists — that would enable user enumeration.
 const GENERIC_ERROR = "That email or password isn't right."
 
-interface PasswordRealmTokenResponse {
-  access_token: string
-  id_token?: string
-  scope?: string
-  expires_in?: number
-  token_type?: string
-}
-
 /** Decode a JWT payload without verifying — the token came straight from the
  *  tenant over a server-to-server TLS call, so we only need its claims. */
 function decodeJwtClaims(idToken: string): Record<string, unknown> {
@@ -43,65 +33,6 @@ function decodeJwtClaims(idToken: string): Record<string, unknown> {
   const normalized = payload.replace(/-/g, "+").replace(/_/g, "/")
   const json = Buffer.from(normalized, "base64").toString("utf8")
   return JSON.parse(json) as Record<string, unknown>
-}
-
-/** A token response we've confirmed carries the tokens the session needs. */
-type VerifiedTokenResponse = PasswordRealmTokenResponse & { id_token: string }
-
-/**
- * ONE password-realm exchange against a RESOLVED internal connection key.
- *
- * The caller passes an allow-listed ConnectionKey (never a raw realm from the
- * browser); we translate it to the tenant connection name server-side here. A
- * key that has no configured connection name yields `null` (nothing to try).
- *
- * Returns the token set on success, or `null` for ANY failure (wrong password,
- * unknown user, blocked, network) — the caller decides what a null means, and
- * every caller-visible failure still collapses to the single generic 401 below.
- * The password is only ever verified here, by Auth0; we never see or store it.
- */
-async function passwordRealmExchange(params: {
-  domain: string
-  clientId: string
-  clientSecret: string
-  firstHop: string
-  username: string
-  password: string
-  connectionKey: ConnectionKey
-}): Promise<VerifiedTokenResponse | null> {
-  const { domain, clientId, clientSecret, firstHop, username, password, connectionKey } =
-    params
-  const realm = connectionNameForKey(connectionKey)
-  if (!realm) return null
-  try {
-    const res = await fetch(`https://${domain}/oauth/token`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        // Forward the caller's first x-forwarded-for hop as auth0-forwarded-for
-        // so Auth0 brute-force protection attributes failures to the real
-        // end-user IP, not the shared Vercel egress IP (which would lock the
-        // whole demo out after 10 attempts). The tenant apps have
-        // trust-token-endpoint-IP-header enabled so this header is honoured.
-        ...(firstHop ? { "auth0-forwarded-for": firstHop } : {}),
-      },
-      body: JSON.stringify({
-        grant_type: "http://auth0.com/oauth/grant-type/password-realm",
-        realm,
-        username,
-        password,
-        scope: "openid profile email",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
-    })
-    if (!res.ok) return null
-    const json = (await res.json()) as PasswordRealmTokenResponse
-    if (!json.access_token || !json.id_token) return null
-    return json as VerifiedTokenResponse
-  } catch {
-    return null
-  }
 }
 
 /** Escape a value for safe interpolation into a Lucene phrase query. The typed
