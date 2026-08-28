@@ -6,12 +6,14 @@ import {
   AtSign,
   KeyRound,
   Loader2,
+  LogIn,
   Mails,
   ShieldCheck,
   Layers,
   ArrowLeft,
   Info,
 } from "lucide-react"
+import { startAuthRedirect } from "@/lib/auth0-connections"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -96,7 +98,10 @@ export function UkRegistration({ brandName, otherBrandName, overridden }: Props)
 
       <p className="text-center text-sm text-muted-foreground">
         Already have an account?{" "}
-        <Link href="/auth/login" className="font-medium text-primary underline underline-offset-4">
+        <Link
+          href={overridden ? "/sign-in/uk?market=uk" : "/sign-in/uk"}
+          className="font-medium text-primary underline underline-offset-4"
+        >
           Sign in
         </Link>
       </p>
@@ -224,6 +229,40 @@ function SuccessNotice({
   )
 }
 
+// A direct "Sign in now" affordance shown on the success screens. It routes
+// through the UK start route pinned to the SAME connection the account was just
+// created on (per-email → per-email connection; per-brand → this brand's
+// connection) with the email pre-filled — so the just-registered customer never
+// lands on the generic /auth/login that would misroute them to the shared
+// default and fail. startAuthRedirect handles the preview-iframe breakout.
+function DirectSignInButton({
+  option,
+  email,
+  label,
+}: {
+  option: "per-email" | "brand"
+  email: string
+  label: string
+}) {
+  return (
+    <Button
+      variant="outline"
+      className="self-start"
+      onClick={() => {
+        const params = new URLSearchParams({
+          option,
+          email: email.trim(),
+          returnTo: "/profile",
+        })
+        startAuthRedirect(`/api/signin/uk?${params.toString()}`)
+      }}
+    >
+      <LogIn data-icon="inline-start" />
+      {label}
+    </Button>
+  )
+}
+
 /** Minimal client-side sanity check; the server enforces the real policy. */
 function looksLikeEmail(v: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
@@ -268,6 +307,11 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
           Your account is ready. Both email addresses were confirmed, so you can
           sign in with the email and password you just set.
         </SuccessNotice>
+        <DirectSignInButton
+          option="per-email"
+          email={primaryEmail}
+          label="Sign in now"
+        />
         {done.completionAvailable ? (
           <Card>
             <CardHeader>
@@ -669,11 +713,18 @@ function PerBrandJourney({
 
   if (done) {
     return (
-      <SuccessNotice title={done === "created" ? "Account created" : `${brandName} added to your account`}>
-        {done === "created"
-          ? `Your ${brandName} account is ready. Sign in with the email and password you just set.`
-          : `You can now sign in to ${brandName} with your new brand password. Your ${otherBrandName} password is unchanged.`}
-      </SuccessNotice>
+      <div className="flex flex-col gap-4">
+        <SuccessNotice title={done === "created" ? "Account created" : `${brandName} added to your account`}>
+          {done === "created"
+            ? `Your ${brandName} account is ready. Sign in with the email and password you just set.`
+            : `You can now sign in to ${brandName} with your new brand password. Your ${otherBrandName} password is unchanged.`}
+        </SuccessNotice>
+        <DirectSignInButton
+          option="brand"
+          email={email}
+          label={`Sign in to ${brandName}`}
+        />
+      </div>
     )
   }
 
