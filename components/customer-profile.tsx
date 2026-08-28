@@ -57,6 +57,11 @@ import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
 import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
 import {
+  brandDisplay,
+  passwordCredentialLabel,
+  passwordCredentialLine,
+} from "@/lib/password-credential-labels"
+import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
   DEFAULT_ADDRESS_COUNTRY,
@@ -2547,26 +2552,6 @@ interface AddAvailability {
   thisBrand: { available: boolean; brand?: string; email?: string; reason?: string }
 }
 
-/** Customer label for one password credential — never an internal key/label. */
-function passwordCredentialLabel(m: PasswordMethodView, brandName: string): string {
-  if (m.connectionKey === "per-email") return `Password for ${m.email ?? "an email"}`
-  if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
-    return `${brandName} password`
-  }
-  return "Account password"
-}
-
-/** Plain-English explanation of where a credential works. */
-function passwordCredentialLine(m: PasswordMethodView, brandName: string): string {
-  if (m.connectionKey === "per-email") {
-    return `${m.email ?? "This email"} has its own password, separate from your account password.`
-  }
-  if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
-    return `Works only on ${brandName} sites. Your account password still works on other SBD brands.`
-  }
-  return "Works with your verified account emails across DeWalt and Stanley sites."
-}
-
 /** Accessible show/hide password field used throughout the Add-password flow. */
 function PasswordField({
   id,
@@ -2891,11 +2876,9 @@ function AddPasswordDialog({
 // the row, with an accessible external link to open the one-time ticket.
 function PasswordCredentialRow({
   method,
-  brandName,
   live,
 }: {
   method: PasswordMethodView
-  brandName: string
   live: boolean
 }) {
   const [busy, setBusy] = useState(false)
@@ -2941,8 +2924,8 @@ function PasswordCredentialRow({
   return (
     <MethodRow
       icon={<KeyRound className="size-4" />}
-      name={passwordCredentialLabel(method, brandName)}
-      line={passwordCredentialLine(method, brandName)}
+      name={passwordCredentialLabel(method)}
+      line={passwordCredentialLine(method)}
       right={
         method.canReset !== false ? (
           <Button variant="outline" size="sm" onClick={reset} disabled={busy}>
@@ -2971,23 +2954,21 @@ function PasswordCredentialRow({
   )
 }
 
-/** Customer display name for a brand id — client-safe, no server import. */
-const BRAND_DISPLAY_NAMES: Record<string, string> = {
-  dewalt: "DeWalt",
-  stanley: "Stanley",
-}
-function brandDisplay(brand?: string): string {
-  return (brand && BRAND_DISPLAY_NAMES[brand]) || "this brand"
-}
-
-// The password-credentials block inside "How you sign in". Reads the real
-// credentials from login-methods, shows a reset per credential, and offers a
+// The password-credentials block inside "How you sign in". Reads the REAL
+// credentials from login-methods (one reset per credential) and offers a
 // restrained "Add password" command driven by server-computed availability.
-// The brand name shown is the DEPLOYMENT's brand, taken from the server
-// availability response (not the simulated skin), so it always matches what the
-// "this-brand" password will actually apply to.
+//
+// It returns its rows as DIRECT <li> children (via MethodRow, which is an <li>,
+// and an <li> Add-password action) so the surrounding <ul> stays valid — no
+// <li> nested in <li>, no wrapping <div>. Loading and failure never fabricate a
+// credential: they render honest neutral <li> states, and a genuinely
+// password-less account shows an honest empty row.
 function PasswordCredentials({ live }: { live: boolean }) {
-  const { data: methodsData, mutate: refreshMethods } = useSWR<{
+  const {
+    data: methodsData,
+    error: methodsError,
+    mutate: refreshMethods,
+  } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
   }>(live ? "/api/account/login-methods" : null, fetcher, {
@@ -3000,15 +2981,36 @@ function PasswordCredentials({ live }: { live: boolean }) {
     onError: (err) => warnUnavailable("Add password", (err as { status?: number })?.status),
   })
 
+  // Still loading: no data and no error yet. Restrained placeholder — never a
+  // fabricated "Account password".
+  if (!methodsData && !methodsError) {
+    return (
+      <li className="rounded-xl border border-border bg-background px-4 py-3">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          <span>Loading your sign-in passwords…</span>
+        </div>
+      </li>
+    )
+  }
+
+  // Failure: clear, neutral unavailable state — again, no invented credential.
+  if (methodsError) {
+    return (
+      <li className="rounded-xl border border-border bg-background px-4 py-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          We couldn&apos;t load your sign-in passwords right now. Please refresh to try again.
+        </p>
+      </li>
+    )
+  }
+
   const passwords = (methodsData?.methods ?? []).filter((m) => m.kind === "password")
   const availability = availData?.availability
 
-  // The deployment brand: prefer the server availability answer; fall back to a
-  // brand credential already on the account.
-  const brandName = brandDisplay(
-    availability?.thisBrand.brand ??
-      passwords.find((m) => m.connectionKey === "dewalt" || m.connectionKey === "stanley")?.brand,
-  )
+  // The DEPLOYMENT brand for the "Add — this brand" option only, from the server
+  // availability answer. (Per-credential rows derive their OWN brand instead.)
+  const addBrandName = brandDisplay(availability?.thisBrand.brand)
 
   function afterCreate() {
     // Refresh both the credential list and what the dialog may still offer.
@@ -3016,39 +3018,32 @@ function PasswordCredentials({ live }: { live: boolean }) {
     void refreshAvail()
   }
 
-  // In demo (non-live) mode we still show a representative shared row so the
-  // section is never empty, matching the rest of /profile's demo behavior.
-  const rows: PasswordMethodView[] = live
-    ? passwords
-    : [{ key: "demo-shared", kind: "password", connectionKey: "shared", canReset: true }]
-
   return (
-    <div className="space-y-2">
-      {rows.length === 0 ? (
+    <>
+      {passwords.length === 0 ? (
         <MethodRow
           icon={<KeyRound className="size-4" />}
-          name="Account password"
-          line="Works with your verified account emails across DeWalt and Stanley sites."
-          right={<ActiveTag />}
+          name="No password yet"
+          line="You don't have a password on this account — you sign in with an email passcode or a linked method. You can add a password below."
         />
       ) : (
-        rows.map((m) => (
-          <PasswordCredentialRow key={m.key} method={m} brandName={brandName} live={live} />
+        passwords.map((m) => (
+          <PasswordCredentialRow key={m.key} method={m} live={live} />
         ))
       )}
       {availability ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-3">
+        <li className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Add a separate password for another verified email or just for {brandName} sites.
+            Add a separate password for another verified email or just for {addBrandName} sites.
           </p>
           <AddPasswordDialog
             availability={availability}
-            brandName={brandName}
+            brandName={addBrandName}
             onCreated={afterCreate}
           />
-        </div>
+        </li>
       ) : null}
-    </div>
+    </>
   )
 }
 
@@ -3080,10 +3075,9 @@ function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: st
         <Note>{UNAVAILABLE_COPY}</Note>
       ) : (
         <ul className="space-y-2">
-          {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add) */}
-          <li>
-            <PasswordCredentials live={live} />
-          </li>
+          {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).
+                  Renders its own <li> rows directly into this <ul>. */}
+          <PasswordCredentials live={live} />
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow

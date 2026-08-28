@@ -269,7 +269,8 @@ test("appendCredentialBinding refuses a duplicate (same key + user id)", () => {
 test("availability: fresh Model 1/2 account offers BOTH another-email and this-brand", () => {
   const a = computeAddPasswordAvailability(ctx())
   assert.equal(a.anotherEmail.available, true)
-  assert.deepEqual(a.anotherEmail.eligibleEmails, ["primary@example.com", "alt@example.com"])
+  // Primary is EXCLUDED from "Another email" — only the alternate is eligible.
+  assert.deepEqual(a.anotherEmail.eligibleEmails, ["alt@example.com"])
   assert.equal(a.thisBrand.available, true)
   assert.equal(a.thisBrand.brand, "dewalt")
   assert.equal(a.thisBrand.email, "primary@example.com")
@@ -279,7 +280,44 @@ test("availability: emails that already have a password drop out of the eligible
   const a = computeAddPasswordAvailability(
     ctx({ existingBindings: [perEmailBinding("alt@example.com")] }),
   )
-  assert.deepEqual(a.anotherEmail.eligibleEmails, ["primary@example.com"])
+  // alt already has a password, primary is excluded → nothing eligible.
+  assert.deepEqual(a.anotherEmail.eligibleEmails, [])
+  assert.equal(a.anotherEmail.available, false)
+})
+
+// --- 5b. Primary/root email is never an "Another email" target -------------
+test("availability: the primary/root email is excluded from eligibleEmails", () => {
+  const a = computeAddPasswordAvailability(ctx())
+  assert.equal(a.anotherEmail.eligibleEmails.includes("primary@example.com"), false)
+})
+
+test("availability: an account with ONLY its primary verified email offers no another-email", () => {
+  const a = computeAddPasswordAvailability(
+    ctx({ verifiedEmails: ["primary@example.com"] }),
+  )
+  assert.deepEqual(a.anotherEmail.eligibleEmails, [])
+  assert.equal(a.anotherEmail.available, false)
+})
+
+test("resolve another-email REJECTS the primary email even though it is verified", () => {
+  const out = resolveProvisioning("another-email", "primary@example.com", ctx())
+  assert.equal(out.ok, false)
+  if (!out.ok) assert.equal(out.reason, "email-not-eligible")
+})
+
+test("resolve another-email ACCEPTS a verified alternate email", () => {
+  const out = resolveProvisioning("another-email", "alt@example.com", ctx())
+  assert.equal(out.ok, true)
+  if (out.ok) {
+    assert.equal(out.connectionKey, "per-email")
+    assert.equal(out.email, "alt@example.com")
+  }
+})
+
+test("resolve another-email rejects the primary even under case-insensitive/whitespace input", () => {
+  const out = resolveProvisioning("another-email", "  PRIMARY@example.com ", ctx())
+  assert.equal(out.ok, false)
+  if (!out.ok) assert.equal(out.reason, "email-not-eligible")
 })
 
 test("availability: this-brand unavailable with a neutral reason on an unsupported brand", () => {

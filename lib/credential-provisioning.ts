@@ -122,6 +122,13 @@ export function resolveProvisioning(
   if (intent === "another-email") {
     const email = normalizeEmail(selectedEmail)
     if (!email || !verified.has(email)) return { ok: false, reason: "email-not-eligible" }
+    // "Another email" is specifically for an ALTERNATE verified email — never
+    // the account's primary/root address (that address's password is governed by
+    // the account / this-brand options). Reject the primary here so a client
+    // cannot submit it under this intent even though it is a verified email.
+    if (email === normalizeEmail(context.primaryEmail)) {
+      return { ok: false, reason: "email-not-eligible" }
+    }
     if (!context.configuredKeys.has("per-email")) return { ok: false, reason: "not-configured" }
 
     const scoped = scopedBindingsForEmail(context.existingBindings, email)
@@ -228,9 +235,14 @@ export interface AddPasswordAvailability {
 export function computeAddPasswordAvailability(
   context: ProvisioningContext,
 ): AddPasswordAvailability {
+  const primary = normalizeEmail(context.primaryEmail)
   const verified = context.verifiedEmails.map(normalizeEmail).filter(Boolean)
   const eligibleEmails = verified.filter(
-    (email) => scopedBindingsForEmail(context.existingBindings, email).length === 0,
+    (email) =>
+      // Exclude the primary/root email — "Another email" is for an ALTERNATE
+      // verified address only (kept in lockstep with resolveProvisioning).
+      email !== primary &&
+      scopedBindingsForEmail(context.existingBindings, email).length === 0,
   )
 
   const brandResolution = resolveProvisioning("this-brand", null, context)

@@ -18,6 +18,7 @@ import {
   collectAccountVerifiedEmails,
   configuredConnectionKeySet,
   connectionNameForKey,
+  connectionIdForKey,
   primaryAccountEmail,
   readBindings,
 } from "@/lib/credential-resolver"
@@ -212,13 +213,21 @@ export async function POST(request: Request) {
       throw new ManagementError("User creation returned no identity", 502)
     }
 
-    // Step 2: link the NEW identity to the signed-in primary. We link the exact
-    // just-created identity (provider + user_id + connection_id-less link_with),
-    // never an existing identity by email.
+    // Step 2: link the NEW identity to the signed-in primary. The Management
+    // API's `link_with` field expects a SECONDARY-account ID TOKEN (a JWT) — we
+    // don't have one and never mint one — so we MUST use the by-reference link
+    // body instead: the exact created identity's `provider` + `user_id`, plus
+    // its `connection_id` when we have it configured. This links precisely the
+    // identity we just created, never an existing identity matched by email.
+    const linkConnectionId = connectionIdForKey(connectionKey)
     try {
-      await linkIdentity(guard.user.sub, { link_with: createdId })
+      await linkIdentity(guard.user.sub, {
+        provider: createdIdentity.provider,
+        user_id: createdIdentity.user_id,
+        ...(linkConnectionId ? { connection_id: linkConnectionId } : {}),
+      })
     } catch (err) {
-      // Roll back the orphan user so we never leave a danging identity.
+      // Roll back the orphan user so we never leave a dangling identity.
       await safeDelete(createdId)
       throw err
     }
