@@ -8,8 +8,8 @@
 //   - google-link      : proven ownership before linking a cold Google identity
 //
 // Each purpose gets its OWN cookie name so journeys can never read or clobber
-// one another. Payloads carry only NON-secret routing facts (a sub, an email) —
-// never a password, OTP, or token.
+// one another. Payloads carry only NON-secret routing facts (an email, a list
+// of proven emails, a sub) — never a password, OTP, or token.
 
 import "server-only"
 import {
@@ -23,6 +23,7 @@ import {
 export const JOURNEY_TTL_SECONDS = 10 * 60
 
 const COOKIE_NAME: Record<HandoffPurpose, string> = {
+  "model3-register": "__m3r_ho",
   "model3-complete": "__m3_ho",
   "model4-proof": "__m4_ho",
   "google-link": "__gl_proof_ho",

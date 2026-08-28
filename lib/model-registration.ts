@@ -34,7 +34,13 @@ import type { BrandId } from "./types"
  * is lib/model-registration-deps.ts (server-only); tests pass a fake.
  */
 export interface ManagementDeps {
-  createUser(body: { connection: string; email: string; password: string }): Promise<Auth0User>
+  createUser(body: {
+    connection: string
+    email: string
+    password: string
+    /** True ONLY when the caller has proven ownership of `email`. */
+    emailVerified: boolean
+  }): Promise<Auth0User>
   deleteUser(userId: string): Promise<unknown>
   getUser(userId: string): Promise<Auth0User>
   getUsersByEmail(email: string): Promise<Auth0User[]>
@@ -138,6 +144,13 @@ export interface IdentityToCreate {
   email: string
   password: string
   role: "primary" | "secondary"
+  /**
+   * True ONLY when the calling route has PROVEN the person owns this mailbox
+   * (a completed one-time-code challenge). The executor refuses to run unless
+   * every identity is proven, and stamps `email_verified` from this flag — it
+   * never infers verification from the mere presence of a password.
+   */
+  emailVerified: boolean
 }
 
 /**
@@ -159,6 +172,14 @@ export async function executePerEmailRegistration(
   const { connectionKey, connectionName, connectionId, identities } = params
   if (identities.length === 0 || identities[0].role !== "primary") {
     return { ok: false, status: 400, error: "That request isn't valid." }
+  }
+  // Defence-in-depth: this executor NEVER mints a Model-3 identity that hasn't
+  // completed real ownership proof. The route already gates on the signed
+  // verification handoff before calling us; this second, independent check
+  // means a future caller can't accidentally create an unverified identity even
+  // if the route guard regressed. Fails closed without touching the tenant.
+  if (!identities.every((id) => id.emailVerified === true)) {
+    return { ok: false, status: 403, error: "Please verify your email address first." }
   }
   for (const id of identities) {
     const pwErr = passwordError(id.password)
@@ -183,6 +204,7 @@ export async function executePerEmailRegistration(
       connection: connectionName,
       email: identities[0].email,
       password: identities[0].password,
+      emailVerified: identities[0].emailVerified,
     })
   } catch (err) {
     return { ok: false, ...neutralCreateError(err) }
@@ -219,7 +241,12 @@ export async function executePerEmailRegistration(
   for (const id of identities.slice(1)) {
     let secondary: Auth0User
     try {
-      secondary = await deps.createUser({ connection: connectionName, email: id.email, password: id.password })
+      secondary = await deps.createUser({
+        connection: connectionName,
+        email: id.email,
+        password: id.password,
+        emailVerified: id.emailVerified,
+      })
     } catch (err) {
       await rollbackAll()
       return { ok: false, ...neutralCreateError(err) }
@@ -299,7 +326,9 @@ export async function executeBrandRegistration(
 
   let primary: Auth0User
   try {
-    primary = await deps.createUser({ connection: connectionName, email, password })
+    // First-brand registration: ownership is established out-of-band by the
+    // brand route (email + brand password on the brand connection). Mint proven.
+    primary = await deps.createUser({ connection: connectionName, email, password, emailVerified: true })
   } catch (err) {
     return { ok: false, ...neutralCreateError(err) }
   }
@@ -381,7 +410,9 @@ async function linkCredentialToPrimary(
 
   let created: Auth0User
   try {
-    created = await deps.createUser({ connection: connectionName, email, password })
+    // Ownership of `email` is proven by the caller before we get here (the
+    // Model-3 completion one-time code, or the Model-4 cross-brand proof step).
+    created = await deps.createUser({ connection: connectionName, email, password, emailVerified: true })
   } catch (err) {
     return { ok: false, ...neutralCreateError(err) }
   }

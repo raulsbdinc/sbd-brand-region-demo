@@ -1,12 +1,19 @@
-// MODEL 3 (PER-EMAIL) REGISTRATION — server route
-// ================================================
+// MODEL 3 (PER-EMAIL) REGISTRATION — server route (create, proof-gated)
+// =====================================================================
 // UK-only. Creates the primary per-email identity and, when a second email +
 // password are supplied at sign-up, creates and links that too — all on the
 // per-email connection, under ONE primary Auth0 profile, with one coherent
 // binding each. The browser submits ONLY emails + passwords; the model id is
-// validated and the connection resolved entirely server-side. When the second
-// email is skipped, the client is told a completion journey is available
-// (POST /api/registration/per-email/complete) instead of generic provisioning.
+// validated and the connection resolved entirely server-side.
+//
+// SECURITY: this route creates NOTHING until EVERY email being registered has
+// completed real one-time-code ownership proof. Proof is carried in a signed,
+// httpOnly "model3-register" handoff written by the verify routes; the pure
+// gateModel3Create() decides whether that proof matches the exact emails being
+// provisioned. A missing/mismatched/incomplete proof fails closed with no Auth0
+// call at all — a collected password is NEVER treated as proof of ownership.
+// When the second email is skipped, the client is told a completion journey is
+// available (POST /api/registration/per-email/complete) to add it later.
 
 import { NextResponse, type NextRequest } from "next/server"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
@@ -14,7 +21,9 @@ import { resolveConnectionNames } from "@/lib/credential-model"
 import { connectionIdForKey } from "@/lib/credential-resolver"
 import {
   planModel3Registration,
+  gateModel3Create,
   type Model3RejectReason,
+  type Model3RegisterProof,
 } from "@/lib/account-model"
 import {
   executePerEmailRegistration,
@@ -22,6 +31,7 @@ import {
 } from "@/lib/model-registration"
 import { realManagementDeps } from "@/lib/model-registration-deps"
 import { isManagementConfigured } from "@/lib/auth0-management"
+import { readJourneyToken, journeyCookieName, journeyCookieOptions } from "@/lib/journey-handoff"
 
 export const runtime = "nodejs"
 
@@ -78,14 +88,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ configured: false, reason: "management-not-configured" }, { status: 200 })
   }
 
-  // Attach passwords to the planned identities (emails + roles come from the
-  // planner; passwords never leave the server boundary shape).
-  const identities: IdentityToCreate[] = plan.identities.map((id) =>
-    id.role === "primary"
-      ? { email: id.email, password: primaryPassword, role: "primary" as const }
-      : { email: id.email, password: secondaryPassword, role: "secondary" as const },
-  )
-
   // A supplied second email needs its own password.
   if (plan.hasSecondary && !secondaryPassword) {
     return NextResponse.json(
@@ -93,6 +95,47 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     )
   }
+
+  // PROOF GATE. Read the signed verification handoff and require that EVERY
+  // email in the plan has completed one-time-code ownership proof. This runs
+  // BEFORE any Auth0 call, so an unverified (or swapped, or missing) proof
+  // creates nothing at all. Failures are neutral and fail closed.
+  const cookieName = journeyCookieName("model3-register")
+  const handoff = readJourneyToken<Model3RegisterProof>(
+    "model3-register",
+    request.cookies.get(cookieName)?.value,
+  )
+  const gate = gateModel3Create({
+    submittedEmails: plan.identities.map((id) => id.email),
+    proof: handoff.ok ? handoff.data : null,
+  })
+  if (!gate.ok) {
+    const expired = handoff.ok === false && handoff.reason === "expired"
+    const message =
+      gate.reason === "incomplete-proof"
+        ? "Please confirm your email address first."
+        : "Please start again and confirm your email address."
+    return NextResponse.json({ error: message }, { status: expired ? 410 : 403 })
+  }
+
+  // Attach passwords to the planned identities. Ownership is PROVEN (the gate
+  // passed), so each identity is minted email_verified: true — never inferred
+  // from the mere presence of a password. Emails + roles come from the planner.
+  const identities: IdentityToCreate[] = plan.identities.map((id) =>
+    id.role === "primary"
+      ? {
+          email: id.email,
+          password: primaryPassword,
+          role: "primary" as const,
+          emailVerified: true,
+        }
+      : {
+          email: id.email,
+          password: secondaryPassword,
+          role: "secondary" as const,
+          emailVerified: true,
+        },
+  )
 
   const outcome = await executePerEmailRegistration(
     {
@@ -110,7 +153,7 @@ export async function POST(request: NextRequest) {
 
   // Neutral success. Never echo the connection or user ids. Tell the client
   // whether a second email is still available to add via the completion journey.
-  return NextResponse.json(
+  const res = NextResponse.json(
     {
       status: "created",
       credentialCount: outcome.credentials.length,
@@ -118,4 +161,8 @@ export async function POST(request: NextRequest) {
     },
     { status: 201 },
   )
+  // One-time: clear the proof handoff so it can't be replayed into a second
+  // create. Any further sign-up must earn fresh ownership proof.
+  res.cookies.set(cookieName, "", { ...journeyCookieOptions(), maxAge: 0 })
+  return res
 }

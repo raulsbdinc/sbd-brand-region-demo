@@ -186,11 +186,11 @@ function ModelChooser({
 
 // --- Shared bits ------------------------------------------------------------
 
-function BackButton({ onBack }: { onBack: () => void }) {
+function BackButton({ onBack, label = "Change sign-in type" }: { onBack: () => void; label?: string }) {
   return (
     <Button variant="ghost" size="sm" className="-ml-2 self-start" onClick={onBack}>
       <ArrowLeft data-icon="inline-start" />
-      Change sign-in type
+      {label}
     </Button>
   )
 }
@@ -232,13 +232,12 @@ function looksLikeEmail(v: string): boolean {
 // --- Model 3: different email + password per sign-in ------------------------
 
 function PerEmailJourney({ onBack }: { onBack: () => void }) {
+  const [phase, setPhase] = useState<"details" | "verify">("details")
   const [primaryEmail, setPrimaryEmail] = useState("")
   const [primaryPassword, setPrimaryPassword] = useState("")
   const [addSecond, setAddSecond] = useState(false)
   const [secondaryEmail, setSecondaryEmail] = useState("")
   const [secondaryPassword, setSecondaryPassword] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [notReady, setNotReady] = useState<NotReady | null>(null)
   const [done, setDone] = useState<{ completionAvailable: boolean } | null>(null)
 
@@ -247,41 +246,11 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
     primaryEmail.length > 0 &&
     secondaryEmail.trim().toLowerCase() === primaryEmail.trim().toLowerCase()
 
-  const canSubmit =
+  const canContinue =
     looksLikeEmail(primaryEmail) &&
     primaryPassword.length >= 8 &&
     (!addSecond ||
       (looksLikeEmail(secondaryEmail) && secondaryPassword.length >= 8 && !emailsClash))
-
-  async function submit() {
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await fetch("/api/registration/per-email", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          primaryEmail,
-          primaryPassword,
-          ...(addSecond ? { secondaryEmail, secondaryPassword } : {}),
-        }),
-      })
-      const data = await res.json()
-      if (res.status === 200 && data?.configured === false) {
-        setNotReady({ reason: String(data.reason ?? "not-configured") })
-        return
-      }
-      if (res.status === 201 && data?.status === "created") {
-        setDone({ completionAvailable: data.completionAvailable === true })
-        return
-      }
-      setError(typeof data?.error === "string" ? data.error : "We couldn't complete that. Please try again.")
-    } catch {
-      setError("We couldn't complete that. Please try again.")
-    } finally {
-      setBusy(false)
-    }
-  }
 
   if (notReady) {
     return (
@@ -296,8 +265,8 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
     return (
       <div className="flex flex-col gap-4">
         <SuccessNotice title="Account created">
-          Your account is ready. You can sign in with the email and password you
-          just set.
+          Your account is ready. Both email addresses were confirmed, so you can
+          sign in with the email and password you just set.
         </SuccessNotice>
         {done.completionAvailable ? (
           <Card>
@@ -320,6 +289,22 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
     )
   }
 
+  if (phase === "verify") {
+    return (
+      <div className="flex flex-col gap-4">
+        <BackButton onBack={() => setPhase("details")} label="Edit details" />
+        <PerEmailVerify
+          primaryEmail={primaryEmail.trim()}
+          primaryPassword={primaryPassword}
+          secondaryEmail={addSecond ? secondaryEmail.trim() : undefined}
+          secondaryPassword={addSecond ? secondaryPassword : undefined}
+          onNotReady={setNotReady}
+          onDone={setDone}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <BackButton onBack={onBack} />
@@ -327,8 +312,8 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
         <CardHeader>
           <CardTitle>Different email and password</CardTitle>
           <CardDescription>
-            Set up your first sign-in. You can add more emails to this one
-            account whenever you like.
+            Set up your first sign-in. We&apos;ll email a one-time code to
+            confirm each address is yours before your account is created.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -391,19 +376,220 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
             </div>
           ) : null}
 
-          {error ? (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          ) : null}
+          <p className="text-xs text-muted-foreground">
+            {addSecond
+              ? "Next, we'll confirm both email addresses with a one-time code."
+              : "Next, we'll confirm your email address with a one-time code."}
+          </p>
 
-          <Button onClick={submit} disabled={busy || !canSubmit}>
-            {busy ? <Loader2 className="animate-spin" data-icon="inline-start" /> : null}
-            Create account
+          <Button onClick={() => setPhase("verify")} disabled={!canContinue}>
+            Continue
           </Button>
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+// Model 3 verify: prove ownership of EVERY email with a one-time code BEFORE the
+// account is created. We walk the emails one at a time (send code → enter code →
+// verify); only once all are confirmed do we call the create endpoint, which
+// independently re-checks the signed proof server-side. Nothing is created until
+// then, so an abandoned journey leaves no Auth0 identity behind.
+function PerEmailVerify({
+  primaryEmail,
+  primaryPassword,
+  secondaryEmail,
+  secondaryPassword,
+  onNotReady,
+  onDone,
+}: {
+  primaryEmail: string
+  primaryPassword: string
+  secondaryEmail?: string
+  secondaryPassword?: string
+  onNotReady: (n: NotReady) => void
+  onDone: (d: { completionAvailable: boolean }) => void
+}) {
+  const emails = secondaryEmail ? [primaryEmail, secondaryEmail] : [primaryEmail]
+  const [index, setIndex] = useState(0)
+  const [verified, setVerified] = useState<boolean[]>(() => emails.map(() => false))
+  const [codeSent, setCodeSent] = useState(false)
+  const [code, setCode] = useState("")
+  const [sending, setSending] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const current = emails[index]
+  const total = emails.length
+
+  function handleNotReady(data: { reason?: unknown }) {
+    onNotReady({ reason: String(data?.reason ?? "not-configured") })
+  }
+
+  async function sendCode() {
+    setSending(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/registration/per-email/verify/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          primaryEmail,
+          ...(secondaryEmail ? { secondaryEmail } : {}),
+          email: current,
+        }),
+      })
+      const data = await res.json()
+      if (res.status === 200 && data?.configured === false) {
+        handleNotReady(data)
+        return
+      }
+      if (res.status === 200 && data?.status === "code-sent") {
+        setCodeSent(true)
+        return
+      }
+      setError(typeof data?.error === "string" ? data.error : "We couldn't send a code. Please try again.")
+    } catch {
+      setError("We couldn't send a code. Please try again.")
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function create() {
+    setCreating(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/registration/per-email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          primaryEmail,
+          primaryPassword,
+          ...(secondaryEmail ? { secondaryEmail, secondaryPassword } : {}),
+        }),
+      })
+      const data = await res.json()
+      if (res.status === 200 && data?.configured === false) {
+        handleNotReady(data)
+        return
+      }
+      if (res.status === 201 && data?.status === "created") {
+        onDone({ completionAvailable: data.completionAvailable === true })
+        return
+      }
+      setError(
+        typeof data?.error === "string"
+          ? data.error
+          : "We couldn't finish creating your account. Please try again.",
+      )
+    } catch {
+      setError("We couldn't finish creating your account. Please try again.")
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function verifyCode() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/registration/per-email/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: current, otp: code }),
+      })
+      const data = await res.json()
+      if (res.status === 200 && data?.configured === false) {
+        handleNotReady(data)
+        return
+      }
+      if (res.status === 200 && data?.status === "verified") {
+        const next = [...verified]
+        next[index] = true
+        setVerified(next)
+        if (next.every(Boolean)) {
+          await create()
+        } else {
+          // Move to the next unconfirmed email and reset the code entry.
+          const nextIdx = next.findIndex((v) => !v)
+          setIndex(nextIdx)
+          setCode("")
+          setCodeSent(false)
+        }
+        return
+      }
+      setError(typeof data?.error === "string" ? data.error : "That code isn't right. Please try again.")
+    } catch {
+      setError("We couldn't confirm that code. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Confirm your email</CardTitle>
+        <CardDescription>
+          {total > 1
+            ? `Email ${index + 1} of ${total}: we need to confirm you own each address before creating your account.`
+            : "We need to confirm you own this address before creating your account."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
+          <Mails className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="font-medium break-all">{current}</span>
+        </div>
+
+        {!codeSent ? (
+          <Button onClick={sendCode} disabled={sending || creating}>
+            {sending ? (
+              <Loader2 className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <Mails data-icon="inline-start" />
+            )}
+            Email me a one-time code
+          </Button>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="pe-otp">Enter the 6-digit code</Label>
+              <Input
+                id="pe-otp"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                We emailed a code to {current}. It expires shortly.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button onClick={verifyCode} disabled={busy || creating || !code} className="flex-1">
+                {busy || creating ? (
+                  <Loader2 className="animate-spin" data-icon="inline-start" />
+                ) : null}
+                {creating ? "Creating account…" : total > 1 && index < total - 1 ? "Confirm and continue" : "Confirm and create account"}
+              </Button>
+              <Button variant="ghost" onClick={sendCode} disabled={sending || creating}>
+                Resend
+              </Button>
+            </div>
+          </>
+        )}
+
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+      </CardContent>
+    </Card>
   )
 }
 

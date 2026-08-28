@@ -291,12 +291,16 @@ export function deleteUser(userId: string): Promise<null> {
  * database identity (per-email / per-brand) that is then linked to the signed-in
  * primary account.
  *
- * `email_verified` is set to `true` deliberately and ONLY because the calling
- * route has already PROVEN the caller owns this email on their own account
- * (root verified email, verified linked identity, or trusted verified alias) —
- * never trust a browser-supplied flag. `verify_email: false` suppresses Auth0's
- * verification mail (there is nothing to verify). The password is passed through
- * to Auth0 for hashing and is NEVER logged or persisted anywhere by us.
+ * `emailVerified` is REQUIRED and passed straight to Auth0's `email_verified`.
+ * The caller sets it to `true` ONLY when it has already PROVEN the person owns
+ * this exact mailbox (a completed one-time-code challenge, a root verified
+ * email, or a verified linked identity) — never from a browser-supplied flag.
+ * There is deliberately no default: minting an identity is a security decision
+ * the caller must make explicitly, so an unproven email is created
+ * `email_verified: false` rather than being silently trusted. `verify_email` is
+ * always `false` here because ownership (when true) is proven out-of-band and we
+ * never want Auth0 to send its own verification mail. The password is passed
+ * through to Auth0 for hashing and is NEVER logged or persisted anywhere by us.
  *
  * Requires the `create:users` scope on the Management grant.
  */
@@ -304,6 +308,8 @@ export function createUser(body: {
   connection: string
   email: string
   password: string
+  /** True ONLY when the caller has proven mailbox ownership for `email`. */
+  emailVerified: boolean
 }): Promise<Auth0User> {
   return mgmtFetch<Auth0User>(`/users`, {
     method: "POST",
@@ -311,7 +317,7 @@ export function createUser(body: {
       connection: body.connection,
       email: body.email,
       password: body.password,
-      email_verified: true,
+      email_verified: body.emailVerified,
       verify_email: false,
     }),
   })

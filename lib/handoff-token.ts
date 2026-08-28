@@ -18,6 +18,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 /** Every handoff purpose in the app. A token is bound to exactly one. */
 export type HandoffPurpose =
+  | "model3-register" // ownership proof carried across the signed-out Model-3 sign-up
   | "model3-complete" // add a second per-email identity to a Model-3 account
   | "model4-proof" // proven ownership before linking a second brand
   | "google-link" // proven ownership before linking a cold Google identity

@@ -288,6 +288,82 @@ export function planModel3Registration(
   }
 }
 
+// --- Model 3: ownership-proof handoff + create gate -------------------------
+
+/**
+ * The NON-secret proof state carried (signed) across the signed-out Model-3
+ * sign-up: the two candidate emails and the ones that have completed a one-time
+ * code challenge so far. It never holds a password, OTP, or token — only which
+ * mailboxes have been proven. Emails are stored normalized (trimmed/lowercased).
+ */
+export interface Model3RegisterProof extends Record<string, unknown> {
+  primaryEmail: string
+  /** Present only when a second email is part of this sign-up. */
+  secondaryEmail?: string
+  /** Normalized emails proven via one-time code, a subset of the two above. */
+  verified: string[]
+}
+
+export type Model3CreateGateReason =
+  | "no-proof" // no signed proof handoff at all
+  | "email-mismatch" // the proof is for a different set of emails than submitted
+  | "incomplete-proof" // at least one submitted email hasn't been proven
+
+export type Model3CreateGate =
+  | { ok: true }
+  | { ok: false; reason: Model3CreateGateReason }
+
+function normalizeForGate(email: string): string {
+  return email.trim().toLowerCase()
+}
+
+/**
+ * PURE gate deciding whether a Model-3 account may actually be created. It is
+ * the single source of truth the create route obeys BEFORE it calls the
+ * provisioning executor, so no Auth0 user/link/bind can happen until every
+ * submitted email has completed real ownership proof.
+ *
+ * Fails CLOSED:
+ *  - no signed proof handoff            → "no-proof"
+ *  - proof's email set ≠ submitted set  → "email-mismatch" (blocks swapping an
+ *      address in after proving a different one)
+ *  - any submitted email not in verified → "incomplete-proof"
+ *
+ * All comparisons are case/space-insensitive. The caller passes the emails it
+ * is about to provision (from the pure plan) and the proof from the verified
+ * handoff cookie; this function trusts neither a browser flag nor a password.
+ */
+export function gateModel3Create(input: {
+  /** Emails about to be provisioned — [primary] or [primary, secondary]. */
+  submittedEmails: string[]
+  /** The verified proof handoff, or null when the cookie is missing/invalid. */
+  proof: Model3RegisterProof | null
+}): Model3CreateGate {
+  const { submittedEmails, proof } = input
+  if (!proof) return { ok: false, reason: "no-proof" }
+
+  const submitted = new Set(submittedEmails.map(normalizeForGate))
+  const proofEmails = new Set(
+    [proof.primaryEmail, proof.secondaryEmail]
+      .filter((e): e is string => typeof e === "string" && e.trim().length > 0)
+      .map(normalizeForGate),
+  )
+
+  // The set of emails proven must be EXACTLY the set being provisioned.
+  if (submitted.size !== proofEmails.size) return { ok: false, reason: "email-mismatch" }
+  for (const e of submitted) {
+    if (!proofEmails.has(e)) return { ok: false, reason: "email-mismatch" }
+  }
+
+  // Every submitted email must have actually completed proof.
+  const verified = new Set((proof.verified ?? []).map(normalizeForGate))
+  for (const e of submitted) {
+    if (!verified.has(e)) return { ok: false, reason: "incomplete-proof" }
+  }
+
+  return { ok: true }
+}
+
 // --- Model 4: first-brand registration planning -----------------------------
 
 export type Model4RejectReason =
