@@ -285,6 +285,38 @@ export function deleteUser(userId: string): Promise<null> {
   })
 }
 
+/**
+ * POST /users — create a NEW database-connection user on a SPECIFIC connection.
+ * Used only by the additional-password-credential flow to mint an isolated
+ * database identity (per-email / per-brand) that is then linked to the signed-in
+ * primary account.
+ *
+ * `email_verified` is set to `true` deliberately and ONLY because the calling
+ * route has already PROVEN the caller owns this email on their own account
+ * (root verified email, verified linked identity, or trusted verified alias) —
+ * never trust a browser-supplied flag. `verify_email: false` suppresses Auth0's
+ * verification mail (there is nothing to verify). The password is passed through
+ * to Auth0 for hashing and is NEVER logged or persisted anywhere by us.
+ *
+ * Requires the `create:users` scope on the Management grant.
+ */
+export function createUser(body: {
+  connection: string
+  email: string
+  password: string
+}): Promise<Auth0User> {
+  return mgmtFetch<Auth0User>(`/users`, {
+    method: "POST",
+    body: JSON.stringify({
+      connection: body.connection,
+      email: body.email,
+      password: body.password,
+      email_verified: true,
+      verify_email: false,
+    }),
+  })
+}
+
 /** GET /users/{id}/enrollments — MFA factors (Guardian). */
 export function getMfaEnrollments(userId: string): Promise<Auth0Enrollment[]> {
   return mgmtFetch<Auth0Enrollment[]>(

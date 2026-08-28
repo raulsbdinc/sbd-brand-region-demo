@@ -10,11 +10,15 @@ import {
   Bell,
   Check,
   Copy,
+  ExternalLink,
+  Eye,
+  EyeOff,
   Fingerprint,
   HelpCircle,
   KeyRound,
   LifeBuoy,
   Loader2,
+  Lock,
   Mail,
   MailCheck,
   MapPin,
@@ -2520,6 +2524,534 @@ function GoogleSignIn({ live }: { live: boolean }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Password credentials (Models 3 & 4, customer-facing)
+// ---------------------------------------------------------------------------
+// The real password arrangements on the account, phrased entirely in customer
+// language. NO internal vocabulary ("case 3", "per-email", "per-brand",
+// connection names, Auth0, bindings) ever reaches the screen — we read the raw
+// login-methods rows but derive our own labels from `connectionKey`/`email`.
+
+interface PasswordMethodView {
+  key: string
+  kind: string
+  connectionKey?: "shared" | "per-email" | "dewalt" | "stanley"
+  brand?: string
+  email?: string
+  resetBindingId?: string
+  canReset?: boolean
+}
+
+interface AddAvailability {
+  anotherEmail: { eligibleEmails: string[]; available: boolean }
+  thisBrand: { available: boolean; brand?: string; email?: string; reason?: string }
+}
+
+/** Customer label for one password credential — never an internal key/label. */
+function passwordCredentialLabel(m: PasswordMethodView, brandName: string): string {
+  if (m.connectionKey === "per-email") return `Password for ${m.email ?? "an email"}`
+  if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
+    return `${brandName} password`
+  }
+  return "Account password"
+}
+
+/** Plain-English explanation of where a credential works. */
+function passwordCredentialLine(m: PasswordMethodView, brandName: string): string {
+  if (m.connectionKey === "per-email") {
+    return `${m.email ?? "This email"} has its own password, separate from your account password.`
+  }
+  if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
+    return `Works only on ${brandName} sites. Your account password still works on other SBD brands.`
+  }
+  return "Works with your verified account emails across DeWalt and Stanley sites."
+}
+
+/** Accessible show/hide password field used throughout the Add-password flow. */
+function PasswordField({
+  id,
+  label,
+  value,
+  onChange,
+  autoComplete,
+  describedBy,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+  autoComplete: string
+  describedBy?: string
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="relative">
+        <Input
+          id={id}
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete={autoComplete}
+          aria-describedby={describedBy}
+          className="pr-10"
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+          aria-label={show ? "Hide password" : "Show password"}
+          aria-pressed={show}
+        >
+          {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// The Add-password step flow: choose an outcome, fill a password, see a specific
+// success state. Uses the shared Dialog; no nested page-section cards.
+function AddPasswordDialog({
+  availability,
+  brandName,
+  onCreated,
+}: {
+  availability: AddAvailability
+  brandName: string
+  onCreated: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [step, setStep] = useState<"choose" | "another-email" | "this-brand" | "done">("choose")
+  const [selectedEmail, setSelectedEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [successCopy, setSuccessCopy] = useState<string>("")
+
+  function reset() {
+    setStep("choose")
+    setSelectedEmail("")
+    setPassword("")
+    setConfirm("")
+    setBusy(false)
+    setError(null)
+    setSuccessCopy("")
+  }
+
+  function handleOpenChange(next: boolean) {
+    setOpen(next)
+    if (!next) reset()
+  }
+
+  const clientError = (() => {
+    if (password.length > 0 && password.length < 8) return "Use at least 8 characters."
+    if (confirm.length > 0 && confirm !== password) return "The passwords don't match."
+    return null
+  })()
+
+  const canSubmit =
+    !busy &&
+    password.length >= 8 &&
+    confirm === password &&
+    (step === "this-brand" || (step === "another-email" && selectedEmail))
+
+  async function submit(intent: "another-email" | "this-brand") {
+    setError(null)
+    if (!canSubmit) return
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/passwords", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent,
+          ...(intent === "another-email" ? { email: selectedEmail } : {}),
+          password,
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(json.error ?? "We couldn't add that password. Please try again.")
+        setBusy(false)
+        return
+      }
+      setSuccessCopy(json.credential?.works ?? "Your new password is ready to use.")
+      setStep("done")
+      setBusy(false)
+      onCreated()
+    } catch {
+      setError("Something went wrong. Please try again.")
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+        <Plus className="size-4" />
+        Add password
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        {step === "choose" ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Add a password</DialogTitle>
+              <DialogDescription>
+                Choose how you&apos;d like your new password to work.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <button
+                type="button"
+                disabled={!availability.anotherEmail.available}
+                onClick={() => setStep("another-email")}
+                className="flex w-full items-start gap-3 rounded-xl border border-border bg-background p-4 text-left transition-colors hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
+                  <AtSign className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-foreground">Another email</span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                    Give one of your verified email addresses its own password.
+                  </span>
+                </span>
+              </button>
+              {!availability.anotherEmail.available ? (
+                <p className="px-1 text-xs text-muted-foreground">
+                  You&apos;ll need a verified email that doesn&apos;t already have its own password.{" "}
+                  Add and verify one in{" "}
+                  <span className="font-semibold text-foreground">Email addresses</span> first.
+                </p>
+              ) : null}
+
+              <button
+                type="button"
+                disabled={!availability.thisBrand.available}
+                onClick={() => setStep("this-brand")}
+                className="flex w-full items-start gap-3 rounded-xl border border-border bg-background p-4 text-left transition-colors hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
+                  <ShieldCheck className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-foreground">This brand</span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                    Set a separate password just for {brandName} sites.
+                  </span>
+                </span>
+              </button>
+            </div>
+            <DialogFooter>
+              <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {step === "another-email" ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Password for another email</DialogTitle>
+              <DialogDescription>
+                Pick a verified email, then set a password that only that email uses.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium text-foreground">Choose an email</legend>
+                {availability.anotherEmail.eligibleEmails.map((email) => (
+                  <label
+                    key={email}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm",
+                      selectedEmail === email
+                        ? "border-primary bg-primary/5"
+                        : "border-border bg-background",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="add-password-email"
+                      value={email}
+                      checked={selectedEmail === email}
+                      onChange={() => setSelectedEmail(email)}
+                      className="size-4 accent-primary"
+                    />
+                    <span className="min-w-0 truncate text-foreground">{email}</span>
+                  </label>
+                ))}
+              </fieldset>
+              <PasswordField
+                id="add-pw-email-password"
+                label="New password"
+                value={password}
+                onChange={setPassword}
+                autoComplete="new-password"
+                describedBy="add-pw-email-req"
+              />
+              <p id="add-pw-email-req" className="text-xs text-muted-foreground">
+                Use at least 8 characters. Choose something you don&apos;t use elsewhere.
+              </p>
+              <PasswordField
+                id="add-pw-email-confirm"
+                label="Confirm password"
+                value={confirm}
+                onChange={setConfirm}
+                autoComplete="new-password"
+              />
+              {clientError ? <Note tone="error">{clientError}</Note> : null}
+              {error ? <Note tone="error">{error}</Note> : null}
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setStep("choose")} disabled={busy}>
+                Back
+              </Button>
+              <Button onClick={() => submit("another-email")} disabled={!canSubmit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Lock className="size-4" />}
+                Create password
+              </Button>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {step === "this-brand" ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{brandName} password</DialogTitle>
+              <DialogDescription>
+                This sets a separate password for{" "}
+                <span className="font-semibold text-foreground">{brandName}</span> sites only,
+                using{" "}
+                <span className="font-semibold text-foreground">
+                  {availability.thisBrand.email ?? "your account email"}
+                </span>
+                . Your account password keeps working on other SBD brands.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <PasswordField
+                id="add-pw-brand-password"
+                label="New password"
+                value={password}
+                onChange={setPassword}
+                autoComplete="new-password"
+                describedBy="add-pw-brand-req"
+              />
+              <p id="add-pw-brand-req" className="text-xs text-muted-foreground">
+                Use at least 8 characters. Choose something you don&apos;t use elsewhere.
+              </p>
+              <PasswordField
+                id="add-pw-brand-confirm"
+                label="Confirm password"
+                value={confirm}
+                onChange={setConfirm}
+                autoComplete="new-password"
+              />
+              {clientError ? <Note tone="error">{clientError}</Note> : null}
+              {error ? <Note tone="error">{error}</Note> : null}
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setStep("choose")} disabled={busy}>
+                Back
+              </Button>
+              <Button onClick={() => submit("this-brand")} disabled={!canSubmit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Lock className="size-4" />}
+                Create {brandName} password
+              </Button>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {step === "done" ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                <span className="inline-flex items-center gap-2">
+                  <Check className="size-5 text-primary" />
+                  Password added
+                </span>
+              </DialogTitle>
+              <DialogDescription>{successCopy}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <DialogClose render={<Button />}>Done</DialogClose>
+            </DialogFooter>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// One password-credential row with its own reset action. The reset reuses the
+// binding-targeted /api/account/password-reset endpoint; feedback stays inside
+// the row, with an accessible external link to open the one-time ticket.
+function PasswordCredentialRow({
+  method,
+  brandName,
+  live,
+}: {
+  method: PasswordMethodView
+  brandName: string
+  live: boolean
+}) {
+  const [busy, setBusy] = useState(false)
+  const [ticket, setTicket] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function reset() {
+    setError(null)
+    setNote(null)
+    setTicket(null)
+    if (!live) {
+      setNote("In production this creates a one-time reset link. This demo doesn't send mail.")
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/password-reset", {
+        method: "POST",
+        ...(method.resetBindingId
+          ? {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ bindingId: method.resetBindingId }),
+            }
+          : {}),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(json.error ?? "We couldn't start a reset. Please try again.")
+      } else if (json.ticket) {
+        setTicket(json.ticket)
+        setNote("A one-time reset link is ready. Open it to set a new password.")
+      } else {
+        setNote("Password reset started. Check your email to continue.")
+      }
+    } catch {
+      setError("Network error. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <MethodRow
+      icon={<KeyRound className="size-4" />}
+      name={passwordCredentialLabel(method, brandName)}
+      line={passwordCredentialLine(method, brandName)}
+      right={
+        method.canReset !== false ? (
+          <Button variant="outline" size="sm" onClick={reset} disabled={busy}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            Reset password
+          </Button>
+        ) : null
+      }
+    >
+      {ticket ? (
+        <div className="mt-3">
+          <a
+            href={ticket}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
+          >
+            <ExternalLink className="size-3.5" />
+            Open reset link
+          </a>
+        </div>
+      ) : null}
+      {note ? <div className="mt-2"><Note>{note}</Note></div> : null}
+      {error ? <div className="mt-2"><Note tone="error">{error}</Note></div> : null}
+    </MethodRow>
+  )
+}
+
+/** Customer display name for a brand id — client-safe, no server import. */
+const BRAND_DISPLAY_NAMES: Record<string, string> = {
+  dewalt: "DeWalt",
+  stanley: "Stanley",
+}
+function brandDisplay(brand?: string): string {
+  return (brand && BRAND_DISPLAY_NAMES[brand]) || "this brand"
+}
+
+// The password-credentials block inside "How you sign in". Reads the real
+// credentials from login-methods, shows a reset per credential, and offers a
+// restrained "Add password" command driven by server-computed availability.
+// The brand name shown is the DEPLOYMENT's brand, taken from the server
+// availability response (not the simulated skin), so it always matches what the
+// "this-brand" password will actually apply to.
+function PasswordCredentials({ live }: { live: boolean }) {
+  const { data: methodsData, mutate: refreshMethods } = useSWR<{
+    configured: boolean
+    methods: PasswordMethodView[]
+  }>(live ? "/api/account/login-methods" : null, fetcher, {
+    onError: (err) => warnUnavailable("Passwords", (err as { status?: number })?.status),
+  })
+  const { data: availData, mutate: refreshAvail } = useSWR<{
+    configured: boolean
+    availability: AddAvailability
+  }>(live ? "/api/account/passwords" : null, fetcher, {
+    onError: (err) => warnUnavailable("Add password", (err as { status?: number })?.status),
+  })
+
+  const passwords = (methodsData?.methods ?? []).filter((m) => m.kind === "password")
+  const availability = availData?.availability
+
+  // The deployment brand: prefer the server availability answer; fall back to a
+  // brand credential already on the account.
+  const brandName = brandDisplay(
+    availability?.thisBrand.brand ??
+      passwords.find((m) => m.connectionKey === "dewalt" || m.connectionKey === "stanley")?.brand,
+  )
+
+  function afterCreate() {
+    // Refresh both the credential list and what the dialog may still offer.
+    void refreshMethods()
+    void refreshAvail()
+  }
+
+  // In demo (non-live) mode we still show a representative shared row so the
+  // section is never empty, matching the rest of /profile's demo behavior.
+  const rows: PasswordMethodView[] = live
+    ? passwords
+    : [{ key: "demo-shared", kind: "password", connectionKey: "shared", canReset: true }]
+
+  return (
+    <div className="space-y-2">
+      {rows.length === 0 ? (
+        <MethodRow
+          icon={<KeyRound className="size-4" />}
+          name="Account password"
+          line="Works with your verified account emails across DeWalt and Stanley sites."
+          right={<ActiveTag />}
+        />
+      ) : (
+        rows.map((m) => (
+          <PasswordCredentialRow key={m.key} method={m} brandName={brandName} live={live} />
+        ))
+      )}
+      {availability ? (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Add a separate password for another verified email or just for {brandName} sites.
+          </p>
+          <AddPasswordDialog
+            availability={availability}
+            brandName={brandName}
+            onCreated={afterCreate}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section
@@ -2548,17 +3080,10 @@ function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: st
         <Note>{UNAVAILABLE_COPY}</Note>
       ) : (
         <ul className="space-y-2">
-          {/* 1 — Email and password (the primary way in) */}
-          <MethodRow
-            icon={<Mail className="size-4" />}
-            name="Email and password"
-            line={
-              accountEmail
-                ? `Sign in with ${accountEmail} and your password.`
-                : "Sign in with your email address and your password."
-            }
-            right={<Badge tone="brand">Primary</Badge>}
-          />
+          {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add) */}
+          <li>
+            <PasswordCredentials live={live} />
+          </li>
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow

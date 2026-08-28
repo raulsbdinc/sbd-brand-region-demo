@@ -228,6 +228,56 @@ export async function resolveSigninCredential(
   }
 }
 
+// --- Additional-password provisioning support -----------------------------
+
+/**
+ * The set of verified, OWNED emails on the primary account, derived ONLY from
+ * trusted server-side sources — never from the browser:
+ *   • the root email, when `email_verified`;
+ *   • any linked identity's verified email (database or social), read from that
+ *     identity's own `profileData`;
+ *   • trusted persisted verified aliases in `app_metadata.login_alias_emails`
+ *     (these are only ever written after a verification step).
+ * All normalized + deduped. This is the ownership proof the provisioning model
+ * relies on, so a UI-supplied email that is not in this set is rejected.
+ */
+export function collectAccountVerifiedEmails(primaryUser: Auth0User): string[] {
+  const out = new Set<string>()
+
+  const root = normalizeEmail(primaryUser.email)
+  if (root && primaryUser.email_verified) out.add(root)
+
+  for (const id of primaryUser.identities ?? []) {
+    const pd = (id.profileData ?? {}) as Record<string, unknown>
+    const email = normalizeEmail(pd.email)
+    const verified = pd.email_verified === true || pd.email_verified === "true"
+    if (email && verified) out.add(email)
+  }
+
+  const aliases = primaryUser.app_metadata?.login_alias_emails
+  if (Array.isArray(aliases)) {
+    for (const a of aliases) {
+      const email = normalizeEmail(a)
+      if (email) out.add(email)
+    }
+  }
+
+  return [...out]
+}
+
+/** The connection keys that have a configured connection NAME (server-only). */
+export function configuredConnectionKeySet(): ReadonlySet<ConnectionKey> {
+  return configuredConnectionKeys(resolveConnectionNames())
+}
+
+/**
+ * The primary account's normalized root email (used as the "this-brand" target).
+ * Empty string when absent.
+ */
+export function primaryAccountEmail(primaryUser: Auth0User): string {
+  return normalizeEmail(primaryUser.email)
+}
+
 export interface ResolvedResetTarget {
   binding: CredentialBinding
   connectionId: string
