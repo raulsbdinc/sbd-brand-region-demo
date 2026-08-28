@@ -7,7 +7,24 @@ export const metadata: Metadata = {
   description: "Recover access to your SBD account without exposing account details.",
 }
 
-export default function RecoverPage() {
+// Read the optional prefill on the SERVER (searchParams is a Promise in Next 16)
+// and pass it down as a prop. Doing it here — not with a client useSearchParams
+// hook — means the recovery form prefills with no Suspense boundary and no
+// build-time "useSearchParams should be wrapped in a suspense boundary" error.
+function readEmail(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value
+  const trimmed = (raw ?? "").trim()
+  // Cheap, permissive shape check; the recovery API is the real validator.
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : ""
+}
+
+export default async function RecoverPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ email?: string | string[] }>
+}) {
+  const { email } = await searchParams
+  const initialEmail = readEmail(email)
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 items-center px-4 py-10 sm:px-6 sm:py-16">
       <section className="grid w-full overflow-hidden rounded-3xl border border-border bg-card shadow-sm lg:grid-cols-[0.8fr_1.2fr]">
@@ -36,7 +53,7 @@ export default function RecoverPage() {
           </div>
         </aside>
         <div className="p-6 sm:p-10 lg:p-12">
-          <RecoveryCenter />
+          <RecoveryCenter initialEmail={initialEmail} />
         </div>
       </section>
     </main>

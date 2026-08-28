@@ -233,10 +233,12 @@ test("resolve: two distinct backed credentials for one email are AMBIGUOUS (fail
   assert.deepEqual(res, { ok: false, reason: "ambiguous" })
 })
 
-test("resolve: a real SHARED login PLUS a non-shared match is AMBIGUOUS (no realm)", () => {
+test("resolve: a SAME-account shared login PLUS its own scoped credential RESOLVES to the scoped one (intentional override)", () => {
   // The same email is both a genuine shared login (root/alias, sharedMatch=true)
-  // AND has a single backed non-shared credential. We must NOT prefer either
-  // realm — fail closed.
+  // AND has a single backed scoped credential ON THE SAME ACCOUNT. This is the
+  // customer intentionally giving this email its own password — the scoped
+  // credential wins for its allowed scope (it is NOT a cross-account collision).
+  // Cross-account collisions are covered by the section-13 ownership tests.
   const b = binding() // per-email, backed below
   const res = resolveCredential({
     email: b.email,
@@ -246,7 +248,7 @@ test("resolve: a real SHARED login PLUS a non-shared match is AMBIGUOUS (no real
     configuredKeys: ALL_KEYS,
     sharedMatch: true,
   })
-  assert.deepEqual(res, { ok: false, reason: "ambiguous" })
+  assert.deepEqual(res, { ok: true, kind: "resolved", connectionKey: "per-email", binding: b })
 })
 
 test("resolve: the SAME unique credential resolves when there is NO shared collision", () => {
@@ -589,15 +591,18 @@ test("normalizeEmail lowercases and trims, tolerating non-strings", () => {
 const OWN_EMAIL = "owner@example.com"
 
 function candidate(
+  accountId: string,
   bindings: CredentialBinding[],
   identities: LinkedDbIdentity[],
+  sharedMatch = false,
 ): CandidateAccount {
-  return { bindings, identities }
+  return { accountId, bindings, identities, sharedMatch }
 }
 
 test("ownership: a binding on account A is NOT backed by an identity that exists only on account B", () => {
   // Account A OWNS the per-email binding but has NO backing identity of its own.
   const accountA = candidate(
+    "auth0|A",
     [
       binding({
         email: OWN_EMAIL,
@@ -609,17 +614,13 @@ test("ownership: a binding on account A is NOT backed by an identity that exists
     [identity("shared", "auth0|shared-a")], // only a shared identity, no per-email
   )
   // Account B HAS the matching per-email identity, but owns NO such binding.
-  const accountB = candidate(
-    [],
-    [identity("per-email", "auth0|per-email-1")],
-  )
+  const accountB = candidate("auth0|B", [], [identity("per-email", "auth0|per-email-1")])
 
   const res = resolveCredentialFromCandidates({
     email: OWN_EMAIL,
     siteBrand: "dewalt",
     candidates: [accountA, accountB],
     configuredKeys: ALL_KEYS,
-    sharedMatch: false,
   })
 
   // The binding must NOT be validated by B's identity → no non-shared match →
@@ -652,6 +653,7 @@ test("ownership: same flattened data WOULD have cross-matched — proving the pe
 
 test("ownership: a binding backed by an identity on ITS OWN account resolves", () => {
   const account = candidate(
+    "auth0|A",
     [
       binding({
         email: OWN_EMAIL,
@@ -668,17 +670,17 @@ test("ownership: a binding backed by an identity on ITS OWN account resolves", (
     siteBrand: "dewalt",
     candidates: [account],
     configuredKeys: ALL_KEYS,
-    sharedMatch: false,
   })
   assert.equal(res.ok && res.kind, "resolved")
   assert.equal(res.ok && res.kind === "resolved" && res.connectionKey, "dewalt")
 })
 
-test("ownership: two independently valid same-owner candidates remain AMBIGUOUS", () => {
-  // Two DIFFERENT accounts, each with its OWN valid non-shared credential for
-  // the same email (e.g. a per-email account and a dewalt account). Each is
-  // same-account-validated, but together they are a collision → ambiguous.
+test("ownership: two DIFFERENT accounts each with a valid scoped credential remain AMBIGUOUS", () => {
+  // Two DIFFERENT accounts, each with its OWN valid scoped credential for the
+  // same email (a per-email account and a dewalt account). Each is
+  // same-account-validated, but together they are a real collision → ambiguous.
   const perEmailAccount = candidate(
+    "auth0|A",
     [
       binding({
         email: OWN_EMAIL,
@@ -690,6 +692,7 @@ test("ownership: two independently valid same-owner candidates remain AMBIGUOUS"
     [identity("per-email", "auth0|pe-1")],
   )
   const dewaltAccount = candidate(
+    "auth0|B",
     [
       binding({
         email: OWN_EMAIL,
@@ -706,14 +709,45 @@ test("ownership: two independently valid same-owner candidates remain AMBIGUOUS"
     siteBrand: "dewalt",
     candidates: [perEmailAccount, dewaltAccount],
     configuredKeys: ALL_KEYS,
-    sharedMatch: false,
   })
   assert.equal(res.ok, false)
   assert.equal(res.ok === false && res.reason, "ambiguous")
 })
 
-test("ownership: a valid non-shared match PLUS a genuine shared match is AMBIGUOUS", () => {
+// --- 13a. SAME-account scoped override vs CROSS-account collision -----------
+test("override: a scoped credential + shared match on the SAME account RESOLVES to the scoped credential", () => {
+  // The normal Model 1/2 -> scoped transition: the customer gave THIS email its
+  // own per-email password on their OWN account (which also has the shared
+  // identity). The scoped credential must win — not fail closed.
   const account = candidate(
+    "auth0|A",
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "per-email",
+        auth0UserId: "auth0|pe-1",
+        useCase: "per-email-password",
+      }),
+    ],
+    [identity("shared", "auth0|shared-a"), identity("per-email", "auth0|pe-1")],
+    true, // this same account is ALSO a genuine shared login for the email
+  )
+  const res = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok && res.kind, "resolved")
+  assert.equal(res.ok && res.kind === "resolved" && res.connectionKey, "per-email")
+})
+
+test("override: a scoped credential on account A + shared match on a DIFFERENT account B is AMBIGUOUS", () => {
+  // Account A intentionally owns a per-email credential. A SEPARATE person's
+  // account B is a genuine shared login for the same email → real cross-account
+  // collision → fail closed.
+  const accountA = candidate(
+    "auth0|A",
     [
       binding({
         email: OWN_EMAIL,
@@ -723,16 +757,77 @@ test("ownership: a valid non-shared match PLUS a genuine shared match is AMBIGUO
       }),
     ],
     [identity("per-email", "auth0|pe-1")],
+    false,
   )
+  const accountB = candidate("auth0|B", [], [identity("shared", "auth0|shared-b")], true)
   const res = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [accountA, accountB],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok, false)
+  assert.equal(res.ok === false && res.reason, "ambiguous")
+})
+
+test("override: a brand credential wins ONLY on its own brand; the shared password keeps working elsewhere", () => {
+  // Same account owns a dewalt brand credential and is a shared login. On a
+  // dewalt site the brand credential wins; on a stanley site it is out of scope
+  // so the account falls back to shared-default (shared password still works).
+  const account = candidate(
+    "auth0|A",
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "dewalt",
+        auth0UserId: "auth0|dw-1",
+        useCase: "per-brand-password",
+        brand: "dewalt",
+      }),
+    ],
+    [identity("shared", "auth0|shared-a"), identity("dewalt", "auth0|dw-1")],
+    true,
+  )
+  const onDewalt = resolveCredentialFromCandidates({
     email: OWN_EMAIL,
     siteBrand: "dewalt",
     candidates: [account],
     configuredKeys: ALL_KEYS,
-    sharedMatch: true, // a genuine shared login for the same email
   })
-  assert.equal(res.ok, false)
-  assert.equal(res.ok === false && res.reason, "ambiguous")
+  assert.equal(onDewalt.ok && onDewalt.kind === "resolved" && onDewalt.connectionKey, "dewalt")
+
+  const onStanley = resolveCredentialFromCandidates({
+    email: OWN_EMAIL,
+    siteBrand: "stanley",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(onStanley.ok && onStanley.kind, "shared-default")
+})
+
+test("override: another verified email on the same account keeps using the shared password", () => {
+  // The account gave OWN_EMAIL a per-email password, but a DIFFERENT verified
+  // email on the same account has no scoped binding → shared-default.
+  const account = candidate(
+    "auth0|A",
+    [
+      binding({
+        email: OWN_EMAIL,
+        connectionKey: "per-email",
+        auth0UserId: "auth0|pe-1",
+        useCase: "per-email-password",
+      }),
+    ],
+    [identity("shared", "auth0|shared-a"), identity("per-email", "auth0|pe-1")],
+    true,
+  )
+  const res = resolveCredentialFromCandidates({
+    email: "other@example.com",
+    siteBrand: "dewalt",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok && res.kind, "shared-default")
 })
 
 test("ownership: no candidates at all → shared-default (unknown email)", () => {
@@ -741,7 +836,6 @@ test("ownership: no candidates at all → shared-default (unknown email)", () =>
     siteBrand: "dewalt",
     candidates: [],
     configuredKeys: ALL_KEYS,
-    sharedMatch: false,
   })
   assert.equal(res.ok && res.kind, "shared-default")
 })

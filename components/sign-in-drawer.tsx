@@ -7,11 +7,13 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react"
+import { useRouter } from "next/navigation"
 import { ChevronRight, Eye, EyeOff, UserRound, X } from "lucide-react"
 import { useBrand } from "@/components/app-providers"
 import { GoogleMark } from "@/components/google-mark"
 import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
+import { recoveryHref } from "@/lib/recovery-href"
 
 interface SignInDrawerProps {
   open: boolean
@@ -56,6 +58,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   const brand = useBrand()
   // `mounted` keeps the panel in the DOM through the exit animation; `shown`
   // drives the enter/exit transform + scrim fade.
+  const router = useRouter()
   const [mounted, setMounted] = useState(false)
   const [shown, setShown] = useState(false)
   const [email, setEmail] = useState("")
@@ -479,6 +482,12 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
         <div className="mt-6">
           <button
             type="button"
+            onClick={() => {
+              // Navigate to the shared recovery page, carrying the typed email
+              // for prefill only when it's a valid address (see recoveryHref).
+              // type="button" keeps this from submitting the sign-in form.
+              router.push(recoveryHref(email))
+            }}
             className="font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-color)] outline-none hover:underline focus-visible:underline"
           >
             Forgot password?

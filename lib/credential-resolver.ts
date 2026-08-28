@@ -92,20 +92,26 @@ async function gatherCandidates(
 }
 
 /**
- * Whether the submitted email is a GENUINE shared-connection login: the root
- * email or a persisted login alias (or a coherent shared binding email) of a
- * candidate account that ACTUALLY holds a shared-connection identity. This is
- * the "validate the shared match against the actual shared identity" step — a
- * login_alias or root email only counts when the account truly has a shared
- * identity, so a stray alias can never fabricate a shared match.
+ * The set of candidate account ids (`user_id`) for which the submitted email is
+ * a GENUINE shared-connection login: the root email or a persisted login alias
+ * (or a coherent shared binding email) of a candidate account that ACTUALLY
+ * holds a shared-connection identity. This is the "validate the shared match
+ * against the actual shared identity" step — a login_alias or root email only
+ * counts when the account truly has a shared identity, so a stray alias can
+ * never fabricate a shared match.
+ *
+ * Returning the OWNING account ids (not just a boolean) lets the pure resolver
+ * distinguish a same-account scoped override from a cross-account collision.
  */
-function computeSharedMatch(
+function computeSharedMatchAccountIds(
   candidates: Auth0User[],
   email: string,
   sharedConnectionName: string | undefined,
-): boolean {
-  if (!sharedConnectionName) return false
+): Set<string> {
+  const ids = new Set<string>()
+  if (!sharedConnectionName) return ids
   for (const user of candidates) {
+    if (!user.user_id) continue
     const hasSharedIdentity = (user.identities ?? []).some(
       (id) => id.provider === "auth0" && id.connection === sharedConnectionName,
     )
@@ -126,10 +132,10 @@ function computeSharedMatch(
       aliasList.includes(email) ||
       sharedBindingEmails.includes(email)
     ) {
-      return true
+      ids.add(user.user_id)
     }
   }
-  return false
+  return ids
 }
 
 // Discriminated sign-in resolution so callers can distinguish a resolved
@@ -179,23 +185,27 @@ export async function resolveSigninCredential(
   // we cannot prove a case-3/4 credential or collision is absent → fail closed.
   if (!ok) return { kind: "unavailable" }
 
-  // Preserve per-account ownership: each Auth0 record's bindings are paired ONLY
-  // with that same record's identities — never cross-matched.
-  const candidates: CandidateAccount[] = users.map((user) => ({
-    bindings: readBindings(user),
-    identities: mapIdentities(user),
-  }))
-
   const names = resolveConnectionNames()
   const configuredKeys = configuredConnectionKeys(names)
-  const sharedMatch = computeSharedMatch(users, normalized, names.shared)
+  const sharedMatchIds = computeSharedMatchAccountIds(users, normalized, names.shared)
+
+  // Preserve per-account ownership: each Auth0 record's bindings are paired ONLY
+  // with that same record's identities — never cross-matched. `accountId` +
+  // per-account `sharedMatch` let the pure resolver tell a same-account scoped
+  // override (the normal Model 1/2 → scoped transition) apart from a real
+  // cross-account collision.
+  const candidates: CandidateAccount[] = users.map((user) => ({
+    accountId: user.user_id ?? "",
+    bindings: readBindings(user),
+    identities: mapIdentities(user),
+    sharedMatch: user.user_id ? sharedMatchIds.has(user.user_id) : false,
+  }))
 
   const resolution = resolveCredentialFromCandidates({
     email,
     siteBrand,
     candidates,
     configuredKeys,
-    sharedMatch,
   })
 
   // Fail CLOSED on ambiguity — never attempt any realm. Any other non-ok
@@ -216,6 +226,56 @@ export async function resolveSigninCredential(
     connectionName,
     binding: resolution.binding,
   }
+}
+
+// --- Additional-password provisioning support -----------------------------
+
+/**
+ * The set of verified, OWNED emails on the primary account, derived ONLY from
+ * trusted server-side sources — never from the browser:
+ *   • the root email, when `email_verified`;
+ *   • any linked identity's verified email (database or social), read from that
+ *     identity's own `profileData`;
+ *   • trusted persisted verified aliases in `app_metadata.login_alias_emails`
+ *     (these are only ever written after a verification step).
+ * All normalized + deduped. This is the ownership proof the provisioning model
+ * relies on, so a UI-supplied email that is not in this set is rejected.
+ */
+export function collectAccountVerifiedEmails(primaryUser: Auth0User): string[] {
+  const out = new Set<string>()
+
+  const root = normalizeEmail(primaryUser.email)
+  if (root && primaryUser.email_verified) out.add(root)
+
+  for (const id of primaryUser.identities ?? []) {
+    const pd = (id.profileData ?? {}) as Record<string, unknown>
+    const email = normalizeEmail(pd.email)
+    const verified = pd.email_verified === true || pd.email_verified === "true"
+    if (email && verified) out.add(email)
+  }
+
+  const aliases = primaryUser.app_metadata?.login_alias_emails
+  if (Array.isArray(aliases)) {
+    for (const a of aliases) {
+      const email = normalizeEmail(a)
+      if (email) out.add(email)
+    }
+  }
+
+  return [...out]
+}
+
+/** The connection keys that have a configured connection NAME (server-only). */
+export function configuredConnectionKeySet(): ReadonlySet<ConnectionKey> {
+  return configuredConnectionKeys(resolveConnectionNames())
+}
+
+/**
+ * The primary account's normalized root email (used as the "this-brand" target).
+ * Empty string when absent.
+ */
+export function primaryAccountEmail(primaryUser: Auth0User): string {
+  return normalizeEmail(primaryUser.email)
 }
 
 export interface ResolvedResetTarget {
