@@ -1321,6 +1321,47 @@ shape. `lib/model-registration.test.ts` proves the executor refuses to mint an
 unproven identity (403, zero tenant IO) and stamps `email_verified` from the
 proven flag.
 
+## UK sign-in chooser — fixes a live routing bug (28 August)
+
+**The bug (found in live preview).** Model-3 registration succeeds and a direct
+`/auth/login?connection=sbd-demo-per-email&login_hint=<email>` signs in fine,
+but the generic "Sign in" link hit `/auth/login` with **no connection**, so
+Auth0 used the tenant default (`sbd-eu`) and returned "Wrong email or password"
+for a per-email account. The same email can legitimately exist in several models
+(shared / per-email / per-brand), so a connection can NOT be inferred from the
+email — only the customer knows how they set the account up.
+
+**The fix.** A dedicated UK chooser at `/sign-in/uk` asks *how the account was
+set up* in plain language (never Auth0 connection names): "My existing shared
+account" → shared connection; "A different email and password" → per-email
+connection; "A separate password for {brand}" → this brand's connection;
+"Continue with Google" → `google-oauth2`. The password options collect the email
+first, then POST-free navigate to the server route `GET /api/signin/uk`, which
+resolves the real connection NAME server-side (`lib/uk-signin.ts`
+`buildUkSignInTarget`, pure + tested) and redirects to `/auth/login` pinned to
+that connection with `login_hint`. Connection names never reach the browser;
+`returnTo` is sanitised to a same-site path (open-redirects dropped to
+`/profile`); Google keeps `prompt=login` so the existing cold-login
+reconciliation Action still runs.
+
+**Routing.** On UK, every generic entry point routes to the chooser instead of
+the one-connection drawer: `openSignIn()` in `components/app-providers.tsx`
+(header, hero, add-to-cart, welcome guard) pushes `/sign-in/uk`, and the
+registration page's "Already have an account? Sign in" links there too. FR/DE
+are untouched — they still open the branded drawer. After registration success,
+a "Sign in now" / "Sign in to {brand}" button routes through the same UK route
+pinned to the just-used connection (`per-email` after Model 3, this brand after
+Model 4) with the primary email pre-filled, so the just-registered customer is
+never bounced to the default. The chooser honours the same non-production
+`?market=uk` preview override (display gating only); the route re-derives market
+the same way, and unconfigured connections come back as a non-revealing
+`error=not-configured` that reselects the option with friendly copy.
+
+**Tests.** `lib/uk-signin.test.ts` (18) covers option→connection selection for
+all four options, `login_hint`/`returnTo` handling, open-redirect and
+cross-origin `returnTo` rejection, Google `prompt=login`, brand allow-list
+gating, and the not-configured / unknown-option fail-closed paths.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only
