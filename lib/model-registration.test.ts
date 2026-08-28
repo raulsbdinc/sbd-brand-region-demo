@@ -6,6 +6,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   executePerEmailRegistration,
+  executeBrandRegistration,
   executeBrandLink,
   executePerEmailLink,
   type ManagementDeps,
@@ -236,6 +237,70 @@ test("per-email registration: rejects a short password with no tenant calls", as
   assert.equal(out.ok, false)
   if (!out.ok) assert.equal(out.status, 400)
   assert.equal(state.created.length, 0)
+})
+
+// --- Model 4: first-brand registration --------------------------------------
+
+test("brand registration: creates a fresh primary with one per-brand binding", async () => {
+  const { deps, state } = makeFake()
+  const out = await executeBrandRegistration(
+    {
+      connectionKey: "dewalt",
+      connectionName: "sbd-demo-dewalt",
+      email: "new@example.com",
+      password: "supersecret1",
+      brand: "dewalt",
+    },
+    deps,
+  )
+  assert.equal(out.ok, true)
+  if (out.ok) {
+    assert.equal(out.credentials.length, 1)
+    assert.equal(out.credentials[0].brand, "dewalt")
+    assert.equal(state.created.length, 1)
+    assert.equal(state.linked.length, 0) // primary account, nothing to link
+    assert.equal(state.deleted.length, 0)
+    assert.equal((state.updated[0].bindings as unknown[]).length, 1)
+  }
+})
+
+test("brand registration: fails closed on a brand collision without creating", async () => {
+  const existing: Auth0User = {
+    user_id: "auth0|exists",
+    email: "new@example.com",
+    identities: [{ connection: "sbd-demo-dewalt", provider: "auth0", user_id: "exists" }],
+  }
+  const { deps, state } = makeFake({ existing: [existing] })
+  const out = await executeBrandRegistration(
+    {
+      connectionKey: "dewalt",
+      connectionName: "sbd-demo-dewalt",
+      email: "new@example.com",
+      password: "supersecret1",
+      brand: "dewalt",
+    },
+    deps,
+  )
+  assert.equal(out.ok, false)
+  if (!out.ok) assert.equal(out.status, 409)
+  assert.equal(state.created.length, 0)
+})
+
+test("brand registration: ROLLBACK when persisting the binding fails", async () => {
+  const { deps, state } = makeFake({ failUpdate: true })
+  const out = await executeBrandRegistration(
+    {
+      connectionKey: "stanley",
+      connectionName: "sbd-demo-stanley",
+      email: "new@example.com",
+      password: "supersecret1",
+      brand: "stanley",
+    },
+    deps,
+  )
+  assert.equal(out.ok, false)
+  assert.equal(state.created.length, 1)
+  assert.deepEqual(state.deleted, state.created) // the fresh primary is deleted
 })
 
 // --- Model 4: brand link success --------------------------------------------
