@@ -179,11 +179,11 @@ export async function POST(request: Request) {
 
     // --- Provision with best-effort rollback -------------------------------
     // Step 1: create the isolated database identity on the resolved connection.
-    // email_verified is set true inside createUser ONLY because ownership was
-    // already proven above.
+    // We pass emailVerified: true ONLY because ownership was already proven
+    // above (this email is a verified identity/alias on the signed-in account).
     let created: Auth0User
     try {
-      created = await createUser({ connection: connectionName, email, password })
+      created = await createUser({ connection: connectionName, email, password, emailVerified: true })
     } catch (err) {
       // Nothing to roll back yet. Map a policy rejection to a neutral message;
       // a same-email-on-this-connection race surfaces as a conflict.

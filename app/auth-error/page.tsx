@@ -77,6 +77,34 @@ function copyFor(reason: AuthErrorReason): Copy {
         ),
         primary: { href: "/auth/login", label: "Try again" },
       }
+    case "link_unavailable":
+      return {
+        icon: RefreshCw,
+        title: "We couldn't finish connecting Google",
+        body: (
+          <>
+            You already have an account with this email, and we couldn&apos;t
+            verify it just now to connect Google safely — so we stopped rather
+            than create a second account. Please try signing in again in a
+            moment.
+          </>
+        ),
+        primary: { href: "/auth/login", label: "Try signing in again" },
+      }
+    case "link_ambiguous":
+      return {
+        icon: ShieldAlert,
+        title: "We need a hand connecting Google",
+        body: (
+          <>
+            More than one account is associated with this email, so we
+            couldn&apos;t safely decide which one to connect Google to. To avoid
+            creating a duplicate, please contact support and we&apos;ll link it
+            for you.
+          </>
+        ),
+        primary: { href: "/auth/login", label: "Back to sign-in" },
+      }
     default:
       return {
         icon: ShieldAlert,
@@ -98,6 +126,8 @@ const VALID_REASONS: AuthErrorReason[] = [
   "state",
   "config",
   "error",
+  "link_ambiguous",
+  "link_unavailable",
 ]
 
 export default async function AuthErrorPage({

@@ -8,6 +8,66 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## Model 3 / Model 4 registration + Google reconcile (28 August)
+
+Adds the customer-facing journeys that CREATE and LINK the case-3 (per-email)
+and case-4 (per-brand) credentials, plus cold-Google duplicate prevention. All
+of this is UK-only (`SITE_MARKET==="uk"`), fails closed, and leaves the live EU
+Model 1/2 flows behaviorally unchanged.
+
+**Architecture.** Every journey is split into a PURE, unit-tested planner
+(`lib/account-model.ts`, `lib/google-reconcile.ts`) that decides what may happen,
+and a server executor (`lib/model-registration.ts`) that performs
+create → link → bind with best-effort ROLLBACK. The executor takes the
+Management API as an injected `ManagementDeps` and imports auth0-management only
+as TYPES, so its rollback sequencing is exercised against a fake tenant in
+`lib/model-registration.test.ts` (node:test can't mock ESM). Real deps live in
+the server-only `lib/model-registration-deps.ts`. Connection names/ids are ALWAYS
+resolved server-side (`credential-resolver`); the browser never names a
+connection. Signed, single-purpose, expiring handoffs (`lib/handoff-token.ts` +
+server cookie wrapper `lib/journey-handoff.ts`, secret = `AUTH0_SECRET`) carry
+NON-secret routing facts between journey steps — never a password, OTP, or token.
+
+**Endpoints.**
+- `POST /api/registration/per-email` — Model 3 sign-up (primary + optional 2nd email).
+- `POST /api/registration/per-email/complete/start` + `/complete` — add a
+  deferred 2nd email later: send a one-time email code, then verify + link.
+- `POST /api/registration/brand` — Model 4: first registration, OR (email already
+  exists) respond "proof required".
+- `POST /api/registration/brand/proof/start` + `/proof` — prove ownership of the
+  existing account (password or one-time email code), then link the 2nd brand.
+- `GET /api/signin/google/reconcile` — cold Google logins return here instead of
+  /profile; detects a duplicate collision and diverts to /link-google (or fails
+  closed to /auth-error with `link_ambiguous`/`link_unavailable`, deleting the
+  standalone Google duplicate and clearing its session).
+- `/link-google` (page) + `POST …/reconcile/proof/start`, `/proof`, `/cancel` —
+  the proof UI: verify the existing account (password OR email code) then link
+  Google and swap into the primary session; cancel signs out with no duplicate.
+
+**Shared cores (no duplication).** The password-realm grant is extracted to
+`lib/auth0-password-grant.ts` and imported by BOTH sign-in and the Model-4/Google
+proofs (sign-in behavior byte-identical). The Google link + primary-session
+restore + "already attached elsewhere" refusal live in `lib/google-link-core.ts`,
+shared by the existing signed-in "Connect Google" flow and the new cold-login
+reconcile.
+
+**Guardrails proven by tests (195 total, all passing).** Planners fail closed on:
+non-UK market, malformed email, unconfigured connection, unproven ownership,
+model conflict (never mix per-email with per-brand), duplicate credential,
+ambiguous existing-account match, and forged/expired handoff. The shared signup
+route additionally rejects any browser-supplied `connection` or UK `accountModel`
+(`validateSharedSignupRequest`). Google is NEVER linked on an email match alone —
+only after a password/OTP proof of the existing account.
+
+> **Auth0 is NOT configured for cases 3 and 4 yet** (see the env contract below).
+> These endpoints ROUTE, PROVE and LINK; they do not create the tenant
+> connections. Until the per-email / per-brand connections exist and the vars are
+> set, resolution short-circuits to the shared `sbd-eu` connection and these UK
+> journeys report "not configured" rather than acting. The `/link-google` page
+> verified in-browser correctly shows its neutral "nothing to confirm" state on a
+> direct visit; the proven-ownership happy path needs a real Google session +
+> configured tenant to exercise end-to-end.
+
 ## Connection-aware credentials: env contract + Auth0 matrix (25 August)
 
 This tranche makes the per-email (case 3) and per-brand (case 4) database
@@ -1177,6 +1237,130 @@ This will quietly skip in the current tenant because the Management grant still
 does not include `delete:users`; granting that scope would make the cleanup live.
 Until then, reconnecting the same standalone Google user still works because the
 link flow can merge it back into the primary account.
+
+## UK registration UI (28 August)
+
+The connection-aware credential architecture now has a customer-facing front
+end for the two UK account models, at a dedicated `/register/uk` route.
+
+**Strict UK gate.** The page renders the journeys only when
+`accountModelSelectionAvailable(market)` is true; every other market gets a
+neutral "not available for this storefront" notice. Because `SITE_MARKET` is
+fixed per deployment (fr/de today), a non-production `?market=uk` override lets
+you walk the journeys on a non-UK preview — a "Preview only" banner makes this
+explicit. The override is **display gating only**: `lib/preview-market.ts`
+(`effectiveMarket` / `previewOverrideAllowed`, pure + unit-tested) decides which
+UI to show, while the registration API routes independently re-gate on the real
+`SITE_MARKET`. So on the fr preview the forms submit and honestly report "That
+option isn't available here" rather than faking success.
+
+**Account-model choice.** `components/uk-registration.tsx` presents an
+accessible radiogroup (native radio inputs inside styled cards, no custom
+`radio-group` primitive) built from `ACCOUNT_MODEL_META`:
+
+- **Different email and password (Model 3 / per-email).** Collects a primary
+  email + password and, optionally inline, a second email + password, then
+  **proves ownership of EVERY email with a one-time code before anything is
+  created**. The UI emails a code to each address
+  (`POST /api/registration/per-email/verify/start`, which also binds the email
+  set into a signed handoff), collects the codes, and submits them together to
+  `POST /api/registration/per-email`. That create route **consumes** each code
+  at the IdP (Auth0's passwordless OTP grant, which single-uses it) immediately
+  before it creates/links/binds — so a replayed code is rejected by the IdP, not
+  by cookie state. On success it offers the authenticated completion journey
+  when a second sign-in is still available.
+- **Same email, different brand password (Model 4 / per-brand).** Collects the
+  email + this brand's password and submits to `POST /api/registration/brand`.
+  When the email already owns the other brand the API answers `proof-required`
+  and the UI drops into an ownership-proof step (existing password *or* a
+  one-time email code) before linking the new brand.
+
+**No account before proof (security).** Model-3 registration NEVER mints an
+identity from a collected password, and it never trusts a stateless "verified"
+flag (a copied signed cookie would otherwise stay valid until expiry — clearing
+the cookie is NOT replay prevention). Instead, ownership is proven by
+**consuming a one-time code at the IdP during the final create request**:
+
+- The signed, httpOnly, purpose-bound `model3-register` handoff carries ONLY the
+  candidate email set (`Model3RegisterBinding`) — no password, code, token, or
+  "verified" flag. It just fixes which emails the create is allowed to provision.
+- `registerModel3WithProof()` (pure, deps-injected) runs the create: it requires
+  the signed binding, checks the provisioned emails are EXACTLY the bound set,
+  requires a code for every email, then calls `verifyEmailPasscode` for each code
+  **before any create/link/bind**. Auth0 single-uses each code, so a
+  replayed/already-used code throws and we mutate nothing.
+- The executor still **independently refuses** to create any identity whose
+  `email_verified` isn't a proven `true`, and `createUser()` *requires* an
+  explicit `emailVerified` argument — no hard-coded `true` anywhere.
+
+A missing/expired/tampered/wrong-purpose handoff, a wrong-email (swapped-set)
+body, a missing code, or a replayed/consumed code all fail closed with ZERO
+create/link/bind. Partial two-code failure is handled: the server returns
+`failedEmails` (+ `needResend`), and the UI resets exactly those codes and
+re-arms their "send code" so the customer re-requests a fresh code for only the
+address that failed.
+
+**Model 3 completion journey.** `/account/add-email` (authenticated;
+`components/add-email-journey.tsx`) lets a signed-in per-email customer add a
+further sign-in email: enter the address → one-time code emailed
+(`/complete/start`) → verify code + set a password (`/complete`). The page gates
+on a real Auth0 session and otherwise shows a sign-in prompt; the endpoints
+require the session regardless.
+
+All states — `{configured:false}`, neutral rejects, and success — are surfaced
+honestly; the UI never fabricates a created/linked outcome.
+
+**Tests.** `lib/model3-register-proof.test.ts` composes the REAL signed-handoff
+codec with `registerModel3WithProof` (fake management + OTP deps) and proves
+that a missing/expired/tampered/wrong-purpose binding, a wrong-email body, a
+missing code, and a replayed/already-consumed code each cause ZERO
+create/link/bind calls — replay specifically because the fake OTP dep single-
+uses the code, mirroring Auth0. It also proves the happy path consumes both
+codes then provisions, and covers the partial-failure `failedEmails`/`needResend`
+shape. `lib/model-registration.test.ts` proves the executor refuses to mint an
+unproven identity (403, zero tenant IO) and stamps `email_verified` from the
+proven flag.
+
+## UK sign-in chooser — fixes a live routing bug (28 August)
+
+**The bug (found in live preview).** Model-3 registration succeeds and a direct
+`/auth/login?connection=sbd-demo-per-email&login_hint=<email>` signs in fine,
+but the generic "Sign in" link hit `/auth/login` with **no connection**, so
+Auth0 used the tenant default (`sbd-eu`) and returned "Wrong email or password"
+for a per-email account. The same email can legitimately exist in several models
+(shared / per-email / per-brand), so a connection can NOT be inferred from the
+email — only the customer knows how they set the account up.
+
+**The fix.** A dedicated UK chooser at `/sign-in/uk` asks *how the account was
+set up* in plain language (never Auth0 connection names): "My existing shared
+account" → shared connection; "A different email and password" → per-email
+connection; "A separate password for {brand}" → this brand's connection;
+"Continue with Google" → `google-oauth2`. The password options collect the email
+first, then POST-free navigate to the server route `GET /api/signin/uk`, which
+resolves the real connection NAME server-side (`lib/uk-signin.ts`
+`buildUkSignInTarget`, pure + tested) and redirects to `/auth/login` pinned to
+that connection with `login_hint`. Connection names never reach the browser;
+`returnTo` is sanitised to a same-site path (open-redirects dropped to
+`/profile`); Google keeps `prompt=login` so the existing cold-login
+reconciliation Action still runs.
+
+**Routing.** On UK, every generic entry point routes to the chooser instead of
+the one-connection drawer: `openSignIn()` in `components/app-providers.tsx`
+(header, hero, add-to-cart, welcome guard) pushes `/sign-in/uk`, and the
+registration page's "Already have an account? Sign in" links there too. FR/DE
+are untouched — they still open the branded drawer. After registration success,
+a "Sign in now" / "Sign in to {brand}" button routes through the same UK route
+pinned to the just-used connection (`per-email` after Model 3, this brand after
+Model 4) with the primary email pre-filled, so the just-registered customer is
+never bounced to the default. The chooser honours the same non-production
+`?market=uk` preview override (display gating only); the route re-derives market
+the same way, and unconfigured connections come back as a non-revealing
+`error=not-configured` that reselects the option with friendly copy.
+
+**Tests.** `lib/uk-signin.test.ts` (18) covers option→connection selection for
+all four options, `login_hint`/`returnTo` handling, open-redirect and
+cross-origin `returnTo` rejection, Google `prompt=login`, brand allow-list
+gating, and the not-configured / unknown-option fail-closed paths.
 
 ## Working with the v0 chat
 

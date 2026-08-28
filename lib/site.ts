@@ -10,9 +10,9 @@
 // a computed key like `process.env[name]` is never replaced and reads back
 // undefined in the browser. That's why each var is spelled out in full below.
 
-import { BRANDS, COUNTRIES, tenantLabel } from "./brands"
-import type { Brand, Country } from "./brands"
-import type { BrandId, CountryId } from "./types"
+import { BRANDS, COUNTRIES, tenantLabel } from "./brands.ts"
+import type { Brand, Country } from "./brands.ts"
+import type { BrandId, CountryId } from "./types.ts"
 
 const FALLBACK_BRAND: BrandId = "dewalt"
 const FALLBACK_MARKET: CountryId = "fr"
@@ -59,15 +59,44 @@ export const SITE_COUNTRY: Country = COUNTRIES[SITE_MARKET]
 /** Human label for this deployment, e.g. "DeWalt · France". */
 export const SITE_TENANT_LABEL: string = tenantLabel(SITE_BRAND, SITE_MARKET)
 
+// PER-MARKET CURRENCY
+// ===================
+// Currency is a market fact, not a global constant: the eurozone storefronts
+// (France, Germany) price in euros, but the UK storefronts must price in pounds
+// sterling. Keyed by market so formatPrice and the footer copy both read from
+// one source, and every market the repo can serve resolves to a real currency.
+export interface MarketCurrency {
+  /** ISO 4217 code passed to Intl.NumberFormat, e.g. "GBP". */
+  code: string
+  /** Symbol for footer copy, e.g. "£". */
+  symbol: string
+  /** Plain-English plural noun for footer copy, e.g. "pounds". */
+  noun: string
+}
+
+const MARKET_CURRENCY: Record<CountryId, MarketCurrency> = {
+  us: { code: "USD", symbol: "$", noun: "US dollars" },
+  ca: { code: "CAD", symbol: "$", noun: "Canadian dollars" },
+  uk: { code: "GBP", symbol: "£", noun: "pounds" },
+  fr: { code: "EUR", symbol: "€", noun: "euros" },
+  de: { code: "EUR", symbol: "€", noun: "euros" },
+  au: { code: "AUD", symbol: "$", noun: "Australian dollars" },
+}
+
+/** The currency this market prices in. Pure — resolvable for any market. */
+export function marketCurrency(market: CountryId = SITE_MARKET): MarketCurrency {
+  return MARKET_CURRENCY[market]
+}
+
 /**
- * Prices are shown in euros for every market this repo serves (France and
- * Germany are both eurozone). Formatting is locale-driven so the same amount
- * subtly reads for its market (e.g. "149 €") without translating the copy.
+ * Prices are formatted in the market's own currency (euros for FR/DE, pounds
+ * for the UK). Formatting is locale-driven so the amount reads correctly for
+ * its market (e.g. "149 €" for fr-FR, "£149" for en-GB).
  */
 export function formatPrice(amount: number, market: CountryId = SITE_MARKET): string {
   return new Intl.NumberFormat(COUNTRIES[market].locale, {
     style: "currency",
-    currency: "EUR",
+    currency: MARKET_CURRENCY[market].code,
     maximumFractionDigits: 0,
   }).format(amount)
 }
@@ -81,7 +110,10 @@ export interface StorefrontContent {
   subcopy: string
   /** One-line brand promise used in the footer. */
   footerTagline: string
-  /** Footer market line, e.g. "Serving Germany · Prices shown in euros (€)". */
+  /**
+   * Footer market line, e.g. "Serving Germany · Prices shown in euros (€)" or
+   * "Serving United Kingdom · Prices shown in pounds (£)".
+   */
   marketLine: string
 }
 
@@ -122,13 +154,14 @@ export function storefrontContent(
 ): StorefrontContent {
   const voice = BRAND_VOICE[brand]
   const marketName = COUNTRIES[market].name
+  const currency = MARKET_CURRENCY[market]
   const fill = (s: string) => s.replaceAll("{market}", marketName)
   return {
     eyebrow: `${BRANDS[brand].category} · ${marketName}`,
     headline: fill(voice.headline),
     subcopy: fill(voice.subcopy),
     footerTagline: voice.footerTagline,
-    marketLine: `Serving ${marketName} · Prices shown in euros (€)`,
+    marketLine: `Serving ${marketName} · Prices shown in ${currency.noun} (${currency.symbol})`,
   }
 }
 

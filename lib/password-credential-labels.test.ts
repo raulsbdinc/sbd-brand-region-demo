@@ -31,7 +31,13 @@ test("shared and per-email labels/lines never mention a brand", () => {
 
   const perEmail: PasswordCredentialView = { connectionKey: "per-email", email: "alt@x.com" }
   assert.equal(passwordCredentialLabel(perEmail), "Password for alt@x.com")
-  assert.match(passwordCredentialLine(perEmail), /^alt@x\.com has its own password/)
+  assert.equal(
+    passwordCredentialLine(perEmail),
+    "alt@x.com has its own password. Resetting it will not affect your other sign-in emails.",
+  )
+  // Must NOT claim a separate shared/"account" password exists (case-3/4-only
+  // accounts have none).
+  assert.doesNotMatch(passwordCredentialLine(perEmail), /account password/i)
 })
 
 // The core correction-2 regression: on any deployment, an account holding BOTH
@@ -43,11 +49,26 @@ test("DeWalt + Stanley rows are labelled independently (no deployment-brand blee
   assert.equal(passwordCredentialLabel(dewalt), "DeWalt password")
   assert.equal(passwordCredentialLabel(stanley), "Stanley password")
 
-  assert.match(passwordCredentialLine(dewalt), /Works only on DeWalt sites/)
-  assert.match(passwordCredentialLine(stanley), /Works only on Stanley sites/)
+  // Concise + accurate: names only where it works, with no claim that a
+  // separate shared/"account" password also exists.
+  assert.equal(passwordCredentialLine(dewalt), "Works only on DeWalt sites.")
+  assert.equal(passwordCredentialLine(stanley), "Works only on Stanley sites.")
+  assert.doesNotMatch(passwordCredentialLine(dewalt), /account password/i)
+  assert.doesNotMatch(passwordCredentialLine(stanley), /account password/i)
 
   // The two labels must differ — the exact bug was both saying "DeWalt".
   assert.notEqual(passwordCredentialLabel(dewalt), passwordCredentialLabel(stanley))
+})
+
+// The /profile reset-confirmation title interpolates the label VERBATIM (no
+// lowercasing), so a brand credential reads "Reset Stanley password?" — never
+// "Reset stanley password?". This guards the display-label capitalization.
+test("reset-confirmation title preserves brand capitalization", () => {
+  const resetTitle = (m: PasswordCredentialView) => `Reset ${passwordCredentialLabel(m)}?`
+  assert.equal(resetTitle({ connectionKey: "stanley", brand: "stanley" }), "Reset Stanley password?")
+  assert.equal(resetTitle({ connectionKey: "dewalt", brand: "dewalt" }), "Reset DeWalt password?")
+  // Guard against a re-introduced .toLowerCase() on the label.
+  assert.doesNotMatch(resetTitle({ connectionKey: "stanley", brand: "stanley" }), /stanley/)
 })
 
 // Even if brand is omitted, the connectionKey alone still yields the right brand.

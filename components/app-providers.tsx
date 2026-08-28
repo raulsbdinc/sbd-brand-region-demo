@@ -170,8 +170,20 @@ export function AppProviders({
       // (mock or real). Raul's rule — "we should not be able to log in again if
       // we are already logged in" — and the backstop for any entry point that
       // forgets to branch on `signedIn` itself.
+      //
+      // UK routing: the branded drawer posts to /api/signin/password, which
+      // resolves ONE connection per attempt — fine for FR/DE, but the UK
+      // storefront supports several connections (shared / per-email / per-brand
+      // / Google) that only the customer can disambiguate. So on UK we send
+      // every drawer entry point (header, hero CTA, add-to-cart, welcome guard)
+      // to the dedicated chooser instead of opening the drawer. FR/DE keep the
+      // existing drawer untouched.
       openSignIn: () => {
         if (signedIn) return
+        if (SITE_MARKET === "uk") {
+          router.push("/sign-in/uk")
+          return
+        }
         setSignInOpen(true)
       },
       closeSignIn: () => setSignInOpen(false),
@@ -196,6 +208,7 @@ export function AppProviders({
       activeFlow,
       logout,
       authConfigured,
+      router,
     ],
   )
 

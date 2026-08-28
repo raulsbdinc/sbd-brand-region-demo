@@ -41,6 +41,10 @@ export type AuthErrorReason =
   | "state"
   | "config"
   | "error"
+  // Set by the cold-Google reconcile route (app/api/signin/google/reconcile)
+  // when a duplicate collision can't be safely resolved and it fails closed.
+  | "link_ambiguous"
+  | "link_unavailable"
 
 /**
  * Map an SDK callback error to a safe reason code. Never returns raw error text.
