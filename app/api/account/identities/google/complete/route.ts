@@ -1,22 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { generateSessionCookie } from "@auth0/nextjs-auth0/testing"
 import { auth0, isAuthConfigured } from "@/lib/auth0"
-import {
-  getUser,
-  linkIdentity,
-  updateUser,
-  isManagementConfigured,
-  ManagementError,
-  type Auth0User,
-} from "@/lib/auth0-management"
-import {
-  resolveRegionAuthConfig,
-  regionFromCookieHeader,
-} from "@/lib/auth0-regions"
+import { getUser, isManagementConfigured } from "@/lib/auth0-management"
 import {
   GOOGLE_LINK_COOKIE_NAME,
   decodeGoogleLinkHandoff,
 } from "@/lib/google-link-handoff"
+import {
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_SECONDS,
+  linkStandaloneGoogle,
+  mintPrimarySessionCookie,
+} from "@/lib/google-link-core"
 
 // GET /api/account/identities/google/complete
 // ============================================
@@ -40,55 +34,7 @@ import {
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-// Mirror the password route exactly so the restored session is byte-compatible.
-const SESSION_TTL_SECONDS = 60 * 60
-const SESSION_COOKIE_NAME = "__session"
-
 type Result = "linked" | "in_use" | "error"
-
-/**
- * Make the just-linked Google account's VERIFIED email a first-class login
- * alias on the primary, so it signs in with the one account password exactly
- * like a linked "email" identity (PR #37). `googleUser` is the standalone
- * Google record read BEFORE linking, so its email + email_verified are the
- * Google account's own. Best-effort: the link already succeeded and is what the
- * customer asked for, so a metadata-write failure must NOT change the outcome.
- * Only app_metadata.login_alias_emails changes — no user create/delete, no
- * password or sub change.
- */
-async function recordGoogleAlias(
-  primarySub: string,
-  googleUser: Auth0User,
-): Promise<void> {
-  try {
-    const googleEmail =
-      googleUser.email?.toLowerCase() ??
-      (googleUser.identities?.[0]?.profileData?.email as string | undefined)?.toLowerCase()
-    const verified =
-      googleUser.email_verified === true ||
-      googleUser.identities?.[0]?.profileData?.email_verified === true
-    if (!googleEmail || !verified) return
-
-    const primary = await getUser(primarySub)
-    const existing = Array.isArray(primary.app_metadata?.login_alias_emails)
-      ? (primary.app_metadata!.login_alias_emails as unknown[]).filter(
-          (e): e is string => typeof e === "string",
-        )
-      : []
-    const merged = Array.from(
-      new Set([...existing.map((e) => e.toLowerCase()), googleEmail]),
-    )
-    if (merged.length === existing.length) return // already present
-    await updateUser(primarySub, {
-      app_metadata: {
-        ...(primary.app_metadata ?? {}),
-        login_alias_emails: merged,
-      },
-    })
-  } catch (err) {
-    console.log("[v0] google alias persist skipped:", (err as Error).message)
-  }
-}
 
 export async function GET(request: NextRequest) {
   const cookieHeader = request.headers.get("cookie")
@@ -112,41 +58,9 @@ export async function GET(request: NextRequest) {
     return res
   }
 
-  // Restore the primary account's session from its Management record. The
-  // restored session carries no fresh tokens (we minted it from a directory
-  // record, not a login) — only the debug token inspector reads tokenSet, and
-  // it tolerates empty tokens; every other reader uses session.user.
-  async function restorePrimary(primarySub: string): Promise<string | null> {
-    try {
-      const primary = await getUser(primarySub)
-      const region = regionFromCookieHeader(cookieHeader)
-      const { secret } = resolveRegionAuthConfig(region)
-      if (!secret) return null
-      const now = Math.floor(Date.now() / 1000)
-      const session = {
-        user: {
-          sub: primary.user_id,
-          email: primary.email,
-          email_verified: primary.email_verified,
-          name: primary.name,
-          nickname: primary.nickname,
-          picture: primary.picture,
-          given_name: primary.given_name,
-          family_name: primary.family_name,
-          updated_at: primary.updated_at,
-        },
-        tokenSet: {
-          accessToken: "",
-          idToken: "",
-          expiresAt: now + SESSION_TTL_SECONDS,
-        },
-        internal: { sid: crypto.randomUUID(), createdAt: now },
-      }
-      return await generateSessionCookie(session, { secret })
-    } catch {
-      return null
-    }
-  }
+  // Restore the primary account's session (shared with the reconcile flow).
+  const restorePrimary = (primarySub: string) =>
+    mintPrimarySessionCookie(primarySub, cookieHeader)
 
   // No real Auth0 (e.g. the sandbox): nothing to complete — land on the profile.
   if (!isAuthConfigured()) return finish("error")
@@ -185,43 +99,11 @@ export async function GET(request: NextRequest) {
   } catch {
     return finish("error", await restorePrimary(primarySub))
   }
-  const identities = currentUser.identities ?? []
 
-  // OUTCOME 3 — the Google account is already attached to another customer
-  // (its record carries more than one identity). Refuse; never link.
-  if (identities.length > 1) {
-    return finish("in_use", await restorePrimary(primarySub))
-  }
-
-  // OUTCOME 2 — a standalone Google record (the mismatched-email case). Link it
-  // onto the primary, using the user_id WITHOUT the "google-oauth2|" prefix,
-  // exactly as app/api/account/emails/verify/route.ts links a secondary email.
-  const only = identities[0]
-  if (identities.length === 1 && only.provider === "google-oauth2") {
-    try {
-      await linkIdentity(primarySub, {
-        provider: "google-oauth2",
-        user_id: only.user_id,
-      })
-      // Promote the Google email to a first-class password alias on the primary
-      // (best-effort; never changes the reported link outcome).
-      await recordGoogleAlias(primarySub, currentUser)
-      return finish("linked", await restorePrimary(primarySub))
-    } catch (err) {
-      // A 400/409 almost always means it's attached elsewhere — same refusal
-      // as the email flow rather than a raw directory error.
-      if (
-        err instanceof ManagementError &&
-        (err.status === 400 || err.status === 409)
-      ) {
-        return finish("in_use", await restorePrimary(primarySub))
-      }
-      console.log("[v0] google link failed:", (err as Error).message)
-      return finish("error", await restorePrimary(primarySub))
-    }
-  }
-
-  // Any other shape (e.g. a single non-Google identity) — don't link; just get
-  // the person back to their primary session.
-  return finish("error", await restorePrimary(primarySub))
+  // OUTCOMES 2 & 3 — link a standalone Google record onto the primary, or refuse
+  // when it's already attached elsewhere. The link + alias + refusal rules live
+  // in the shared core so this flow and the cold-login reconcile behave
+  // identically. Whatever the result, restore the primary session.
+  const result = await linkStandaloneGoogle(primarySub, currentUser)
+  return finish(result, await restorePrimary(primarySub))
 }
