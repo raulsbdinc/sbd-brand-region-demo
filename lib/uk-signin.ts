@@ -203,9 +203,16 @@ export function buildUkSignInTarget(input: UkSignInTargetInput): UkSignInTarget 
   const connectionName = input.names[key]
   if (!connectionName) return { ok: false, reason: "not-configured" }
 
+  // `prompt=login` forces Auth0 to actually request the chosen credential even
+  // when a tenant SSO session already exists. Without it, a leftover session
+  // (e.g. a previous shared-account sign-in) is silently returned and the
+  // customer's explicit choice of email/connection is bypassed — the reported
+  // defect where picking "A different email and password" logged the wrong
+  // (previous) user straight back in. Google already sets this in its branch.
   const params = new URLSearchParams({
     connection: connectionName,
     login_hint: email,
+    prompt: "login",
     returnTo,
   })
   return { ok: true, url: `/auth/login?${params.toString()}` }

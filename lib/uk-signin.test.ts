@@ -214,6 +214,54 @@ describe("buildUkSignInTarget — connection selection (the live bug)", () => {
   })
 })
 
+describe("prompt=login on every chooser option (SSO-bypass fix)", () => {
+  // A leftover tenant SSO session must never satisfy an explicit chooser
+  // selection: without prompt=login, Auth0 silently returns the previous user
+  // instead of requesting the chosen email/credential. Every option that builds
+  // an /auth/login URL must therefore force a fresh credential prompt.
+  it("sets prompt=login for shared, per-email and per-brand password options", () => {
+    const cases: Array<{ optionId: "shared" | "per-email" | "brand"; brand: "dewalt" | "stanley" }> = [
+      { optionId: "shared", brand: "dewalt" },
+      { optionId: "per-email", brand: "dewalt" },
+      { optionId: "brand", brand: "dewalt" },
+      { optionId: "brand", brand: "stanley" },
+    ]
+    for (const c of cases) {
+      const t = buildUkSignInTarget({
+        optionId: c.optionId,
+        email: "jane@example.com",
+        brand: c.brand,
+        names: NAMES,
+      })
+      assert.ok(t.ok, `${c.optionId}/${c.brand} should build`)
+      assert.equal(
+        params(t.url).get("prompt"),
+        "login",
+        `${c.optionId}/${c.brand} must force a fresh credential prompt`,
+      )
+    }
+  })
+
+  it("sets prompt=login for Google (regression guard)", () => {
+    const t = buildUkSignInTarget({ optionId: "google", brand: "stanley", names: NAMES })
+    assert.ok(t.ok)
+    assert.equal(params(t.url).get("prompt"), "login")
+  })
+
+  it("every buildable chooser option carries prompt=login", () => {
+    for (const id of UK_SIGNIN_OPTION_IDS) {
+      const t = buildUkSignInTarget({
+        optionId: id,
+        email: "jane@example.com",
+        brand: "dewalt",
+        names: NAMES,
+      })
+      assert.ok(t.ok, `${id} should build for a DeWalt storefront`)
+      assert.equal(params(t.url).get("prompt"), "login", `${id} missing prompt=login`)
+    }
+  })
+})
+
 describe("success-CTA routing parity", () => {
   it("the Model 3 success CTA reaches the per-email connection with the primary email", () => {
     // Mirrors the direct /api/signin/uk?option=per-email&email=<primary> CTA.
