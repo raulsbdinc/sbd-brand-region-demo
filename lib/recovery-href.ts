@@ -18,3 +18,29 @@ export function recoveryHref(email: string): string {
     ? `/recover?email=${encodeURIComponent(trimmed)}`
     : "/recover"
 }
+
+// The side effects the "Forgot password?" action needs. Passed in as callbacks
+// so this stays pure/testable (no React, router, or DOM imports here).
+export interface ForgotPasswordNavHandlers {
+  /** Close the sign-in drawer (the parent flips its `open` state). */
+  close: () => void
+  /** Client-side navigate to the recovery route, preserving the query. */
+  navigate: (href: string) => void
+}
+
+// Orchestrate the "Forgot password?" action. It CLOSES the drawer first, then
+// navigates to the recovery page for the typed email — so the drawer can never
+// stay mounted on top of and block the recovery page. It only ever closes +
+// navigates; it has no way to submit a recovery request (there is no submit
+// dependency), so switching to recovery never fires a network call. Returns the
+// href it navigated to, which is useful for tests.
+export function runForgotPasswordNavigation(
+  email: string,
+  handlers: ForgotPasswordNavHandlers,
+): string {
+  const href = recoveryHref(email)
+  // Close BEFORE navigating so the drawer tears down as the route changes.
+  handlers.close()
+  handlers.navigate(href)
+  return href
+}

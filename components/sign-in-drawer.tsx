@@ -13,7 +13,7 @@ import { useBrand } from "@/components/app-providers"
 import { GoogleMark } from "@/components/google-mark"
 import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
-import { recoveryHref } from "@/lib/recovery-href"
+import { runForgotPasswordNavigation } from "@/lib/recovery-href"
 
 interface SignInDrawerProps {
   open: boolean
@@ -483,10 +483,15 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
           <button
             type="button"
             onClick={() => {
-              // Navigate to the shared recovery page, carrying the typed email
-              // for prefill only when it's a valid address (see recoveryHref).
-              // type="button" keeps this from submitting the sign-in form.
-              router.push(recoveryHref(email))
+              // Close the drawer AND navigate to the shared recovery page (with
+              // the email prefill preserved via recoveryHref). Closing first
+              // stops the drawer from staying mounted on top of and blocking the
+              // recovery page. type="button" keeps this from submitting the
+              // sign-in form, and this path never fires a recovery request.
+              runForgotPasswordNavigation(email, {
+                close: onClose,
+                navigate: (href) => router.push(href),
+              })
             }}
             className="font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-color)] outline-none hover:underline focus-visible:underline"
           >
