@@ -1,19 +1,24 @@
-// MODEL 3 (PER-EMAIL) REGISTRATION — server route (create, proof-gated)
-// =====================================================================
+// MODEL 3 (PER-EMAIL) REGISTRATION — server route (create, code-consumed)
+// ========================================================================
 // UK-only. Creates the primary per-email identity and, when a second email +
-// password are supplied at sign-up, creates and links that too — all on the
+// password are part of the sign-up, creates and links that too — all on the
 // per-email connection, under ONE primary Auth0 profile, with one coherent
-// binding each. The browser submits ONLY emails + passwords; the model id is
-// validated and the connection resolved entirely server-side.
+// binding each.
 //
-// SECURITY: this route creates NOTHING until EVERY email being registered has
-// completed real one-time-code ownership proof. Proof is carried in a signed,
-// httpOnly "model3-register" handoff written by the verify routes; the pure
-// gateModel3Create() decides whether that proof matches the exact emails being
-// provisioned. A missing/mismatched/incomplete proof fails closed with no Auth0
-// call at all — a collected password is NEVER treated as proof of ownership.
-// When the second email is skipped, the client is told a completion journey is
-// available (POST /api/registration/per-email/complete) to add it later.
+// SECURITY MODEL — no account before proof, and proof that can't be replayed:
+//   * The emails being registered are read ONLY from the signed, purpose-bound
+//     "model3-register" handoff cookie, never from the request body. A missing,
+//     expired, or tampered cookie decodes to null and we fail closed.
+//   * Ownership is proven by CONSUMING a fresh one-time code for EVERY email at
+//     the IdP in THIS request (registerModel3WithProof → verifyEmailPasscode →
+//     Auth0's passwordless OTP grant, which single-uses the code). Because the
+//     tenant consumes each code, a copied cookie or a replayed code cannot mint
+//     anything — the consumption, not any cookie state, is the boundary.
+//   * Only when every code is consumed does provisioning run. A collected
+//     password is NEVER treated as proof.
+// The body carries only passwords + one-time codes (by role); when the second
+// email is skipped the client is told the authenticated completion journey
+// (POST /api/registration/per-email/complete) can add it later.
 
 import { NextResponse, type NextRequest } from "next/server"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
@@ -21,16 +26,13 @@ import { resolveConnectionNames } from "@/lib/credential-model"
 import { connectionIdForKey } from "@/lib/credential-resolver"
 import {
   planModel3Registration,
-  gateModel3Create,
   type Model3RejectReason,
-  type Model3RegisterProof,
+  type Model3RegisterBinding,
 } from "@/lib/account-model"
-import {
-  executePerEmailRegistration,
-  type IdentityToCreate,
-} from "@/lib/model-registration"
+import { registerModel3WithProof } from "@/lib/model-registration"
 import { realManagementDeps } from "@/lib/model-registration-deps"
 import { isManagementConfigured } from "@/lib/auth0-management"
+import { verifyEmailPasscode, resolvePasswordlessCreds } from "@/lib/auth0-passwordless"
 import { readJourneyToken, journeyCookieName, journeyCookieOptions } from "@/lib/journey-handoff"
 
 export const runtime = "nodejs"
@@ -51,6 +53,8 @@ function planRejection(reason: Model3RejectReason): NextResponse {
   }
 }
 
+const str = (v: unknown): string => (typeof v === "string" ? v : "")
+
 export async function POST(request: NextRequest) {
   let body: Record<string, unknown>
   try {
@@ -59,21 +63,42 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "That request isn't valid." }, { status: 400 })
   }
 
-  const primaryEmail = typeof body.primaryEmail === "string" ? body.primaryEmail.trim() : ""
-  const primaryPassword = typeof body.primaryPassword === "string" ? body.primaryPassword : ""
-  const secondaryEmailRaw =
-    typeof body.secondaryEmail === "string" ? body.secondaryEmail.trim() : ""
-  const secondaryPassword =
-    typeof body.secondaryPassword === "string" ? body.secondaryPassword : ""
+  // Passwords + one-time codes come from the body (by role). Emails do NOT —
+  // they are bound server-side by the signed handoff, so the browser can't
+  // point a proven code at a different address.
+  const primaryPassword = str(body.primaryPassword)
+  const secondaryPassword = str(body.secondaryPassword)
+  const primaryOtp = str(body.primaryOtp)
+  const secondaryOtp = str(body.secondaryOtp)
 
-  if (!primaryEmail || !primaryPassword) {
-    return NextResponse.json({ error: "Enter an email and password." }, { status: 400 })
+  // The email set is authoritative from the signed, purpose-bound cookie.
+  const cookieName = journeyCookieName("model3-register")
+  const handoff = readJourneyToken<Model3RegisterBinding>(
+    "model3-register",
+    request.cookies.get(cookieName)?.value,
+  )
+  if (!handoff.ok) {
+    // Missing / expired / tampered / wrong-purpose: nothing is touched.
+    const expired = handoff.reason === "expired"
+    return NextResponse.json(
+      { error: "Please start again and confirm your email address." },
+      { status: expired ? 410 : 403 },
+    )
+  }
+  const boundEmails = {
+    primaryEmail: handoff.data.primaryEmail,
+    secondaryEmail: handoff.data.secondaryEmail,
   }
 
-  // Plan the model PURELY: validates the emails, gates to UK, resolves the
-  // per-email connection from env. Never trusts a connection name from the body.
+  if (!primaryPassword) {
+    return NextResponse.json({ error: "Enter a password." }, { status: 400 })
+  }
+
+  // Plan the model PURELY from the BOUND emails: validates them, gates to UK,
+  // resolves the per-email connection from env. Never trusts the body for any
+  // of this.
   const plan = planModel3Registration(
-    { primaryEmail, secondaryEmail: secondaryEmailRaw || undefined },
+    { primaryEmail: boundEmails.primaryEmail, secondaryEmail: boundEmails.secondaryEmail || undefined },
     {
       market: SITE_MARKET,
       siteBrand: SITE_BRAND,
@@ -88,7 +113,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ configured: false, reason: "management-not-configured" }, { status: 200 })
   }
 
-  // A supplied second email needs its own password.
+  // A second email needs its own password.
   if (plan.hasSecondary && !secondaryPassword) {
     return NextResponse.json(
       { error: "Enter a password for the second email." },
@@ -96,59 +121,58 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // PROOF GATE. Read the signed verification handoff and require that EVERY
-  // email in the plan has completed one-time-code ownership proof. This runs
-  // BEFORE any Auth0 call, so an unverified (or swapped, or missing) proof
-  // creates nothing at all. Failures are neutral and fail closed.
-  const cookieName = journeyCookieName("model3-register")
-  const handoff = readJourneyToken<Model3RegisterProof>(
-    "model3-register",
-    request.cookies.get(cookieName)?.value,
-  )
-  const gate = gateModel3Create({
-    submittedEmails: plan.identities.map((id) => id.email),
-    proof: handoff.ok ? handoff.data : null,
-  })
-  if (!gate.ok) {
-    const expired = handoff.ok === false && handoff.reason === "expired"
-    const message =
-      gate.reason === "incomplete-proof"
-        ? "Please confirm your email address first."
-        : "Please start again and confirm your email address."
-    return NextResponse.json({ error: message }, { status: expired ? 410 : 403 })
+  // Passwordless must be configured so we can CONSUME each code at the IdP.
+  const creds = resolvePasswordlessCreds(request.headers.get("cookie"))
+  if (!creds) {
+    return NextResponse.json(
+      { configured: false, reason: "passwordless-not-configured" },
+      { status: 200 },
+    )
   }
 
-  // Attach passwords to the planned identities. Ownership is PROVEN (the gate
-  // passed), so each identity is minted email_verified: true — never inferred
-  // from the mere presence of a password. Emails + roles come from the planner.
-  const identities: IdentityToCreate[] = plan.identities.map((id) =>
+  // Identities (emails from the plan, passwords by role) — WITHOUT any verified
+  // flag; the orchestrator sets email_verified only after consuming each code.
+  const identities = plan.identities.map((id) =>
     id.role === "primary"
-      ? {
-          email: id.email,
-          password: primaryPassword,
-          role: "primary" as const,
-          emailVerified: true,
-        }
-      : {
-          email: id.email,
-          password: secondaryPassword,
-          role: "secondary" as const,
-          emailVerified: true,
-        },
+      ? { email: id.email, password: primaryPassword, role: "primary" as const }
+      : { email: id.email, password: secondaryPassword, role: "secondary" as const },
   )
 
-  const outcome = await executePerEmailRegistration(
+  // One-time codes keyed by the (already normalized) plan email for each role.
+  const primary = plan.identities.find((i) => i.role === "primary")!.email
+  const secondary = plan.identities.find((i) => i.role === "secondary")?.email
+  const codes: Record<string, string | undefined> = { [primary]: primaryOtp }
+  if (secondary) codes[secondary] = secondaryOtp
+
+  const outcome = await registerModel3WithProof(
     {
       connectionKey: "per-email",
       connectionName: plan.connectionName,
       connectionId: connectionIdForKey("per-email"),
+      boundEmails,
       identities,
+      codes,
     },
-    realManagementDeps,
+    {
+      ...realManagementDeps,
+      // Consume the code at the IdP; resolves on success, throws on a wrong /
+      // expired / already-used code. We discard the returned identity — we only
+      // care that consumption succeeded.
+      verifyPasscode: async (email, otp) => {
+        await verifyEmailPasscode(creds, email, otp)
+      },
+    },
   )
 
   if (!outcome.ok) {
-    return NextResponse.json({ error: outcome.error }, { status: outcome.status })
+    return NextResponse.json(
+      {
+        error: outcome.error,
+        ...(outcome.failedEmails ? { failedEmails: outcome.failedEmails } : {}),
+        ...(outcome.needResend ? { needResend: true } : {}),
+      },
+      { status: outcome.status },
+    )
   }
 
   // Neutral success. Never echo the connection or user ids. Tell the client
@@ -161,8 +185,9 @@ export async function POST(request: NextRequest) {
     },
     { status: 201 },
   )
-  // One-time: clear the proof handoff so it can't be replayed into a second
-  // create. Any further sign-up must earn fresh ownership proof.
+  // Journey hygiene: drop the (now spent) binding cookie. This is NOT the
+  // replay defence — the IdP already consumed each code — just cleanup so a
+  // fresh sign-up rebinds cleanly.
   res.cookies.set(cookieName, "", { ...journeyCookieOptions(), maxAge: 0 })
   return res
 }

@@ -1,25 +1,27 @@
 // MODEL 3 (PER-EMAIL) REGISTRATION — VERIFY STEP 1: email a one-time code
 // =======================================================================
 // UK-only, SIGNED-OUT. The approved Model-3 sign-up creates NOTHING until the
-// person proves they own every email they're registering. This route sends a
-// one-time code to ONE candidate email and records progress in a signed,
-// httpOnly, short-lived handoff cookie (purpose "model3-register") that carries
-// only the two candidate emails plus which have been proven — never a password,
-// code, or token. It dry-runs the pure planner first so we never email a code
-// for a request that would be rejected anyway, and it re-gates on the real
-// SITE_MARKET so a non-UK storefront honestly refuses. No Auth0 user is touched.
+// person proves they own every email they're registering. This route emails a
+// one-time code to ONE candidate email and (re)writes a signed, httpOnly,
+// short-lived handoff cookie (purpose "model3-register") that BINDS the
+// candidate email set to this journey — it carries only the emails, never a
+// password, code, token, or any "verified" flag. Ownership itself is proven
+// later by CONSUMING each code at the IdP during the final create request; this
+// cookie only fixes WHICH emails that create is allowed to provision. It
+// dry-runs the pure planner first so we never email a code for a request that
+// would be rejected anyway, and re-gates on the real SITE_MARKET so a non-UK
+// storefront honestly refuses. No Auth0 user is touched here.
 
 import { NextResponse, type NextRequest } from "next/server"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { resolveConnectionNames } from "@/lib/credential-model"
 import {
   planModel3Registration,
-  type Model3RegisterProof,
+  type Model3RegisterBinding,
 } from "@/lib/account-model"
 import { startEmailPasscode, resolvePasswordlessCreds } from "@/lib/auth0-passwordless"
 import {
   mintJourneyToken,
-  readJourneyToken,
   journeyCookieName,
   journeyCookieOptions,
 } from "@/lib/journey-handoff"
@@ -94,29 +96,19 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Preserve any proof already earned in this sign-up, but ONLY for emails still
-  // in the current plan (so changing an address drops its stale proof). If the
-  // prior handoff was for a different email set, start the verified list fresh.
-  const planSet = new Set(planEmails)
-  const prior = readJourneyToken<Model3RegisterProof>(
-    "model3-register",
-    request.cookies.get(journeyCookieName("model3-register"))?.value,
-  )
-  const carried =
-    prior.ok && Array.isArray(prior.data.verified)
-      ? prior.data.verified.map(norm).filter((e) => planSet.has(e))
-      : []
-
-  const proof: Model3RegisterProof = {
+  // (Re)bind the exact email set to this journey. There is no "verified" state
+  // to preserve — proof happens at final create by consuming each code — so
+  // sending a code for either address simply re-affirms the same binding, and
+  // changing an address here naturally rebinds to the new set on the next send.
+  const binding: Model3RegisterBinding = {
     primaryEmail: primary,
     ...(secondary ? { secondaryEmail: secondary } : {}),
-    verified: [...new Set(carried)],
   }
 
   const res = NextResponse.json({ status: "code-sent" }, { status: 200 })
   res.cookies.set(
     journeyCookieName("model3-register"),
-    mintJourneyToken("model3-register", proof),
+    mintJourneyToken("model3-register", binding),
     journeyCookieOptions(),
   )
   return res

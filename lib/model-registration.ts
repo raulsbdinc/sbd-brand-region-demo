@@ -295,6 +295,128 @@ export async function executePerEmailRegistration(
 }
 
 /**
+ * The IdP side of one-time-code CONSUMPTION, injected so the orchestrator below
+ * is unit-testable. `verifyPasscode` must resolve ONLY when the code is valid
+ * for that exact email and reject (throw) on a wrong / expired / ALREADY-USED
+ * code. In production this is Auth0's passwordless OTP grant, which single-uses
+ * the code at the tenant — that server-side consumption, not any cookie state,
+ * is what makes replay impossible.
+ */
+export interface ProofDeps {
+  verifyPasscode(email: string, otp: string): Promise<void>
+}
+
+export type Model3RegisterOutcome =
+  | { ok: true; primaryUserId: string; credentials: CreatedCredential[] }
+  | { ok: false; status: number; error: string; failedEmails?: string[]; needResend?: boolean }
+
+function sameEmailSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const bs = new Set(b)
+  return a.every((e) => bs.has(e))
+}
+
+/**
+ * Model 3 (per-email) CREATE, proof-gated by live one-time-code consumption.
+ *
+ * This is the single code path the create route runs, and it NEVER creates,
+ * links, or binds anything until every email being registered has had its
+ * one-time code CONSUMED at the IdP in this very request. Ordering matters and
+ * every early exit happens before any tenant mutation:
+ *
+ *   1. `boundEmails` is the email set carried in the SIGNED, purpose-bound
+ *      handoff. A missing / expired / tampered handoff arrives here as `null`
+ *      (the codec already rejected it) → fail closed, nothing touched.
+ *   2. Binding check — the emails we're about to provision must be EXACTLY the
+ *      bound set, so a body can't swap in a different address than the one a
+ *      code was mailed to.
+ *   3. Presence check — every required email must carry a code. Checked for ALL
+ *      emails BEFORE consuming any, so an incomplete request wastes no code.
+ *   4. Consume each code via `verifyPasscode` (Auth0 single-uses it). A
+ *      replayed / already-consumed / wrong / expired code throws → we stop with
+ *      ZERO create/link/bind and report which emails need a fresh code.
+ *   5. Only when ALL codes are consumed do we stamp `email_verified: true` and
+ *      hand off to the provisioning executor.
+ *
+ * Passwords are never treated as proof; `email_verified` is set here strictly
+ * from a successful consumption, so callers cannot pass a pre-verified flag.
+ */
+export async function registerModel3WithProof(
+  params: {
+    connectionKey: "per-email"
+    connectionName: string
+    connectionId?: string
+    /** Email set from the signed handoff; null when missing/expired/tampered. */
+    boundEmails: { primaryEmail: string; secondaryEmail?: string } | null
+    /** Emails + passwords + roles. `email_verified` is decided here, not passed. */
+    identities: Array<Omit<IdentityToCreate, "emailVerified">>
+    /** Normalized-email → the one-time code submitted for it at final create. */
+    codes: Record<string, string | undefined>
+  },
+  deps: ManagementDeps & ProofDeps,
+): Promise<Model3RegisterOutcome> {
+  const { boundEmails, identities, codes } = params
+  const startAgain = "Please start again and confirm your email address."
+
+  // 1) Must have a signed binding.
+  if (!boundEmails) return { ok: false, status: 403, error: startAgain }
+  if (identities.length === 0 || identities[0].role !== "primary") {
+    return { ok: false, status: 400, error: "That request isn't valid." }
+  }
+
+  // 2) The provisioned set must be EXACTLY the bound set.
+  const submitted = identities.map((i) => i.email.trim().toLowerCase())
+  const bound = [boundEmails.primaryEmail, boundEmails.secondaryEmail]
+    .filter((e): e is string => typeof e === "string" && e.trim() !== "")
+    .map((e) => e.trim().toLowerCase())
+  if (!sameEmailSet(submitted, bound)) return { ok: false, status: 403, error: startAgain }
+
+  // 3) Every required email needs a code — verify presence for ALL first so a
+  //    missing second code never causes us to consume the first.
+  const missing = submitted.filter((e) => !((codes[e] ?? "").trim()))
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Enter the code we emailed for each address.",
+      failedEmails: missing,
+    }
+  }
+
+  // 4) Consume each code at the IdP immediately before any mutation. A replayed
+  //    or otherwise bad code throws → we mutate nothing and ask for fresh codes.
+  const failed: string[] = []
+  for (const email of submitted) {
+    try {
+      await deps.verifyPasscode(email, (codes[email] as string).trim())
+    } catch {
+      failed.push(email)
+    }
+  }
+  if (failed.length > 0) {
+    return {
+      ok: false,
+      status: 401,
+      error: "That code isn't right or has already been used. We'll email fresh codes.",
+      failedEmails: failed,
+      needResend: true,
+    }
+  }
+
+  // 5) Ownership proven for EVERY email this request. Stamp verified + provision.
+  const verified: IdentityToCreate[] = identities.map((i) => ({ ...i, emailVerified: true }))
+  return executePerEmailRegistration(
+    {
+      connectionKey: params.connectionKey,
+      connectionName: params.connectionName,
+      connectionId: params.connectionId,
+      identities: verified,
+    },
+    deps,
+  )
+}
+
+/**
  * Model 4 (per-brand), FIRST brand: create a brand-new primary account whose
  * sole identity lives on this brand's connection, with one coherent per-brand
  * binding. Used when no existing account holds the email yet — the cross-brand

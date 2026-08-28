@@ -391,11 +391,15 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
   )
 }
 
-// Model 3 verify: prove ownership of EVERY email with a one-time code BEFORE the
-// account is created. We walk the emails one at a time (send code → enter code →
-// verify); only once all are confirmed do we call the create endpoint, which
-// independently re-checks the signed proof server-side. Nothing is created until
-// then, so an abandoned journey leaves no Auth0 identity behind.
+// Model 3 verify: prove ownership of EVERY email with a one-time code, then
+// create. Codes are NOT verified one-by-one against a throwaway endpoint —
+// they're collected here and submitted together to the create route, which
+// CONSUMES each code at the IdP immediately before it creates anything. So
+// nothing is minted until every code is consumed in that one request, and a
+// code can't be replayed (the IdP single-uses it). An abandoned journey leaves
+// no Auth0 identity behind.
+type EmailCodeState = { sent: boolean; sending: boolean; code: string }
+
 function PerEmailVerify({
   primaryEmail,
   primaryPassword,
@@ -412,24 +416,26 @@ function PerEmailVerify({
   onDone: (d: { completionAvailable: boolean }) => void
 }) {
   const emails = secondaryEmail ? [primaryEmail, secondaryEmail] : [primaryEmail]
-  const [index, setIndex] = useState(0)
-  const [verified, setVerified] = useState<boolean[]>(() => emails.map(() => false))
-  const [codeSent, setCodeSent] = useState(false)
-  const [code, setCode] = useState("")
-  const [sending, setSending] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [states, setStates] = useState<Record<string, EmailCodeState>>(() =>
+    Object.fromEntries(emails.map((e) => [e, { sent: false, sending: false, code: "" }])),
+  )
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const current = emails[index]
   const total = emails.length
+  const allCodesEntered = emails.every((e) => (states[e]?.code ?? "").trim().length > 0)
+  const anySent = emails.some((e) => states[e]?.sent)
+
+  function patch(email: string, next: Partial<EmailCodeState>) {
+    setStates((prev) => ({ ...prev, [email]: { ...prev[email], ...next } }))
+  }
 
   function handleNotReady(data: { reason?: unknown }) {
     onNotReady({ reason: String(data?.reason ?? "not-configured") })
   }
 
-  async function sendCode() {
-    setSending(true)
+  async function sendCode(email: string) {
+    patch(email, { sending: true })
     setError(null)
     try {
       const res = await fetch("/api/registration/per-email/verify/start", {
@@ -438,7 +444,7 @@ function PerEmailVerify({
         body: JSON.stringify({
           primaryEmail,
           ...(secondaryEmail ? { secondaryEmail } : {}),
-          email: current,
+          email,
         }),
       })
       const data = await res.json()
@@ -447,18 +453,18 @@ function PerEmailVerify({
         return
       }
       if (res.status === 200 && data?.status === "code-sent") {
-        setCodeSent(true)
+        patch(email, { sent: true })
         return
       }
       setError(typeof data?.error === "string" ? data.error : "We couldn't send a code. Please try again.")
     } catch {
       setError("We couldn't send a code. Please try again.")
     } finally {
-      setSending(false)
+      patch(email, { sending: false })
     }
   }
 
-  async function create() {
+  async function createAccount() {
     setCreating(true)
     setError(null)
     try {
@@ -466,9 +472,14 @@ function PerEmailVerify({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          primaryEmail,
           primaryPassword,
-          ...(secondaryEmail ? { secondaryEmail, secondaryPassword } : {}),
+          primaryOtp: (states[primaryEmail]?.code ?? "").trim(),
+          ...(secondaryEmail
+            ? {
+                secondaryPassword,
+                secondaryOtp: (states[secondaryEmail]?.code ?? "").trim(),
+              }
+            : {}),
         }),
       })
       const data = await res.json()
@@ -479,6 +490,23 @@ function PerEmailVerify({
       if (res.status === 201 && data?.status === "created") {
         onDone({ completionAvailable: data.completionAvailable === true })
         return
+      }
+      // A bad/expired/already-used code (or another failure). The server tells
+      // us which emails need a fresh code; because the IdP may have already
+      // consumed the good one, we reset the affected codes and re-arm "Send".
+      const failed: string[] = Array.isArray(data?.failedEmails)
+        ? (data.failedEmails as unknown[]).filter((e): e is string => typeof e === "string")
+        : []
+      const toReset = data?.needResend ? (failed.length ? failed : emails) : failed
+      if (toReset.length) {
+        setStates((prev) => {
+          const nextState = { ...prev }
+          for (const raw of toReset) {
+            const key = emails.find((e) => e.toLowerCase() === raw.toLowerCase())
+            if (key) nextState[key] = { sent: false, sending: false, code: "" }
+          }
+          return nextState
+        })
       }
       setError(
         typeof data?.error === "string"
@@ -492,102 +520,87 @@ function PerEmailVerify({
     }
   }
 
-  async function verifyCode() {
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await fetch("/api/registration/per-email/verify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: current, otp: code }),
-      })
-      const data = await res.json()
-      if (res.status === 200 && data?.configured === false) {
-        handleNotReady(data)
-        return
-      }
-      if (res.status === 200 && data?.status === "verified") {
-        const next = [...verified]
-        next[index] = true
-        setVerified(next)
-        if (next.every(Boolean)) {
-          await create()
-        } else {
-          // Move to the next unconfirmed email and reset the code entry.
-          const nextIdx = next.findIndex((v) => !v)
-          setIndex(nextIdx)
-          setCode("")
-          setCodeSent(false)
-        }
-        return
-      }
-      setError(typeof data?.error === "string" ? data.error : "That code isn't right. Please try again.")
-    } catch {
-      setError("We couldn't confirm that code. Please try again.")
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>Confirm your email</CardTitle>
         <CardDescription>
           {total > 1
-            ? `Email ${index + 1} of ${total}: we need to confirm you own each address before creating your account.`
-            : "We need to confirm you own this address before creating your account."}
+            ? "Confirm you own both addresses. We'll email a one-time code to each; enter both, then we'll create your account."
+            : "Confirm you own this address. We'll email a one-time code; enter it, then we'll create your account."}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
-          <Mails className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="font-medium break-all">{current}</span>
-        </div>
-
-        {!codeSent ? (
-          <Button onClick={sendCode} disabled={sending || creating}>
-            {sending ? (
-              <Loader2 className="animate-spin" data-icon="inline-start" />
-            ) : (
-              <Mails data-icon="inline-start" />
-            )}
-            Email me a one-time code
-          </Button>
-        ) : (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="pe-otp">Enter the 6-digit code</Label>
-              <Input
-                id="pe-otp"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                We emailed a code to {current}. It expires shortly.
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button onClick={verifyCode} disabled={busy || creating || !code} className="flex-1">
-                {busy || creating ? (
-                  <Loader2 className="animate-spin" data-icon="inline-start" />
+        {emails.map((email, i) => {
+          const st = states[email]
+          return (
+            <div key={email} className="flex flex-col gap-2.5 rounded-lg border border-border bg-muted/30 p-4">
+              <div className="flex items-center gap-2 text-sm">
+                <Mails className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="font-medium break-all">{email}</span>
+                {total > 1 ? (
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {i === 0 ? "First email" : "Second email"}
+                  </span>
                 ) : null}
-                {creating ? "Creating account…" : total > 1 && index < total - 1 ? "Confirm and continue" : "Confirm and create account"}
-              </Button>
-              <Button variant="ghost" onClick={sendCode} disabled={sending || creating}>
-                Resend
-              </Button>
+              </div>
+
+              {!st?.sent ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="self-start"
+                  onClick={() => sendCode(email)}
+                  disabled={st?.sending || creating}
+                >
+                  {st?.sending ? (
+                    <Loader2 className="animate-spin" data-icon="inline-start" />
+                  ) : (
+                    <Mails data-icon="inline-start" />
+                  )}
+                  Email me a one-time code
+                </Button>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor={`pe-otp-${i}`}>Enter the 6-digit code</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id={`pe-otp-${i}`}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={st.code}
+                      onChange={(e) => patch(email, { code: e.target.value })}
+                      className="max-w-40"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => sendCode(email)}
+                      disabled={st.sending || creating}
+                    >
+                      Resend
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Sent to {email}. It expires shortly.</p>
+                </div>
+              )}
             </div>
-          </>
-        )}
+          )
+        })}
 
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
+
+        <Button onClick={createAccount} disabled={creating || !anySent || !allCodesEntered}>
+          {creating ? <Loader2 className="animate-spin" data-icon="inline-start" /> : null}
+          {creating ? "Creating account…" : "Confirm and create account"}
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Your account isn&apos;t created until {total > 1 ? "both codes are" : "the code is"} confirmed.
+        </p>
       </CardContent>
     </Card>
   )
