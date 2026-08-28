@@ -40,13 +40,18 @@ export function passwordCredentialLabel(m: PasswordCredentialView): string {
   return "Account password"
 }
 
-/** Plain-English explanation of where a credential works. */
+/**
+ * Plain-English explanation of where a credential works. Deliberately makes NO
+ * claim that a separate shared/"account" password exists: on a case-3/4-only
+ * account there is no shared password, so the per-email and per-brand lines must
+ * describe only the credential in front of the customer.
+ */
 export function passwordCredentialLine(m: PasswordCredentialView): string {
   if (m.connectionKey === "per-email") {
-    return `${m.email ?? "This email"} has its own password, separate from your account password.`
+    return `${m.email ?? "This email"} has its own password. Resetting it will not affect your other sign-in emails.`
   }
   if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
-    return `Works only on ${rowBrandName(m)} sites. Your account password still works on other SBD brands.`
+    return `Works only on ${rowBrandName(m)} sites.`
   }
   return "Works with your verified account emails across DeWalt and Stanley sites."
 }

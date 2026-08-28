@@ -9,6 +9,7 @@ import {
   accountModelSelectionAvailable,
   bindingsMixModels,
   brandConnectionKey,
+  crossBrandConfirmMessage,
   isAccountModel,
   parseAccountModel,
   validateSharedSignupRequest,
@@ -115,6 +116,22 @@ test("account-model selection is offered only in the UK market", () => {
   for (const m of ["fr", "de", "us", "ca", "au"] as CountryId[]) {
     assert.equal(accountModelSelectionAvailable(m), false)
   }
+})
+
+// --- cross-brand confirm copy: the missing-space regression -----------------
+
+test("crossBrandConfirmMessage keeps a space between the brand and 'account' (both brands)", () => {
+  // DeWalt storefront, email already owns Stanley.
+  const onDeWalt = crossBrandConfirmMessage("DeWalt", "Stanley")
+  assert.match(onDeWalt, /already has a Stanley account\./)
+  assert.doesNotMatch(onDeWalt, /Stanleyaccount/)
+  assert.match(onDeWalt, /add DeWalt —/)
+
+  // Stanley storefront, email already owns DeWalt (the symmetric case).
+  const onStanley = crossBrandConfirmMessage("Stanley", "DeWalt")
+  assert.match(onStanley, /already has a DeWalt account\./)
+  assert.doesNotMatch(onStanley, /DeWaltaccount/)
+  assert.match(onStanley, /add Stanley —/)
 })
 
 // --- 3. coherence: never mix model 3 and model 4 ---------------------------

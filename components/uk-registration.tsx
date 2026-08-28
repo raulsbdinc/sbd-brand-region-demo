@@ -26,7 +26,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ACCOUNT_MODEL_META, type AccountModel } from "@/lib/account-model"
+import { ACCOUNT_MODEL_META, type AccountModel, crossBrandConfirmMessage } from "@/lib/account-model"
 
 interface Props {
   /** Concrete deployment brand name, e.g. "DeWalt". */
@@ -858,10 +858,7 @@ function PerBrandProof({
     <Card>
       <CardHeader>
         <CardTitle>Confirm it&apos;s you</CardTitle>
-        <CardDescription>
-          This email already has a {otherBrandName} account. Confirm you own it
-          and we&apos;ll add {brandName} — no duplicate account.
-        </CardDescription>
+        <CardDescription>{crossBrandConfirmMessage(brandName, otherBrandName)}</CardDescription>
       </CardHeader>
       <CardContent>
         <Tabs

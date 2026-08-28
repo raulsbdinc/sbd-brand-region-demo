@@ -106,6 +106,23 @@ export const ACCOUNT_MODEL_META: Record<AccountModel, AccountModelMeta> = {
   },
 }
 
+// --- Cross-brand confirm copy -----------------------------------------------
+
+/**
+ * The Model-4 "confirm it's you" collision sentence, shown when the email
+ * already owns the OTHER brand and we're about to add THIS brand. Kept as a
+ * pure string (never inline JSX text) so the space after the brand name can't
+ * be swallowed by JSX whitespace-collapse — the exact defect that rendered
+ * "…already has a Stanleyaccount." Both brand names are interpolated with
+ * explicit surrounding spaces and unit-tested for DeWalt and Stanley.
+ */
+export function crossBrandConfirmMessage(
+  brandName: string,
+  otherBrandName: string,
+): string {
+  return `This email already has a ${otherBrandName} account. Confirm you own it and we'll add ${brandName} — no duplicate account.`
+}
+
 // --- Market gating ----------------------------------------------------------
 
 /**

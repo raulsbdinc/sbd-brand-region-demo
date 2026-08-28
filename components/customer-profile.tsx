@@ -2609,7 +2609,7 @@ function PasswordCredentialRow({
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Reset {passwordCredentialLabel(method).toLowerCase()}?</DialogTitle>
+                <DialogTitle>Reset {passwordCredentialLabel(method)}?</DialogTitle>
                 <DialogDescription>
                   We&apos;ll email you a one-time link to choose a new password. Your
                   current password keeps working until you set a new one, and none of
