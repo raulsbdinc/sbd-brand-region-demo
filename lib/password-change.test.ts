@@ -179,6 +179,7 @@ test("Model 4 Stanley binding is labelled independently of any deployment brand"
     identities: [identity("stanley", "auth0|st")],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|st",
   })
   assert.equal(res.ok, true)
   if (res.ok) assert.equal(res.target.label, "Stanley password")
@@ -193,6 +194,7 @@ test("unowned/tampered binding id (not on the account) is refused", () => {
     identities: [identity("per-email", "auth0|per-email-1")],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|per-email-1",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "not-found")
@@ -205,6 +207,7 @@ test("a binding with NO backing linked identity is refused (unbacked)", () => {
     identities: [], // nothing backs it
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|primary",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "unbacked")
@@ -225,6 +228,7 @@ test("a binding on an unconfigured connection is refused", () => {
     identities: [identity("dewalt", "auth0|dw")],
     configuredKeys: new Set<ConnectionKey>(["shared"]), // dewalt not configured
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|dw",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "not-configured")
@@ -242,6 +246,7 @@ test("a social identity can never be a change target (no selector reaches it)", 
     identities: [identity("shared", "auth0|primary")],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|primary",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "invalid-selector")
@@ -289,6 +294,8 @@ test("Model 4 primary (EXACT live shape): provider-less binding+identity, qualif
     identities: [identity("dewalt", bareId)], // provider-LESS user_id
     configuredKeys: ALL_KEYS,
     rootEmail: "hodavo5036@prorises.com",
+    // The DeWalt identity IS this account's primary/root database identity.
+    rootUserId: `auth0|${bareId}`,
   })
   assert.equal(res.ok, true)
   if (res.ok) {
@@ -296,39 +303,49 @@ test("Model 4 primary (EXACT live shape): provider-less binding+identity, qualif
     assert.equal(res.target.email, "hodavo5036@prorises.com")
     // Ownership id stays provider-less (matches bindings/identities)…
     assert.equal(res.target.auth0UserId, bareId)
-    // …the Management PATCH id is provider-qualified.
+    // …the Management PATCH id is the provider-qualified ROOT (here == matched).
     assert.equal(res.target.managementUserId, `auth0|${bareId}`)
+    assert.equal(res.target.isLinkedSecondary, false)
   }
 })
 
-test("Model 4 linked-SECONDARY: brand identity linked under a shared primary qualifies precisely", () => {
-  // Primary/root is the shared identity; DeWalt is a linked secondary with its
-  // OWN provider-less user_id. The PATCH must target that secondary identity's
-  // qualified id, not the root, so only the brand password changes.
-  const secId = "dewsecondary000000000001"
+test("Model 4 linked-SECONDARY (EXACT live Stanley shape): PATCHes the ROOT, not the secondary", () => {
+  // Live defect: a Stanley credential linked into the primary was PATCHed at
+  // its OWN id (auth0|6a97390e…) → 404 inexistent_user, because after linking
+  // the secondary user is removed from the users list. Per Auth0 docs the PATCH
+  // must target the PRIMARY/ROOT user with { connection } so Auth0 reaches the
+  // Stanley database identity. So managementUserId MUST be the root, while the
+  // provider-less auth0UserId still identifies WHICH database identity changes.
+  const secId = "6a97390eec1273ecd6faca5e" // the Stanley secondary's own id
+  const rootId = "auth0|6a97383cec1273ecd6faca5b" // the signed-in account root
   const b = binding({
-    id: `dewalt:${secId}`,
-    email: "brand-secondary@example.com",
-    connectionKey: "dewalt",
+    id: `stanley:${secId}`,
+    email: "hodavo5036@prorises.com",
+    connectionKey: "stanley",
     auth0UserId: secId, // provider-less
     useCase: "per-brand-password",
-    brand: "dewalt",
+    brand: "stanley",
   })
   const res = resolvePasswordChangeTarget({
-    selector: { bindingId: `dewalt:${secId}` },
+    selector: { bindingId: `stanley:${secId}` },
     bindings: [b],
     identities: [
-      identity("shared", "sharedprimary00000000001"), // the primary identity
-      identity("dewalt", secId), // linked secondary brand identity
+      identity("shared", "6a97383cec1273ecd6faca5b"), // the primary identity
+      identity("stanley", secId), // linked secondary brand identity
     ],
     configuredKeys: ALL_KEYS,
-    rootEmail: "primary@example.com",
+    rootEmail: "hodavo5036@prorises.com",
+    rootUserId: rootId,
   })
   assert.equal(res.ok, true)
   if (res.ok) {
+    assert.equal(res.target.connectionKey, "stanley")
+    // ownership id = the secondary DB identity (provider-less)…
     assert.equal(res.target.auth0UserId, secId)
-    assert.equal(res.target.managementUserId, `auth0|${secId}`)
-    assert.equal(res.target.connectionKey, "dewalt")
+    assert.equal(res.target.isLinkedSecondary, true)
+    // …but the Management PATCH id is the ROOT (NOT auth0|<secId>, which 404s).
+    assert.equal(res.target.managementUserId, rootId)
+    assert.notEqual(res.target.managementUserId, `auth0|${secId}`)
   }
 })
 
@@ -346,16 +363,23 @@ test("Model 3 per-email (provider-less binding id): qualified managementUserId",
     identities: [identity("per-email", secId)],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    // Standalone per-email account: this identity IS the root.
+    rootUserId: `auth0|${secId}`,
   })
   assert.equal(res.ok, true)
   if (res.ok) {
     assert.equal(res.target.auth0UserId, secId)
     assert.equal(res.target.managementUserId, `auth0|${secId}`)
+    assert.equal(res.target.isLinkedSecondary, false)
   }
 })
 
-test("Model 3 linked-SECONDARY per-email under a shared primary qualifies precisely", () => {
+test("Model 3 linked-SECONDARY per-email under a shared primary PATCHes the ROOT", () => {
+  // Same live class as the Stanley case: the per-email credential is a linked
+  // secondary, so its own id would 404. The PATCH must target the primary root
+  // with { connection }; managementUserId is the root, not the secondary id.
   const secId = "peemailsecondary00000001"
+  const rootId = "auth0|sharedprimary00000000009"
   const b = binding({
     id: `per-email:${secId}`,
     email: "second@example.com",
@@ -371,10 +395,14 @@ test("Model 3 linked-SECONDARY per-email under a shared primary qualifies precis
     ],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: rootId,
   })
   assert.equal(res.ok, true)
   if (res.ok) {
-    assert.equal(res.target.managementUserId, `auth0|${secId}`)
+    assert.equal(res.target.auth0UserId, secId)
+    assert.equal(res.target.isLinkedSecondary, true)
+    assert.equal(res.target.managementUserId, rootId)
+    assert.notEqual(res.target.managementUserId, `auth0|${secId}`)
   }
 })
 
@@ -386,11 +414,13 @@ test("Model 1/2 shared with a provider-less identity qualifies the PATCH id", ()
     identities: [identity("shared", bareId)], // provider-less
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: `auth0|${bareId}`,
   })
   assert.equal(res.ok, true)
   if (res.ok) {
     assert.equal(res.target.auth0UserId, bareId)
     assert.equal(res.target.managementUserId, `auth0|${bareId}`)
+    assert.equal(res.target.isLinkedSecondary, false)
   }
 })
 

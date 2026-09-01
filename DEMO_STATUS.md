@@ -1482,6 +1482,25 @@ the dialog into the real production component.
   plus Model 3, both primary and linked-SECONDARY (brand/per-email under a shared
   primary), so the qualified id targets the correct identity. Full suite 295
   green, tsc + build clean.
+- **Fix (1 September, live linked-SECONDARY defect):** a Model 4 **primary**
+  DeWalt change passed end-to-end, but a **linked Stanley** change still returned
+  HTTP 400 after correct-current-password verification. Vercel runtime evidence:
+  `PATCH /users/auth0%7C6a97390e…` → 404 `inexistent_user`, because after account
+  linking the secondary user is removed from the users list and no longer exists
+  as its own Management user. Per Auth0's Update User docs, updating a **secondary
+  identity's** password requires PATCHing the **primary/root** user id with a
+  `connection` in the body. Root cause: `managementUserId` was the *matched*
+  identity's own id, which is correct for a primary/root credential but wrong for
+  a linked secondary. Fix: the pure planner now resolves `managementUserId` to the
+  **primary/root** account user (`rootUserId`, provider-qualified) in every path,
+  keeps `auth0UserId` provider-less for ownership matching, and adds
+  `isLinkedSecondary` (root vs matched). The route already sends
+  `{ password, connection: <target connection> }`, so Auth0 reaches the exact
+  database identity under the primary. ROPG still verifies against the exact
+  target email + target connection; primary/shared behavior is unchanged
+  (root == matched). Regression fixtures match the EXACT live Stanley secondary
+  shape and a Model 3 per-email secondary, plus primary regressions. Full suite
+  295 green, tsc + build clean.
 
 ## Working with the v0 chat
 
