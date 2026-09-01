@@ -48,7 +48,7 @@ export function passwordCredentialLabel(m: PasswordCredentialView): string {
  */
 export function passwordCredentialLine(m: PasswordCredentialView): string {
   if (m.connectionKey === "per-email") {
-    return `${m.email ?? "This email"} has its own password. Resetting it will not affect your other sign-in emails.`
+    return `${m.email ?? "This email"} has its own password. Changing it will not affect your other sign-in emails.`
   }
   if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
     return `Works only on ${rowBrandName(m)} sites.`
