@@ -1402,6 +1402,25 @@ Ambiguous / unverified / inconsistent matches fail closed and remove the
 duplicate. Alias and `credential_bindings` metadata are merged, never
 overwritten; public errors stay neutral.
 
+**Defect 2b follow-up — false `link_ambiguous` from the source social identity.**
+Live E2E after PR #48: a verified Gmail alias resolving to exactly ONE primary
+still returned `/auth-error?reason=link_ambiguous`. Root cause: during the cold
+Google callback the freshly minted standalone `google-oauth2` user's OWN root
+email IS the looked-up Gmail, so `resolveExistingAccountByEmail` counted it as a
+second owner alongside the real alias owner → `ambiguous`. Fix: a new PURE,
+unit-tested `resolveEmailOwnership({ email, candidates, excludeUserId })` in
+`lib/credential-model.ts` decides how many DISTINCT accounts own an email and
+EXCLUDES a source identity by `user_id`. `resolveExistingAccountByEmail` now
+takes an optional `{ excludeUserId }` and delegates to it (ownership signals
+unchanged: root email, credential-binding emails, verified alternates); the
+reconcile route passes the current `google-oauth2` sub. One real owner → link;
+two DISTINCT real owners still fail closed. Repeat logins are idempotent (the
+linked identity returns the primary sub, so the planner proceeds). Regression
+tests in `lib/credential-model.test.ts` (exact callback condition, the
+exclusion being load-bearing, true two-owner ambiguity, idempotent repeat,
+self-only, conflicting-Google, normalization) and named callback tests in
+`lib/google-reconcile.test.ts`.
+
 **Tests.** `lib/login-alias.test.ts` (14) covers primary-root + shared,
 verified-alternate resolution, same-as-typed (wrong-password) no-retry,
 unverified root, unbound address, non-shared-account alias, connection-name

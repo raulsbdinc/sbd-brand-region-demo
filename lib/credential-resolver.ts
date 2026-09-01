@@ -20,8 +20,10 @@ import {
   resolveConnectionIds,
   resolveConnectionNames,
   resolveCredentialFromCandidates,
+  resolveEmailOwnership,
   resolveResetBinding,
   sanitizeCredentialBindings,
+  type EmailOwnershipCandidate,
   type CandidateAccount,
   type ConnectionKey,
   type CredentialBinding,
@@ -373,6 +375,16 @@ export type ExistingAccountResolution =
 
 export async function resolveExistingAccountByEmail(
   email: string,
+  options?: {
+    /**
+     * A source identity (`user_id`) that must NEVER be counted as a candidate
+     * TARGET owner of the email. Used by the cold-Google reconcile flow to
+     * exclude the transient standalone google-oauth2 user Auth0 just minted:
+     * that record's own root email IS the looked-up address, so without this it
+     * inflates a single real alias owner into a false "ambiguous".
+     */
+    excludeUserId?: string
+  },
 ): Promise<ExistingAccountResolution> {
   if (!isManagementConfigured()) return { kind: "configured-off" }
 
@@ -382,29 +394,36 @@ export async function resolveExistingAccountByEmail(
   const { candidates, ok } = await gatherCandidates(email)
   if (!ok) return { kind: "unavailable" }
 
-  const owning = candidates.filter((user) => {
-    if (!user.user_id) return false
-    if (normalizeEmail(user.email) === normalized) return true
-    if (readBindings(user).some((b) => normalizeEmail(b.email) === normalized)) {
-      return true
-    }
-    // A VERIFIED alternate email (linked identity's verified email, or a
-    // persisted login alias) is genuine, proven ownership too — this is what a
-    // Model 2 Gmail alternate is, and matching it here is what lets the
-    // cold-Google reconcile flow recognise the primary and link (rather than
-    // strand a standalone google-oauth2 duplicate). Same trusted server-side
-    // signal the provisioning model relies on; never a browser-supplied value.
-    return collectAccountVerifiedEmails(user).includes(normalized)
+  // De-dupe by user_id (the two lookups can return the same record twice), then
+  // hand the pure resolver each account's trusted ownership signals: its root
+  // email, credential-binding emails, and VERIFIED alternate emails (linked
+  // identity verified email or persisted login alias — what a Model 2 Gmail
+  // alternate is). The pure core excludes the source identity and decides how
+  // many DISTINCT accounts own the email.
+  const byId = new Map<string, Auth0User>()
+  for (const u of candidates) if (u.user_id) byId.set(u.user_id, u)
+
+  const ownershipCandidates: EmailOwnershipCandidate[] = [...byId.values()].map(
+    (user) => ({
+      userId: user.user_id!,
+      ownedEmails: [
+        normalizeEmail(user.email),
+        ...readBindings(user).map((b) => normalizeEmail(b.email)),
+        ...collectAccountVerifiedEmails(user),
+      ].filter((e) => e.length > 0),
+    }),
+  )
+
+  const owners = resolveEmailOwnership({
+    email: normalized,
+    candidates: ownershipCandidates,
+    excludeUserId: options?.excludeUserId,
   })
 
-  // De-dupe by user_id (the two lookups can return the same record twice).
-  const byId = new Map<string, Auth0User>()
-  for (const u of owning) if (u.user_id) byId.set(u.user_id, u)
+  if (owners.kind === "none") return { kind: "none" }
+  if (owners.kind === "ambiguous") return { kind: "ambiguous" }
 
-  if (byId.size === 0) return { kind: "none" }
-  if (byId.size > 1) return { kind: "ambiguous" }
-
-  const [user] = [...byId.values()]
+  const user = byId.get(owners.userId)!
   return {
     kind: "single",
     account: {
