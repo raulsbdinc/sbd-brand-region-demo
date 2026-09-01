@@ -33,6 +33,11 @@ import {
   isManagementConfigured,
   type Auth0User,
 } from "@/lib/auth0-management"
+import {
+  planSharedLoginAlias,
+  type LoginAliasCandidate,
+  type SharedLoginAliasResolution,
+} from "@/lib/login-alias"
 import { SITE_BRAND } from "@/lib/site"
 import type { BrandId } from "@/lib/types"
 
@@ -228,6 +233,63 @@ export async function resolveSigninCredential(
   }
 }
 
+// --- Shared login-alias resolution (Model 2 verified alternate emails) ------
+
+/** Discriminated result of resolving a typed email to a shared primary login. */
+export type SharedLoginAliasResult =
+  | SharedLoginAliasResolution
+  | { kind: "unavailable" }
+
+/**
+ * Server bridge for Model 2: resolve a submitted email to the ONE primary
+ * sbd-eu login email whose single shared password should be retried, using the
+ * SAME shared connection name the rest of the credential architecture uses
+ * (resolveConnectionNames().shared) — NOT a divergent per-deployment constant.
+ * That divergence was the live defect: a verified alternate email never mapped
+ * back to the primary shared identifier, so the shared-password retry was
+ * skipped and Model 2 sign-in failed.
+ *
+ * Reuses gatherCandidates (root-email lookup + a search over the fields we
+ * control), then defers the decision to the pure planner. Fails CLOSED:
+ *   • Management not configured → "none" (no IO; cases 1 & 2 still sign in via
+ *     the ordinary shared attempt with no Management call).
+ *   • a lookup failed             → "unavailable" (incomplete set; no retry).
+ *   • not a verified alias/root of a shared-backed account → "none".
+ *   • more than one owning account → "ambiguous".
+ * NEVER creates a second password or identity — this only picks which existing
+ * shared username to authenticate.
+ */
+export async function resolveSharedLoginAlias(
+  email: string,
+): Promise<SharedLoginAliasResult> {
+  if (!isManagementConfigured()) return { kind: "none" }
+
+  const { candidates: users, ok } = await gatherCandidates(email)
+  if (!ok) return { kind: "unavailable" }
+
+  const names = resolveConnectionNames()
+  const candidates: LoginAliasCandidate[] = users.map((user) => ({
+    userId: user.user_id ?? "",
+    rootEmail: user.email ?? "",
+    rootEmailVerified: user.email_verified === true,
+    sharedIdentityConnections: (user.identities ?? [])
+      .filter((id) => id.provider === "auth0")
+      .map((id) => id.connection)
+      .filter((c): c is string => typeof c === "string"),
+    aliasEmails: Array.isArray(user.app_metadata?.login_alias_emails)
+      ? (user.app_metadata!.login_alias_emails as unknown[]).filter(
+          (e): e is string => typeof e === "string",
+        )
+      : [],
+  }))
+
+  return planSharedLoginAlias({
+    typedEmail: email,
+    sharedConnectionName: names.shared,
+    candidates,
+  })
+}
+
 // --- Additional-password provisioning support -----------------------------
 
 /**
@@ -323,7 +385,16 @@ export async function resolveExistingAccountByEmail(
   const owning = candidates.filter((user) => {
     if (!user.user_id) return false
     if (normalizeEmail(user.email) === normalized) return true
-    return readBindings(user).some((b) => normalizeEmail(b.email) === normalized)
+    if (readBindings(user).some((b) => normalizeEmail(b.email) === normalized)) {
+      return true
+    }
+    // A VERIFIED alternate email (linked identity's verified email, or a
+    // persisted login alias) is genuine, proven ownership too — this is what a
+    // Model 2 Gmail alternate is, and matching it here is what lets the
+    // cold-Google reconcile flow recognise the primary and link (rather than
+    // strand a standalone google-oauth2 duplicate). Same trusted server-side
+    // signal the provisioning model relies on; never a browser-supplied value.
+    return collectAccountVerifiedEmails(user).includes(normalized)
   })
 
   // De-dupe by user_id (the two lookups can return the same record twice).
