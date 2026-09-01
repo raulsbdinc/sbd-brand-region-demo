@@ -495,10 +495,15 @@ export interface ResolvedPasswordChangeTarget {
    */
   auth0UserId: string
   /**
-   * Provider-QUALIFIED id for the Management `PATCH /users/{id}`
-   * (e.g. "auth0|6a97…"). This is the field the update route must use.
+   * The id for the Management `PATCH /users/{id}` — ALWAYS the PRIMARY/ROOT
+   * account user id (e.g. "auth0|6a97…"). A linked secondary identity has no
+   * standalone Management user (PATCH → 404 inexistent_user), so Auth0 requires
+   * patching the primary user with the `connection` property. This is the field
+   * the update route must use.
    */
   managementUserId: string
+  /** True when the target is a linked secondary (PATCH relies on `connection`). */
+  isLinkedSecondary: boolean
   /** The exact email this credential authenticates with. */
   email: string
   /** Customer-facing credential label. */
@@ -534,18 +539,24 @@ export function resolvePasswordChangeCoordinates(
     identities: mapIdentities(primaryUser),
     configuredKeys,
     rootEmail: primaryUser.email ?? "",
+    // The PATCH always targets the primary/root account user; a linked secondary
+    // identity is reached via the `connection` property, never its own user id.
+    rootUserId: primaryUser.user_id ?? "",
   })
   if (!resolution.ok) return null
 
   const { target } = resolution
   const connectionName = names[target.connectionKey]
   if (!connectionName) return null
+  // Fail closed if we somehow lack a root id to PATCH (never PATCH a blank id).
+  if (!target.managementUserId) return null
 
   return {
     connectionKey: target.connectionKey,
     connectionName,
     auth0UserId: target.auth0UserId,
     managementUserId: target.managementUserId,
+    isLinkedSecondary: target.isLinkedSecondary,
     email: target.email,
     label: target.label,
     brand: target.brand,

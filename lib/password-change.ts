@@ -46,18 +46,31 @@ export interface PasswordChangeTarget {
    * The Auth0 database identity `user_id` used for OWNERSHIP matching against
    * bindings and linked identities. Provider-LESS (e.g. "6a97383c…"), exactly
    * as it appears in `credential_bindings.auth0UserId` and in the identities
-   * array's `user_id`. Never send this to the Management API — use
-   * `managementUserId` for any PATCH.
+   * array's `user_id`. This identifies WHICH database identity changes, but is
+   * NOT the Management PATCH id — use `managementUserId` for any PATCH.
    */
   auth0UserId: string
   /**
-   * The provider-QUALIFIED id for Auth0 Management `PATCH /users/{id}`
-   * (e.g. "auth0|6a97383c…"). Management user ids must carry the provider
-   * prefix; the raw identity `user_id` (auth0UserId) does not, which is why a
-   * PATCH with the provider-less id fails. Derived from the matched database
-   * identity, so a linked SECONDARY case-3/4 identity is patched precisely.
+   * The id for Auth0 Management `PATCH /users/{id}` — ALWAYS the PRIMARY/ROOT
+   * account user id (e.g. "auth0|6a97383c…"), provider-qualified.
+   *
+   * A linked SECONDARY database identity (a case-3/4 credential merged into the
+   * primary via account linking) does NOT exist as its own Management user: a
+   * PATCH to the secondary's own `user_id` returns 404 `inexistent_user`. Auth0
+   * requires updating the PRIMARY user and disambiguating the exact database
+   * identity with the `connection` property in the body. So the route PATCHes
+   * this root id with `{ password, connection }`; Auth0 targets the identity on
+   * that connection. For a primary/root credential this id equals the matched
+   * identity's own qualified id, so primary/shared behavior is unchanged.
    */
   managementUserId: string
+  /**
+   * True when the resolved target is a linked SECONDARY database identity (its
+   * `user_id` differs from the account root), i.e. the PATCH relies on the
+   * `connection` property to reach it under the primary user. Informational —
+   * the route always sends `connection`, so both paths are handled uniformly.
+   */
+  isLinkedSecondary: boolean
   /** The email this credential authenticates with (verify + update key). */
   email: string
   /** Customer-facing credential label (e.g. "Account password"). */
@@ -91,6 +104,14 @@ export interface ResolvePasswordChangeParams {
   configuredKeys: ReadonlySet<ConnectionKey>
   /** The account's root email (the shared credential's login email). */
   rootEmail: string
+  /**
+   * The SIGNED-IN primary account's root Auth0 user id (`primaryUser.user_id`,
+   * e.g. "auth0|6a97383c…"). This is the id every password change PATCHes: for a
+   * linked SECONDARY identity Auth0 rejects a PATCH to the secondary's own id
+   * (404 inexistent_user) and requires updating the primary user with the
+   * `connection` property instead. Provider-qualified as Auth0 returns it.
+   */
+  rootUserId: string
 }
 
 function isSharedSelector(
@@ -139,6 +160,19 @@ export function toManagementUserId(userId: string): string {
 }
 
 /**
+ * The provider-LESS subject of an Auth0 user id — the part after "provider|"
+ * (e.g. "auth0|6a97…" → "6a97…"), or the value unchanged when it has no prefix.
+ * Used to compare a matched database identity's `user_id` (stored provider-less
+ * in bindings/identities) against the account root sub (provider-qualified) to
+ * decide whether the target is the root identity or a linked secondary.
+ */
+export function bareUserId(userId: string): string {
+  const trimmed = (userId ?? "").trim()
+  const pipe = trimmed.indexOf("|")
+  return pipe >= 0 ? trimmed.slice(pipe + 1) : trimmed
+}
+
+/**
  * Resolve the single database credential the signed-in customer may change.
  *
  * SHARED selector → require exactly one real shared-connection database
@@ -160,7 +194,11 @@ export function toManagementUserId(userId: string): string {
 export function resolvePasswordChangeTarget(
   params: ResolvePasswordChangeParams,
 ): PasswordChangeResolution {
-  const { selector, bindings, identities, configuredKeys, rootEmail } = params
+  const { selector, bindings, identities, configuredKeys, rootEmail, rootUserId } =
+    params
+  // The PATCH id is ALWAYS the primary/root account user, provider-qualified.
+  const managementUserId = toManagementUserId(rootUserId)
+  const rootBare = bareUserId(rootUserId)
 
   if (isSharedSelector(selector)) {
     // The shared credential must have a configured connection to be changeable.
@@ -186,7 +224,9 @@ export function resolvePasswordChangeTarget(
       target: {
         connectionKey: "shared",
         auth0UserId: sharedIdentities[0].userId,
-        managementUserId: toManagementUserId(sharedIdentities[0].userId),
+        managementUserId,
+        isLinkedSecondary:
+          bareUserId(sharedIdentities[0].userId) !== rootBare,
         email,
         label: labelFor({ connectionKey: "shared" }),
       },
@@ -218,7 +258,8 @@ export function resolvePasswordChangeTarget(
       target: {
         connectionKey: binding.connectionKey,
         auth0UserId: binding.auth0UserId,
-        managementUserId: toManagementUserId(binding.auth0UserId),
+        managementUserId,
+        isLinkedSecondary: bareUserId(binding.auth0UserId) !== rootBare,
         email: binding.email,
         label: labelFor({
           connectionKey: binding.connectionKey,

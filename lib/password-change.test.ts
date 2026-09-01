@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  bareUserId,
   canSubmitPasswordChange,
   mapPasswordUpdateError,
   resolvePasswordChangeTarget,
@@ -48,11 +49,14 @@ test("Model 1/2 shared: one shared identity resolves to the account password", (
     identities: [identity("shared", "auth0|primary")],
     configuredKeys: ALL_KEYS,
     rootEmail: "Primary@Example.com",
+    rootUserId: "auth0|primary",
   })
   assert.equal(res.ok, true)
   if (res.ok) {
     assert.equal(res.target.connectionKey, "shared")
     assert.equal(res.target.auth0UserId, "auth0|primary")
+    assert.equal(res.target.managementUserId, "auth0|primary")
+    assert.equal(res.target.isLinkedSecondary, false)
     assert.equal(res.target.email, "primary@example.com") // normalized
     assert.equal(res.target.label, "Account password")
     assert.equal(res.target.brand, undefined)
@@ -66,6 +70,7 @@ test("shared fails closed when the account has NO shared database identity (case
     identities: [identity("per-email", "auth0|per-email-1")],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|per-email-1",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "no-shared-credential")
@@ -81,6 +86,7 @@ test("shared fails closed on more than one shared identity (ambiguous)", () => {
     ],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|a",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "ambiguous-shared")
@@ -93,6 +99,7 @@ test("shared fails closed when the shared connection is not configured", () => {
     identities: [identity("shared", "auth0|primary")],
     configuredKeys: new Set<ConnectionKey>(["per-email"]),
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|primary",
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "not-configured")
@@ -113,12 +120,15 @@ test("Model 3 per-email: a backed, owned binding resolves to that exact email", 
     identities: [identity("per-email", "auth0|pe")],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|pe",
   })
   assert.equal(res.ok, true)
   if (res.ok) {
     assert.equal(res.target.connectionKey, "per-email")
     assert.equal(res.target.email, "alt@example.com")
     assert.equal(res.target.auth0UserId, "auth0|pe")
+    assert.equal(res.target.managementUserId, "auth0|pe")
+    assert.equal(res.target.isLinkedSecondary, false)
     assert.equal(res.target.label, "Password for alt@example.com")
     assert.equal(res.target.brand, undefined)
   }
@@ -141,11 +151,14 @@ test("Model 4 per-brand: a DeWalt binding resolves with its brand + label", () =
     identities: [identity("dewalt", "auth0|dw")],
     configuredKeys: ALL_KEYS,
     rootEmail: "primary@example.com",
+    rootUserId: "auth0|dw",
   })
   assert.equal(res.ok, true)
   if (res.ok) {
     assert.equal(res.target.connectionKey, "dewalt")
     assert.equal(res.target.brand, "dewalt")
+    assert.equal(res.target.managementUserId, "auth0|dw")
+    assert.equal(res.target.isLinkedSecondary, false)
     assert.equal(res.target.label, "DeWalt password")
     assert.equal(res.target.email, "brand@example.com")
   }
