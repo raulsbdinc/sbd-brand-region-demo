@@ -168,12 +168,15 @@ export async function POST(request: NextRequest) {
     }
 
     // 7) Update ONLY that database identity's password through the Management
-    //    API. The PATCH id MUST be provider-qualified (auth0|<id>); the raw
-    //    identity user_id / binding auth0UserId is provider-LESS, so we use the
-    //    resolved managementUserId here. Patching by the resolved id + the
-    //    connection name keeps a linked SECONDARY identity (case 3/4) targeted
-    //    precisely and never touches a social identity. No password is logged or
-    //    stored anywhere but the directory.
+    //    API. The PATCH id is the PRIMARY/ROOT account user (managementUserId),
+    //    and the `connection` property disambiguates WHICH database identity to
+    //    change under that primary. This is required for a linked SECONDARY
+    //    identity (case 3/4): after account linking the secondary has no
+    //    standalone Management user, so a PATCH to its own id returns 404
+    //    inexistent_user — Auth0 only updates it via the primary user + the
+    //    connection. For a primary/root credential the root id IS the matched
+    //    identity, so behavior is unchanged. A social identity is never a
+    //    target. No password is logged or stored anywhere but the directory.
     try {
       await updateUser(target.managementUserId, {
         password: newPassword,
