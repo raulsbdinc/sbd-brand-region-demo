@@ -42,8 +42,22 @@ export type PasswordChangeSelector =
 /** A resolved, allow-listed change target the server bridge can act on. */
 export interface PasswordChangeTarget {
   connectionKey: ConnectionKey
-  /** The Auth0 database identity `user_id` to PATCH (secondary-safe). */
+  /**
+   * The Auth0 database identity `user_id` used for OWNERSHIP matching against
+   * bindings and linked identities. Provider-LESS (e.g. "6a97383c…"), exactly
+   * as it appears in `credential_bindings.auth0UserId` and in the identities
+   * array's `user_id`. Never send this to the Management API — use
+   * `managementUserId` for any PATCH.
+   */
   auth0UserId: string
+  /**
+   * The provider-QUALIFIED id for Auth0 Management `PATCH /users/{id}`
+   * (e.g. "auth0|6a97383c…"). Management user ids must carry the provider
+   * prefix; the raw identity `user_id` (auth0UserId) does not, which is why a
+   * PATCH with the provider-less id fails. Derived from the matched database
+   * identity, so a linked SECONDARY case-3/4 identity is patched precisely.
+   */
+  managementUserId: string
   /** The email this credential authenticates with (verify + update key). */
   email: string
   /** Customer-facing credential label (e.g. "Account password"). */
@@ -106,6 +120,25 @@ function labelFor(view: PasswordCredentialView): string {
 }
 
 /**
+ * Provider-qualify a database identity `user_id` for the Auth0 Management API.
+ *
+ * The identities array and `credential_bindings.auth0UserId` store the id
+ * WITHOUT the connection provider prefix (e.g. "6a97383c…"), but Management
+ * `PATCH /users/{id}` requires the qualified form "auth0|6a97383c…". Every
+ * password change target is a DATABASE identity, whose provider is always
+ * `auth0`, so we qualify with that. Defensive: an id that already carries a
+ * `provider|` prefix is returned unchanged (never double-prefixed), and a blank
+ * id is returned as-is for the caller's own fail-closed handling.
+ */
+export function toManagementUserId(userId: string): string {
+  const trimmed = (userId ?? "").trim()
+  if (!trimmed) return trimmed
+  // Already provider-qualified (has a "provider|subject" shape) → leave as-is.
+  if (trimmed.includes("|")) return trimmed
+  return `auth0|${trimmed}`
+}
+
+/**
  * Resolve the single database credential the signed-in customer may change.
  *
  * SHARED selector → require exactly one real shared-connection database
@@ -153,6 +186,7 @@ export function resolvePasswordChangeTarget(
       target: {
         connectionKey: "shared",
         auth0UserId: sharedIdentities[0].userId,
+        managementUserId: toManagementUserId(sharedIdentities[0].userId),
         email,
         label: labelFor({ connectionKey: "shared" }),
       },
@@ -184,6 +218,7 @@ export function resolvePasswordChangeTarget(
       target: {
         connectionKey: binding.connectionKey,
         auth0UserId: binding.auth0UserId,
+        managementUserId: toManagementUserId(binding.auth0UserId),
         email: binding.email,
         label: labelFor({
           connectionKey: binding.connectionKey,

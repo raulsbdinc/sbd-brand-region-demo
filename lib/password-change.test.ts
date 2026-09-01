@@ -4,6 +4,7 @@ import {
   canSubmitPasswordChange,
   mapPasswordUpdateError,
   resolvePasswordChangeTarget,
+  toManagementUserId,
   validateNewPassword,
   type PasswordChangeSelector,
 } from "./password-change.ts"
@@ -231,6 +232,153 @@ test("a social identity can never be a change target (no selector reaches it)", 
   })
   assert.equal(res.ok, false)
   if (!res.ok) assert.equal(res.reason, "invalid-selector")
+})
+
+// --- managementUserId: provider-qualification for the Management PATCH -------
+// REGRESSION (live defect): the route PATCHed with the PROVIDER-LESS identity
+// user_id / binding auth0UserId, but Auth0 Management requires "auth0|<id>", so
+// a valid Model 4 target returned HTTP 400 after ROPG already verified the
+// current password. The planner must keep auth0UserId provider-less (ownership
+// matching) AND expose a provider-QUALIFIED managementUserId for the PATCH.
+
+test("toManagementUserId qualifies a provider-less id and passes a qualified one through", () => {
+  assert.equal(
+    toManagementUserId("6a97383cec1273ecd6faca5b"),
+    "auth0|6a97383cec1273ecd6faca5b",
+  )
+  // Already-qualified → unchanged (never double-prefixed).
+  assert.equal(
+    toManagementUserId("auth0|6a97383cec1273ecd6faca5b"),
+    "auth0|6a97383cec1273ecd6faca5b",
+  )
+  // Social provider prefix is preserved (defensive; never a change target).
+  assert.equal(toManagementUserId("google-oauth2|123"), "google-oauth2|123")
+  // Blank stays blank for the caller's own fail-closed handling.
+  assert.equal(toManagementUserId(""), "")
+})
+
+test("Model 4 primary (EXACT live shape): provider-less binding+identity, qualified managementUserId", () => {
+  // Root sub auth0|6a97…; credential_bindings.auth0UserId and the linked
+  // identity user_id are BOTH provider-less and equal to the root's bare id
+  // (the DeWalt identity IS this account's primary database identity).
+  const bareId = "6a97383cec1273ecd6faca5b"
+  const b = binding({
+    id: `dewalt:${bareId}`,
+    email: "hodavo5036@prorises.com",
+    connectionKey: "dewalt",
+    auth0UserId: bareId, // provider-LESS, as stored
+    useCase: "per-brand-password",
+    brand: "dewalt",
+  })
+  const res = resolvePasswordChangeTarget({
+    selector: { bindingId: `dewalt:${bareId}` },
+    bindings: [b],
+    identities: [identity("dewalt", bareId)], // provider-LESS user_id
+    configuredKeys: ALL_KEYS,
+    rootEmail: "hodavo5036@prorises.com",
+  })
+  assert.equal(res.ok, true)
+  if (res.ok) {
+    assert.equal(res.target.connectionKey, "dewalt")
+    assert.equal(res.target.email, "hodavo5036@prorises.com")
+    // Ownership id stays provider-less (matches bindings/identities)…
+    assert.equal(res.target.auth0UserId, bareId)
+    // …the Management PATCH id is provider-qualified.
+    assert.equal(res.target.managementUserId, `auth0|${bareId}`)
+  }
+})
+
+test("Model 4 linked-SECONDARY: brand identity linked under a shared primary qualifies precisely", () => {
+  // Primary/root is the shared identity; DeWalt is a linked secondary with its
+  // OWN provider-less user_id. The PATCH must target that secondary identity's
+  // qualified id, not the root, so only the brand password changes.
+  const secId = "dewsecondary000000000001"
+  const b = binding({
+    id: `dewalt:${secId}`,
+    email: "brand-secondary@example.com",
+    connectionKey: "dewalt",
+    auth0UserId: secId, // provider-less
+    useCase: "per-brand-password",
+    brand: "dewalt",
+  })
+  const res = resolvePasswordChangeTarget({
+    selector: { bindingId: `dewalt:${secId}` },
+    bindings: [b],
+    identities: [
+      identity("shared", "sharedprimary00000000001"), // the primary identity
+      identity("dewalt", secId), // linked secondary brand identity
+    ],
+    configuredKeys: ALL_KEYS,
+    rootEmail: "primary@example.com",
+  })
+  assert.equal(res.ok, true)
+  if (res.ok) {
+    assert.equal(res.target.auth0UserId, secId)
+    assert.equal(res.target.managementUserId, `auth0|${secId}`)
+    assert.equal(res.target.connectionKey, "dewalt")
+  }
+})
+
+test("Model 3 per-email (provider-less binding id): qualified managementUserId", () => {
+  const secId = "peemail0000000000000abcd"
+  const b = binding({
+    id: `per-email:${secId}`,
+    email: "alt@example.com",
+    connectionKey: "per-email",
+    auth0UserId: secId, // provider-less
+  })
+  const res = resolvePasswordChangeTarget({
+    selector: { bindingId: `per-email:${secId}` },
+    bindings: [b],
+    identities: [identity("per-email", secId)],
+    configuredKeys: ALL_KEYS,
+    rootEmail: "primary@example.com",
+  })
+  assert.equal(res.ok, true)
+  if (res.ok) {
+    assert.equal(res.target.auth0UserId, secId)
+    assert.equal(res.target.managementUserId, `auth0|${secId}`)
+  }
+})
+
+test("Model 3 linked-SECONDARY per-email under a shared primary qualifies precisely", () => {
+  const secId = "peemailsecondary00000001"
+  const b = binding({
+    id: `per-email:${secId}`,
+    email: "second@example.com",
+    connectionKey: "per-email",
+    auth0UserId: secId,
+  })
+  const res = resolvePasswordChangeTarget({
+    selector: { bindingId: `per-email:${secId}` },
+    bindings: [b],
+    identities: [
+      identity("shared", "sharedprimary00000000009"),
+      identity("per-email", secId),
+    ],
+    configuredKeys: ALL_KEYS,
+    rootEmail: "primary@example.com",
+  })
+  assert.equal(res.ok, true)
+  if (res.ok) {
+    assert.equal(res.target.managementUserId, `auth0|${secId}`)
+  }
+})
+
+test("Model 1/2 shared with a provider-less identity qualifies the PATCH id", () => {
+  const bareId = "sharedbare0000000000abcd"
+  const res = resolvePasswordChangeTarget({
+    selector: { scope: "shared" },
+    bindings: [],
+    identities: [identity("shared", bareId)], // provider-less
+    configuredKeys: ALL_KEYS,
+    rootEmail: "primary@example.com",
+  })
+  assert.equal(res.ok, true)
+  if (res.ok) {
+    assert.equal(res.target.auth0UserId, bareId)
+    assert.equal(res.target.managementUserId, `auth0|${bareId}`)
+  }
 })
 
 // --- New-password policy + submit gating ------------------------------------

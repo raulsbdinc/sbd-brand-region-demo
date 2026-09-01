@@ -489,8 +489,16 @@ export interface ResolvedPasswordChangeTarget {
   connectionKey: ConnectionKey
   /** The password-realm NAME (for ROPG current-password verification). */
   connectionName: string
-  /** The Auth0 database identity `user_id` to PATCH (secondary-safe). */
+  /**
+   * Provider-LESS identity `user_id` (ownership matching only; e.g. "6a97…").
+   * Never send to the Management API — use `managementUserId` for the PATCH.
+   */
   auth0UserId: string
+  /**
+   * Provider-QUALIFIED id for the Management `PATCH /users/{id}`
+   * (e.g. "auth0|6a97…"). This is the field the update route must use.
+   */
+  managementUserId: string
   /** The exact email this credential authenticates with. */
   email: string
   /** Customer-facing credential label. */
@@ -537,6 +545,7 @@ export function resolvePasswordChangeCoordinates(
     connectionKey: target.connectionKey,
     connectionName,
     auth0UserId: target.auth0UserId,
+    managementUserId: target.managementUserId,
     email: target.email,
     label: target.label,
     brand: target.brand,
