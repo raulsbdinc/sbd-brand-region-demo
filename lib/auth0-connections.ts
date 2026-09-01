@@ -24,13 +24,18 @@ import { SITE_CONNECTION } from "./site"
  * would sign them straight in with no interaction at all — which directly
  * contradicts the thing this demo exists to show: that each brand challenges
  * you again even though it is one underlying account. With it, Auth0
- * re-challenges on every site. `returnTo` lands the finished login back on the
- * customer profile. (A verified-email Google sign-in is attached to any
- * existing password account server-side by an Auth0 Action, so this path never
- * needs to call a link endpoint.)
+ * re-challenges on every site. `returnTo` lands the finished login on the
+ * server-side cold-login RECONCILE gate (not straight on /profile): a Google
+ * sign-in whose verified email uniquely matches an already-verified alternate
+ * email on an existing SBD account must be linked onto that primary rather than
+ * left as a standalone duplicate. The reconcile route fails closed on any
+ * zero/multiple/unverified/inconsistent match and ends on /profile as the
+ * primary. (An email that matches the account's ROOT email is still linked
+ * server-side by an Auth0 Action; the reconcile gate additionally covers the
+ * Model 2 verified-ALTERNATE-email case the Action cannot see.)
  */
 export const GOOGLE_SIGNIN_PATH =
-  "/auth/login?connection=google-oauth2&prompt=login&returnTo=/profile"
+  "/auth/login?connection=google-oauth2&prompt=login&returnTo=/api/signin/google/reconcile"
 
 /**
  * Auth0 connection names for each social provider.
