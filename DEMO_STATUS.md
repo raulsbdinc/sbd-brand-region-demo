@@ -1469,6 +1469,19 @@ the dialog into the real production component.
   password" + "/api/account/password-change" and EXCLUDES "Send reset link" and
   "/api/account/password-reset" (the one remaining "Reset password" string is the
   signed-out recovery method title). Full suite 289 green, tsc + build clean.
+- **Fix (1 September, live Model 4 defect):** a valid change target returned HTTP
+  400 *after* ROPG had already verified the current password — the Management
+  `PATCH /users/{id}` was called with the **provider-less** identity id
+  (`6a97…`) while Auth0 requires the **provider-qualified** form (`auth0|6a97…`).
+  The pure planner now keeps `auth0UserId` provider-less (binding/identity
+  OWNERSHIP matching is unchanged) and additionally exposes a provider-qualified
+  `managementUserId` via a pure `toManagementUserId()` (idempotent on an
+  already-qualified id, provider prefix preserved, blank passthrough). The
+  resolver threads it through and the route PATCHes with `managementUserId`.
+  Regression fixtures match the exact live Model 4 root+binding+identities shape
+  plus Model 3, both primary and linked-SECONDARY (brand/per-email under a shared
+  primary), so the qualified id targets the correct identity. Full suite 295
+  green, tsc + build clean.
 
 ## Working with the v0 chat
 

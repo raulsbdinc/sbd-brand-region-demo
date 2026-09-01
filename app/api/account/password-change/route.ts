@@ -168,12 +168,14 @@ export async function POST(request: NextRequest) {
     }
 
     // 7) Update ONLY that database identity's password through the Management
-    //    API. Patching by the resolved identity user_id + connection name keeps
-    //    a linked SECONDARY identity (case 3/4) targeted precisely and never
-    //    touches a social identity. No password is logged or stored anywhere
-    //    but the directory.
+    //    API. The PATCH id MUST be provider-qualified (auth0|<id>); the raw
+    //    identity user_id / binding auth0UserId is provider-LESS, so we use the
+    //    resolved managementUserId here. Patching by the resolved id + the
+    //    connection name keeps a linked SECONDARY identity (case 3/4) targeted
+    //    precisely and never touches a social identity. No password is logged or
+    //    stored anywhere but the directory.
     try {
-      await updateUser(target.auth0UserId, {
+      await updateUser(target.managementUserId, {
         password: newPassword,
         connection: target.connectionName,
       })
