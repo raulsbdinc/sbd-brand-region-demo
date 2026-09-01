@@ -165,3 +165,86 @@ test("account holds the shared identity AMONG others → still resolves", () => 
   })
   assert.deepEqual(res, { kind: "resolved", primaryEmail: "primary@example.com" })
 })
+
+// --- Cold-Google ownership PROOF (Model 2) ----------------------------------
+// The reconcile/proof password branch reuses this exact primitive: when the
+// verified Google address is a Model 2 alias, the shared password must be proven
+// against the account's canonical ROOT email, not the alias. These fixtures use
+// the precise live shape from the report.
+
+test("live shape: verified Gmail alias resolves to the canonical sbd-eu root", () => {
+  // Root lexavo4853@prorises.com holds the shared sbd-eu identity and lists the
+  // Gmail as a persisted verified alias (raul.sbdinc@gmail.com is a linked
+  // passwordless identity, so it carries no password of its own).
+  const res = planSharedLoginAlias({
+    typedEmail: "raul.sbdinc@gmail.com",
+    sharedConnectionName: SHARED,
+    candidates: [
+      candidate({
+        userId: "auth0|lexavo",
+        rootEmail: "lexavo4853@prorises.com",
+        rootEmailVerified: true,
+        sharedIdentityConnections: [SHARED],
+        aliasEmails: ["raul.temp@prorises.com", "raul.sbdinc@gmail.com"],
+      }),
+    ],
+  })
+  assert.deepEqual(res, {
+    kind: "resolved",
+    primaryEmail: "lexavo4853@prorises.com",
+  })
+})
+
+test("proof: Gmail alias present but account has NO shared identity → none (no proof)", () => {
+  // If the only account carrying the Gmail alias does not actually hold the
+  // shared connection, the shared password cannot be proven — fail closed so we
+  // never link on an unbacked alias.
+  const res = planSharedLoginAlias({
+    typedEmail: "raul.sbdinc@gmail.com",
+    sharedConnectionName: SHARED,
+    candidates: [
+      candidate({
+        userId: "auth0|lexavo",
+        rootEmail: "lexavo4853@prorises.com",
+        sharedIdentityConnections: ["sbd-demo-per-email"],
+        aliasEmails: ["raul.sbdinc@gmail.com"],
+      }),
+    ],
+  })
+  assert.deepEqual(res, { kind: "none" })
+})
+
+test("proof: Gmail claimed by TWO distinct shared accounts → ambiguous (no proof)", () => {
+  const res = planSharedLoginAlias({
+    typedEmail: "raul.sbdinc@gmail.com",
+    sharedConnectionName: SHARED,
+    candidates: [
+      candidate({
+        userId: "auth0|lexavo",
+        rootEmail: "lexavo4853@prorises.com",
+        aliasEmails: ["raul.sbdinc@gmail.com"],
+      }),
+      candidate({
+        userId: "auth0|other",
+        rootEmail: "other@prorises.com",
+        aliasEmails: ["raul.sbdinc@gmail.com"],
+      }),
+    ],
+  })
+  assert.deepEqual(res, { kind: "ambiguous" })
+})
+
+test("proof: Gmail owned by no account here → none (no proof)", () => {
+  const res = planSharedLoginAlias({
+    typedEmail: "raul.sbdinc@gmail.com",
+    sharedConnectionName: SHARED,
+    candidates: [
+      candidate({
+        userId: "auth0|lexavo",
+        rootEmail: "lexavo4853@prorises.com",
+        aliasEmails: ["someone.else@prorises.com"],
+      }),
+    ],
+  })
+  assert.deepEqual(res, { kind: "none" })
+})
