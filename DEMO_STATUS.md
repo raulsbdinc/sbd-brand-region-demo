@@ -1429,6 +1429,47 @@ scenario tests in `lib/google-reconcile.test.ts` map the reported flows
 (alternate-email reconcile → require-proof, idempotent repeat, conflicting
 Google refused). Full suite 264 green, tsc + build clean.
 
+## In-site password change on /profile (1 September)
+
+Signed-in self-service password **change** now happens inside the storefront —
+no Auth0-hosted redirect. The live `/profile` renders `components/customer-profile.tsx`
+(`CustomerProfile` → `SignInSection` → `PasswordCredentialRow`), NOT the
+engineer-facing `components/real-account.tsx`; the earlier in-site dialog only
+landed in `real-account.tsx`, so production kept showing the old
+`/api/account/password-reset` redirect UI even after PR #49. This change ports
+the dialog into the real production component.
+
+- Each password row's action is **"Change password"** and opens `ChangePasswordDialog`
+  in the existing app `Dialog` over `/profile` — it never navigates away. The
+  old per-row "Reset password" / "Send reset link" ticket UI is gone for
+  signed-in users. Signed-out **"Forgot password?"** recovery
+  (`components/recovery-center.tsx`) is untouched.
+- The dialog identifies the exact credential BEFORE any entry, in customer
+  language: Models 1-2 → "Account password" (works for all verified emails);
+  Model 3 → "Password for <email>" (other emails unaffected); Model 4 →
+  "<DeWalt|Stanley> password for <email>" (other brand unaffected) with a brand
+  chip. Fields: current / new / confirm, each with an accessible show/hide
+  toggle; a concise policy checklist; inline mismatch / reuse / server errors;
+  submit gated by the shared pure `canSubmitPasswordChange`; loading + success
+  states; all sensitive fields cleared on close and on success. Mobile-safe
+  (`max-h-[90vh] overflow-y-auto sm:max-w-md`).
+- Server: posts to the authenticated, same-origin `POST /api/account/password-change`
+  (built earlier). The browser only ever sends a `{ scope: "shared" }` or
+  `{ bindingId }` selector; the route re-derives and re-allow-lists the exact
+  target from the signed-in session (`resolvePasswordChangeCoordinates`), verifies
+  the current password against the exact target email/connection via ROPG
+  (`passwordRealmExchange`), then updates only that DB identity through the
+  Management API. Social identities are refused; wrong current password →
+  generic auth failure; Auth0 policy failures safely mapped; no passwords logged.
+- `changeTargetForMethod` returns `null` for a non-shared credential missing its
+  binding id, so the row shows a neutral "Managed with your account" note instead
+  of an unusable dialog.
+- `passwordCredentialLine` wording moved from "Resetting it" → "Changing it";
+  its label test updated. Verified the built client bundle CONTAINS "Change
+  password" + "/api/account/password-change" and EXCLUDES "Send reset link" and
+  "/api/account/password-reset" (the one remaining "Reset password" string is the
+  signed-out recovery method title). Full suite 289 green, tsc + build clean.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only

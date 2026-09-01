@@ -1924,9 +1924,9 @@ function SecuritySection({
       }
     >
       <div className="space-y-4">
-        {/* Password — the top-level SHARED reset. Rendered only when the account
-            actually has a shared password credential; case-3/4-only accounts
-            reset through their per-row "Reset password" actions below instead. */}
+        {/* Password — the top-level SHARED credential. Rendered only when the
+            account actually has a shared password credential; case-3/4-only
+            accounts change through their per-row "Change password" actions below. */}
         {hasSharedPassword ? (
           <>
             <div className="flex items-center justify-between gap-4">

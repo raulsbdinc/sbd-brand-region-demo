@@ -33,7 +33,7 @@ test("shared and per-email labels/lines never mention a brand", () => {
   assert.equal(passwordCredentialLabel(perEmail), "Password for alt@x.com")
   assert.equal(
     passwordCredentialLine(perEmail),
-    "alt@x.com has its own password. Resetting it will not affect your other sign-in emails.",
+    "alt@x.com has its own password. Changing it will not affect your other sign-in emails.",
   )
   // Must NOT claim a separate shared/"account" password exists (case-3/4-only
   // accounts have none).
@@ -60,15 +60,15 @@ test("DeWalt + Stanley rows are labelled independently (no deployment-brand blee
   assert.notEqual(passwordCredentialLabel(dewalt), passwordCredentialLabel(stanley))
 })
 
-// The /profile reset-confirmation title interpolates the label VERBATIM (no
-// lowercasing), so a brand credential reads "Reset Stanley password?" — never
-// "Reset stanley password?". This guards the display-label capitalization.
-test("reset-confirmation title preserves brand capitalization", () => {
-  const resetTitle = (m: PasswordCredentialView) => `Reset ${passwordCredentialLabel(m)}?`
-  assert.equal(resetTitle({ connectionKey: "stanley", brand: "stanley" }), "Reset Stanley password?")
-  assert.equal(resetTitle({ connectionKey: "dewalt", brand: "dewalt" }), "Reset DeWalt password?")
+// The /profile change-password title interpolates the label VERBATIM (no
+// lowercasing), so a brand credential reads "Change Stanley password?" — never
+// "Change stanley password?". This guards the display-label capitalization.
+test("change-password title preserves brand capitalization", () => {
+  const changeTitle = (m: PasswordCredentialView) => `Change ${passwordCredentialLabel(m)}?`
+  assert.equal(changeTitle({ connectionKey: "stanley", brand: "stanley" }), "Change Stanley password?")
+  assert.equal(changeTitle({ connectionKey: "dewalt", brand: "dewalt" }), "Change DeWalt password?")
   // Guard against a re-introduced .toLowerCase() on the label.
-  assert.doesNotMatch(resetTitle({ connectionKey: "stanley", brand: "stanley" }), /stanley/)
+  assert.doesNotMatch(changeTitle({ connectionKey: "stanley", brand: "stanley" }), /stanley/)
 })
 
 // Even if brand is omitted, the connectionKey alone still yields the right brand.
