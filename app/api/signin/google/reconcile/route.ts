@@ -110,7 +110,12 @@ export async function GET(request: NextRequest) {
     google.emailVerified === true
   let verifiedEmails: string[] = []
   if (looksStandalone) {
-    const res = await resolveExistingAccountByEmail(String(google.email))
+    // Exclude the transient standalone google-oauth2 user Auth0 just minted:
+    // its own root email IS this Gmail, so counting it as a candidate owner
+    // would inflate a single real alias owner into a false "ambiguous".
+    const res = await resolveExistingAccountByEmail(String(google.email), {
+      excludeUserId: currentSub,
+    })
     if (res.kind === "single") {
       existing = { kind: "single", auth0UserId: res.account.auth0UserId }
       verifiedEmails = res.account.verifiedEmails

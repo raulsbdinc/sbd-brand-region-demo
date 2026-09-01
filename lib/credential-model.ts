@@ -489,6 +489,67 @@ export function aggregateCandidateLookups<T extends { user_id?: string }>(
   return { candidates, ok }
 }
 
+// --- Email-ownership resolution (who is the TARGET account for an email) ----
+
+/**
+ * Minimal, pre-extracted ownership facts for a single candidate account. The
+ * server bridge builds `ownedEmails` from the SAME trusted signals it already
+ * trusts (root email, credential-binding emails, verified linked-identity
+ * emails / persisted login aliases); this pure core only decides how many
+ * DISTINCT accounts own the submitted email.
+ */
+export interface EmailOwnershipCandidate {
+  /** The account's Auth0 user_id (full sub, e.g. "auth0|…" / "google-oauth2|…"). */
+  userId: string
+  /** Emails this account provably owns (any casing — normalized here). */
+  ownedEmails: string[]
+}
+
+export type EmailOwnershipResolution =
+  | { kind: "none" }
+  | { kind: "ambiguous" }
+  | { kind: "single"; userId: string }
+
+/**
+ * Resolve which DISTINCT account owns a submitted email, optionally EXCLUDING a
+ * source identity by `user_id`.
+ *
+ * The exclusion is security-significant: during a cold "Continue with Google"
+ * login Auth0 mints a transient standalone `google-oauth2` user whose own root
+ * email IS the looked-up address. If that transient source record is counted as
+ * a candidate TARGET owner, a single real alias owner looks like TWO owners and
+ * the reconcile wrongly fails closed as ambiguous. Excluding the source by id
+ * lets one real owner resolve to `single` while still failing closed on TWO
+ * genuinely distinct owners. Excluding a `user_id` that is not present, or that
+ * is not itself an owner, has no effect.
+ */
+export function resolveEmailOwnership(params: {
+  email: string
+  candidates: EmailOwnershipCandidate[]
+  /** A source identity to never count as a target owner (dedup by user_id). */
+  excludeUserId?: string
+}): EmailOwnershipResolution {
+  const normalized = normalizeEmail(params.email)
+  if (!normalized) return { kind: "none" }
+
+  const exclude =
+    typeof params.excludeUserId === "string" && params.excludeUserId.length > 0
+      ? params.excludeUserId
+      : undefined
+
+  const owners = new Set<string>()
+  for (const candidate of params.candidates) {
+    if (!candidate.userId) continue
+    if (exclude && candidate.userId === exclude) continue
+    const owned = candidate.ownedEmails.map(normalizeEmail)
+    if (owned.includes(normalized)) owners.add(candidate.userId)
+  }
+
+  if (owners.size === 0) return { kind: "none" }
+  if (owners.size > 1) return { kind: "ambiguous" }
+  return { kind: "single", userId: [...owners][0] }
+}
+
 export interface ResolveCredentialParams {
   email: string
   siteBrand: BrandId

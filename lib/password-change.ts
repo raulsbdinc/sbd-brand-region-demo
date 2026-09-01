@@ -1,0 +1,283 @@
+// PURE PASSWORD-CHANGE TARGET PLANNER
+// ===================================
+// In-site (signed-in) password CHANGE — resolves EXACTLY which database
+// credential the customer may change, from trusted server-side facts only.
+// Framework-free so every allow-list / fail-closed rule is unit-testable.
+//
+// The browser never supplies a connection name, connection id, or Auth0 user
+// id. It supplies at most a target SELECTOR:
+//   • { scope: "shared" }            → the account's ONE shared credential.
+//   • { bindingId: "<id>" }          → a specific per-email / per-brand binding.
+// The planner derives the real coordinates (connectionKey + email + the Auth0
+// database identity user_id to PATCH) from the signed-in account's own bindings
+// and linked identities, then hands them back to the server bridge which
+// translates the key to a connection name/id.
+//
+// FAIL CLOSED on anything that is not a single, owned, backed, configured,
+// allow-listed DATABASE (password) target:
+//   • a social identity is NEVER a change target (no password to change);
+//   • an unowned / tampered / unknown binding id is refused;
+//   • a shared target with no real shared database identity is refused;
+//   • more than one shared database identity is ambiguous → refused.
+
+import {
+  CONNECTION_KEY_META,
+  isConnectionKey,
+  resolveResetBinding,
+  type ConnectionKey,
+  type CredentialBinding,
+  type LinkedDbIdentity,
+} from "./credential-model.ts"
+import {
+  passwordCredentialLabel,
+  type PasswordCredentialView,
+} from "./password-credential-labels.ts"
+import type { BrandId } from "./types.ts"
+
+/** What the browser is allowed to ask for — a selector, never coordinates. */
+export type PasswordChangeSelector =
+  | { scope: "shared" }
+  | { bindingId: string }
+
+/** A resolved, allow-listed change target the server bridge can act on. */
+export interface PasswordChangeTarget {
+  connectionKey: ConnectionKey
+  /** The Auth0 database identity `user_id` to PATCH (secondary-safe). */
+  auth0UserId: string
+  /** The email this credential authenticates with (verify + update key). */
+  email: string
+  /** Customer-facing credential label (e.g. "Account password"). */
+  label: string
+  /** Brand for a per-brand credential; undefined for shared / per-email. */
+  brand?: BrandId
+}
+
+export type PasswordChangeResolution =
+  | { ok: true; target: PasswordChangeTarget }
+  | {
+      ok: false
+      reason:
+        | "invalid-selector"
+        | "no-shared-credential"
+        | "ambiguous-shared"
+        | "not-found"
+        | "unbacked"
+        | "not-configured"
+        | "not-allowlisted"
+        | "social-identity"
+    }
+
+export interface ResolvePasswordChangeParams {
+  selector: PasswordChangeSelector
+  /** Bindings on the SIGNED-IN primary account (already sanitized). */
+  bindings: CredentialBinding[]
+  /** The signed-in primary account's real linked DATABASE identities. */
+  identities: LinkedDbIdentity[]
+  /** Connection keys that have a configured connection name/id (server-only). */
+  configuredKeys: ReadonlySet<ConnectionKey>
+  /** The account's root email (the shared credential's login email). */
+  rootEmail: string
+}
+
+function isSharedSelector(
+  selector: PasswordChangeSelector,
+): selector is { scope: "shared" } {
+  return (
+    typeof selector === "object" &&
+    selector !== null &&
+    "scope" in selector &&
+    (selector as { scope?: unknown }).scope === "shared"
+  )
+}
+
+function isBindingSelector(
+  selector: PasswordChangeSelector,
+): selector is { bindingId: string } {
+  return (
+    typeof selector === "object" &&
+    selector !== null &&
+    "bindingId" in selector &&
+    typeof (selector as { bindingId?: unknown }).bindingId === "string"
+  )
+}
+
+function labelFor(view: PasswordCredentialView): string {
+  return passwordCredentialLabel(view)
+}
+
+/**
+ * Resolve the single database credential the signed-in customer may change.
+ *
+ * SHARED selector → require exactly one real shared-connection database
+ * identity on the account (the credential that Models 1 & 2 sign in with) and
+ * return it. Zero → "no-shared-credential"; more than one → "ambiguous-shared".
+ * The shared login email is the account root email.
+ *
+ * BINDING selector → delegate to resolveResetBinding, which already enforces
+ * ownership (the id is on THIS account), allow-listing, configuration, and that
+ * the binding is backed by a real linked identity on this same account. The
+ * resolved binding carries the exact connectionKey, email, and auth0UserId.
+ *
+ * A social identity can never be reached: the shared path only accepts
+ * `provider: auth0` database identities (LinkedDbIdentity is already filtered to
+ * auth0 by the server bridge), and the binding path requires a DATABASE binding
+ * backed by a database identity. There is deliberately no selector that names a
+ * social identity.
+ */
+export function resolvePasswordChangeTarget(
+  params: ResolvePasswordChangeParams,
+): PasswordChangeResolution {
+  const { selector, bindings, identities, configuredKeys, rootEmail } = params
+
+  if (isSharedSelector(selector)) {
+    // The shared credential must have a configured connection to be changeable.
+    if (!configuredKeys.has("shared")) {
+      return { ok: false, reason: "not-configured" }
+    }
+    // Find the account's real shared-connection database identities. Exactly one
+    // is the normal Model 1/2 shape; zero means this account has no shared
+    // password (a case-3/4-only account) and must use a binding selector.
+    const sharedIdentities = identities.filter(
+      (i) => i.connectionKey === "shared" && Boolean(i.userId),
+    )
+    if (sharedIdentities.length === 0) {
+      return { ok: false, reason: "no-shared-credential" }
+    }
+    if (sharedIdentities.length > 1) {
+      return { ok: false, reason: "ambiguous-shared" }
+    }
+    const email = rootEmail.trim().toLowerCase()
+    if (!email) return { ok: false, reason: "no-shared-credential" }
+    return {
+      ok: true,
+      target: {
+        connectionKey: "shared",
+        auth0UserId: sharedIdentities[0].userId,
+        email,
+        label: labelFor({ connectionKey: "shared" }),
+      },
+    }
+  }
+
+  if (isBindingSelector(selector)) {
+    const resolution = resolveResetBinding({
+      bindingId: selector.bindingId,
+      bindings,
+      identities,
+      configuredKeys,
+    })
+    if (!resolution.ok) {
+      // Map the binding resolver's reasons onto ours 1:1 (all fail closed).
+      return { ok: false, reason: resolution.reason }
+    }
+    const { binding } = resolution
+    // Defensive: resolveResetBinding already allow-lists, but never trust a key.
+    if (!isConnectionKey(binding.connectionKey)) {
+      return { ok: false, reason: "not-allowlisted" }
+    }
+    const brand =
+      binding.connectionKey === "dewalt" || binding.connectionKey === "stanley"
+        ? (binding.connectionKey as BrandId)
+        : binding.brand
+    return {
+      ok: true,
+      target: {
+        connectionKey: binding.connectionKey,
+        auth0UserId: binding.auth0UserId,
+        email: binding.email,
+        label: labelFor({
+          connectionKey: binding.connectionKey,
+          brand,
+          email: binding.email,
+        }),
+        brand,
+      },
+    }
+  }
+
+  return { ok: false, reason: "invalid-selector" }
+}
+
+// --- New-password policy (pure, client + server share it) -------------------
+// A minimal, honest local policy that mirrors Auth0's common "good" policy
+// (≥8 chars, at least one lower, one upper, and one number). The tenant remains
+// the authority — a create/update still fails closed on the server if Auth0's
+// configured policy is stricter — but validating locally lets us disable submit
+// and show inline guidance without a noisy round-trip.
+
+export const PASSWORD_MIN_LENGTH = 8
+
+export interface PasswordPolicyResult {
+  ok: boolean
+  failures: string[]
+}
+
+/** Validate a candidate new password against the local baseline policy. */
+export function validateNewPassword(password: string): PasswordPolicyResult {
+  const failures: string[] = []
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    failures.push(`At least ${PASSWORD_MIN_LENGTH} characters`)
+  }
+  if (!/[a-z]/.test(password)) failures.push("A lowercase letter")
+  if (!/[A-Z]/.test(password)) failures.push("An uppercase letter")
+  if (!/[0-9]/.test(password)) failures.push("A number")
+  return { ok: failures.length === 0, failures }
+}
+
+/**
+ * Whether a change form is submittable, given the three fields. Pure so the UI
+ * and its tests agree exactly on the enable rule:
+ *   • current password present,
+ *   • new password meets policy,
+ *   • confirm equals new,
+ *   • new differs from current.
+ */
+export function canSubmitPasswordChange(input: {
+  current: string
+  next: string
+  confirm: string
+}): boolean {
+  if (!input.current) return false
+  if (!validateNewPassword(input.next).ok) return false
+  if (input.next !== input.confirm) return false
+  if (input.next === input.current) return false
+  return true
+}
+
+// --- Auth0 error mapping (pure) ---------------------------------------------
+
+/**
+ * Map an Auth0 password-update failure to a neutral, customer-facing message.
+ * Policy failures (Auth0 codes / messages that mention strength, history, or
+ * dictionary) become a helpful hint; everything else collapses to a generic
+ * failure so we never leak upstream specifics. Never includes the password.
+ */
+export function mapPasswordUpdateError(input: {
+  status?: number
+  code?: string
+  message?: string
+}): string {
+  const haystack = `${input.code ?? ""} ${input.message ?? ""}`.toLowerCase()
+  const policySignals = [
+    "passwordstrengtherror",
+    "password is too weak",
+    "password is too common",
+    "passwordnohistoryerror",
+    "password has previously been used",
+    "passworddictionaryerror",
+    "pwd_strength",
+    "too weak",
+    "strength",
+    "dictionary",
+    "previously been used",
+  ]
+  if (input.status === 400 && policySignals.some((s) => haystack.includes(s))) {
+    return "That new password doesn't meet the password policy. Choose a stronger one you haven't used before."
+  }
+  return "We couldn't change your password. Please try again."
+}
+
+/** Meta helper: the customer label for a connection key (for server responses). */
+export function connectionKeyLabel(key: ConnectionKey): string {
+  return CONNECTION_KEY_META[key].label
+}

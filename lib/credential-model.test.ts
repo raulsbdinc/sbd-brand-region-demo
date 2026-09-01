@@ -21,6 +21,7 @@ import {
   resolveConnectionNames,
   resolveCredential,
   resolveCredentialFromCandidates,
+  resolveEmailOwnership,
   resolveResetBinding,
   sanitizeCredentialBinding,
   sanitizeCredentialBindings,
@@ -953,5 +954,128 @@ test("aggregate: records without a user_id are skipped", () => {
   assert.deepEqual(
     agg.candidates.map((u) => u.user_id),
     ["auth0|a"],
+  )
+})
+
+// --- resolveEmailOwnership: cold-Google reconcile ambiguity regression ------
+// These lock in the fix for the live E2E defect after PR #48: a cold "Continue
+// with Google" login where the fresh standalone google-oauth2 user's own root
+// email IS the alias of exactly ONE real primary. Counting the transient source
+// record as a target owner made one real owner look ambiguous
+// (/auth-error?reason=link_ambiguous). Excluding the source by user_id must let
+// the single real owner resolve, while TWO genuinely distinct owners still fail.
+
+const PRIMARY = "auth0|lexavo-primary"
+const GOOGLE_DUP = "google-oauth2|transient-dup"
+const GMAIL = "raul.sbdinc@gmail.com"
+
+test("ownership: EXACT callback condition — source Google dup excluded, one real alias owner → single(primary)", () => {
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [
+      // The transient standalone Google user Auth0 just minted: its OWN root
+      // email is the Gmail, so it "owns" the address in raw terms.
+      { userId: GOOGLE_DUP, ownedEmails: [GMAIL] },
+      // The real primary DB user that verified the Gmail as a login alias.
+      { userId: PRIMARY, ownedEmails: ["lexavo4853@prorises.com", GMAIL] },
+    ],
+    excludeUserId: GOOGLE_DUP,
+  })
+  assert.deepEqual(r, { kind: "single", userId: PRIMARY })
+})
+
+test("ownership: WITHOUT excluding the source dup, the same facts look ambiguous (proves the exclusion is load-bearing)", () => {
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [
+      { userId: GOOGLE_DUP, ownedEmails: [GMAIL] },
+      { userId: PRIMARY, ownedEmails: ["lexavo4853@prorises.com", GMAIL] },
+    ],
+  })
+  assert.equal(r.kind, "ambiguous")
+})
+
+test("ownership: TRUE ambiguity — two DISTINCT real owners remain ambiguous even after excluding the source", () => {
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [
+      { userId: GOOGLE_DUP, ownedEmails: [GMAIL] },
+      { userId: "auth0|owner-a", ownedEmails: ["a@prorises.com", GMAIL] },
+      { userId: "auth0|owner-b", ownedEmails: ["b@prorises.com", GMAIL] },
+    ],
+    excludeUserId: GOOGLE_DUP,
+  })
+  assert.equal(r.kind, "ambiguous")
+})
+
+test("ownership: idempotent repeat — Google identity already linked INTO the primary → the primary is the sole owner, source id absent has no effect", () => {
+  // On a repeat cold login after a successful link, the google-oauth2 sub no
+  // longer exists as a standalone record; the primary carries the verified
+  // Gmail. Excluding a now-absent source id must still resolve to the primary.
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [
+      { userId: PRIMARY, ownedEmails: ["lexavo4853@prorises.com", GMAIL] },
+    ],
+    excludeUserId: GOOGLE_DUP,
+  })
+  assert.deepEqual(r, { kind: "single", userId: PRIMARY })
+})
+
+test("ownership: excluding the SOLE owner (the source is the only holder) → none (self / no real target to link onto)", () => {
+  // A genuinely standalone Google account whose email belongs to no one else:
+  // excluding itself leaves zero owners → no collision → reconcile proceeds.
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [{ userId: GOOGLE_DUP, ownedEmails: [GMAIL] }],
+    excludeUserId: GOOGLE_DUP,
+  })
+  assert.deepEqual(r, { kind: "none" })
+})
+
+test("ownership: conflicting-Google guard — a DIFFERENT primary already owning the Gmail plus the source dup still resolves to that one primary (link decision/refusal is downstream)", () => {
+  // resolveEmailOwnership only identifies the single target owner; whether that
+  // primary already has a conflicting google identity is refused later by the
+  // link core. Here we prove ownership still resolves to exactly the primary.
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [
+      { userId: GOOGLE_DUP, ownedEmails: [GMAIL] },
+      { userId: PRIMARY, ownedEmails: [GMAIL] },
+    ],
+    excludeUserId: GOOGLE_DUP,
+  })
+  assert.deepEqual(r, { kind: "single", userId: PRIMARY })
+})
+
+test("ownership: matching is normalized (case/whitespace) and empty/absent ids are ignored", () => {
+  const r = resolveEmailOwnership({
+    email: "  RAUL.SBDinc@Gmail.com ",
+    candidates: [
+      { userId: "", ownedEmails: [GMAIL] },
+      { userId: GOOGLE_DUP, ownedEmails: [GMAIL] },
+      { userId: PRIMARY, ownedEmails: [" Raul.SBDinc@GMAIL.com "] },
+    ],
+    excludeUserId: GOOGLE_DUP,
+  })
+  assert.deepEqual(r, { kind: "single", userId: PRIMARY })
+})
+
+test("ownership: excluding a non-owner user_id has no effect", () => {
+  const r = resolveEmailOwnership({
+    email: GMAIL,
+    candidates: [{ userId: PRIMARY, ownedEmails: [GMAIL] }],
+    excludeUserId: "auth0|someone-unrelated",
+  })
+  assert.deepEqual(r, { kind: "single", userId: PRIMARY })
+})
+
+test("ownership: no candidates / empty email → none", () => {
+  assert.deepEqual(resolveEmailOwnership({ email: GMAIL, candidates: [] }), {
+    kind: "none",
+  })
+  assert.deepEqual(
+    resolveEmailOwnership({ email: "", candidates: [{ userId: PRIMARY, ownedEmails: [GMAIL] }] }),
+    { kind: "none" },
   )
 })

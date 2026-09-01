@@ -60,6 +60,46 @@ test("ambiguous existing accounts → fail closed, never link", () => {
   assert.deepEqual(d, { action: "fail-closed", reason: "ambiguous" })
 })
 
+// EXACT live callback condition (post PR #48): a cold Google login whose Gmail
+// is the VERIFIED alias of exactly ONE primary. The route now excludes the
+// transient google-oauth2 source id when resolving owners, so the resolver
+// returns kind:"single" for the primary (NOT the false ambiguous that produced
+// /auth-error?reason=link_ambiguous). The planner then routes to require-proof
+// → link, never fail-closed. See credential-model.test.ts for the exclusion
+// itself (resolveEmailOwnership).
+test("callback: single real alias owner (source dup already excluded upstream) → require-proof, NOT link_ambiguous", () => {
+  const d = planGoogleReconcile(
+    ctx({
+      google: google({ sub: "google-oauth2|transient-dup", email: "raul.sbdinc@gmail.com" }),
+      // What resolveExistingAccountByEmail(..., { excludeUserId: source }) now
+      // returns once the transient source record is no longer double-counted.
+      existing: { kind: "single", auth0UserId: "auth0|lexavo-primary" },
+    }),
+  )
+  assert.equal(d.action, "require-proof")
+  if (d.action === "require-proof") {
+    assert.equal(d.primaryUserId, "auth0|lexavo-primary")
+    assert.equal(d.email, "raul.sbdinc@gmail.com")
+  }
+})
+
+// Idempotent repeat: after the link, a fresh Google login returns the PRIMARY
+// (its google identity is now a linked secondary), so the sub is no longer a
+// standalone google-oauth2 record → proceed, no duplicate, no re-link.
+test("callback: idempotent repeat after link → session is the linked primary → proceed", () => {
+  const linkedPrimary = planGoogleReconcile(
+    ctx({ google: google({ sub: "auth0|lexavo-primary" }) }),
+  )
+  assert.equal(linkedPrimary.action, "proceed")
+
+  // Even if a repeat somehow still presents as Google, a now-multi-identity
+  // record is treated as already-linked and left alone.
+  const multi = planGoogleReconcile(
+    ctx({ google: google({ identityCount: 2 }) }),
+  )
+  assert.equal(multi.action, "proceed")
+})
+
 test("directory lookup unavailable → fail closed", () => {
   const d = planGoogleReconcile(ctx({ existing: { kind: "unavailable" } }))
   assert.deepEqual(d, { action: "fail-closed", reason: "lookup-unavailable" })

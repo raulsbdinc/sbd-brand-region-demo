@@ -13,6 +13,8 @@ import {
   Code2,
   Database,
   Download,
+  Eye,
+  EyeOff,
   Fingerprint,
   Globe,
   History,
@@ -51,6 +53,11 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { hasSharedPasswordCredential } from "@/lib/credential-model"
+import {
+  canSubmitPasswordChange,
+  validateNewPassword,
+  type PasswordChangeSelector,
+} from "@/lib/password-change"
 import { buildAuthLoginUrl, startAuthRedirect } from "@/lib/auth0-connections"
 import {
   DOWNSTREAM_CATEGORY_LABELS,
@@ -337,6 +344,274 @@ function MethodIcon({ kind }: { kind: LoginMethodView["kind"] }) {
   const Icon =
     kind === "passkey" ? Fingerprint : kind === "password" ? KeyRound : Code2
   return <Icon className="size-4 text-primary" />
+}
+
+// The exact credential a change targets, described for the customer BEFORE any
+// entry. The server independently re-derives + re-allow-lists the target from
+// the session, so this is presentation only — never a trust boundary.
+interface ChangeTarget {
+  /** Selector the browser is allowed to send (never coordinates). */
+  selector: PasswordChangeSelector
+  /** Credential name, e.g. "Account password" / "DeWalt password". */
+  label: string
+  /** Plain-English scope line shown under the title. */
+  line: string
+  /** Optional brand chip. */
+  brand?: "dewalt" | "stanley" | "craftsman"
+}
+
+/** A labelled password field with an accessible show/hide toggle. */
+function PasswordField({
+  id,
+  label,
+  value,
+  onChange,
+  autoComplete,
+  invalid,
+  describedBy,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+  autoComplete: string
+  invalid?: boolean
+  describedBy?: string
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="relative">
+        <Input
+          id={id}
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete={autoComplete}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
+          className="pr-10"
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={show ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+          aria-pressed={show}
+          tabIndex={-1}
+        >
+          {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * In-site password CHANGE dialog. Opens over /profile (never navigates away),
+ * clearly identifies the exact credential first, then collects current + new +
+ * confirm passwords and posts to the authenticated /api/account/password-change
+ * route. All sensitive fields are cleared on close and on success.
+ */
+function ChangePasswordDialog({
+  target,
+  live,
+  onChanged,
+}: {
+  target: ChangeTarget
+  live: boolean
+  onChanged?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState("")
+  const [next, setNext] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  const policy = validateNewPassword(next)
+  const confirmMismatch = confirm.length > 0 && confirm !== next
+  const reuse = next.length > 0 && next === current
+  const canSubmit = !busy && canSubmitPasswordChange({ current, next, confirm })
+
+  function wipe() {
+    setCurrent("")
+    setNext("")
+    setConfirm("")
+  }
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (!v) {
+      // Clear sensitive state whenever the dialog closes.
+      wipe()
+      setError(null)
+      setDone(null)
+      setBusy(false)
+    }
+  }
+
+  async function submit() {
+    setError(null)
+    setDone(null)
+    if (!canSubmit) return
+    if (!live) {
+      // Demo mode never has a real session; show an honest, non-fake result.
+      setDone(
+        "In production this verifies your current password and updates it via the Auth0 Management API. This demo doesn't change real credentials.",
+      )
+      wipe()
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/password-change", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...target.selector,
+          currentPassword: current,
+          newPassword: next,
+        }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean
+        error?: string
+        credential?: { label?: string; email?: string }
+      }
+      if (!res.ok || !json.ok) {
+        setError(json.error ?? "We couldn't change your password. Please try again.")
+        return
+      }
+      wipe()
+      setDone(`${json.credential?.label ?? target.label} updated.`)
+      onChanged?.()
+    } catch {
+      setError("Network error. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="sm">
+            Change password
+          </Button>
+        }
+      />
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            <span>Change {target.label.toLowerCase()}</span>
+            {target.brand ? (
+              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                {target.brand === "dewalt"
+                  ? "DeWalt"
+                  : target.brand === "stanley"
+                    ? "Stanley"
+                    : target.brand}
+              </span>
+            ) : null}
+          </DialogTitle>
+          <DialogDescription>{target.line}</DialogDescription>
+        </DialogHeader>
+
+        {done ? (
+          <div className="space-y-4">
+            <Note>
+              <span className="inline-flex items-center gap-2">
+                <BadgeCheck className="size-4 text-primary" />
+                {done}
+              </span>
+            </Note>
+            <DialogFooter>
+              <DialogClose render={<Button>Done</Button>} />
+            </DialogFooter>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+            className="space-y-4"
+          >
+            <PasswordField
+              id="pw-current"
+              label="Current password"
+              value={current}
+              onChange={setCurrent}
+              autoComplete="current-password"
+              invalid={Boolean(error)}
+            />
+            <PasswordField
+              id="pw-new"
+              label="New password"
+              value={next}
+              onChange={setNext}
+              autoComplete="new-password"
+              invalid={next.length > 0 && !policy.ok}
+              describedBy="pw-policy"
+            />
+            {/* Concise policy checklist — validation, not feature copy. */}
+            <ul id="pw-policy" className="space-y-1 text-xs text-muted-foreground">
+              {[
+                { ok: next.length >= 8, text: "At least 8 characters" },
+                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
+                { ok: /[0-9]/.test(next), text: "At least one number" },
+              ].map((r) => (
+                <li key={r.text} className="flex items-center gap-1.5">
+                  <Check
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      r.ok ? "text-primary" : "text-muted-foreground/40",
+                    )}
+                  />
+                  <span className={cn(r.ok && "text-foreground")}>{r.text}</span>
+                </li>
+              ))}
+            </ul>
+            <PasswordField
+              id="pw-confirm"
+              label="Confirm new password"
+              value={confirm}
+              onChange={setConfirm}
+              autoComplete="new-password"
+              invalid={confirmMismatch}
+              describedBy={confirmMismatch ? "pw-confirm-error" : undefined}
+            />
+            {confirmMismatch ? (
+              <p id="pw-confirm-error" className="text-xs text-destructive">
+                Both new passwords must match.
+              </p>
+            ) : null}
+            {reuse ? (
+              <p className="text-xs text-destructive">
+                Choose a password different from your current one.
+              </p>
+            ) : null}
+            {error ? (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <DialogFooter className="gap-2 sm:gap-2">
+              <DialogClose render={<Button variant="ghost" type="button">Cancel</Button>} />
+              <Button type="submit" disabled={!canSubmit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                Change password
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 /** A single sign-in method row with a confirmation dialog before removal. */
@@ -1558,45 +1833,6 @@ function SecuritySection({
   live: boolean
   connectionLabel: string
 }) {
-  // Password reset. `pwBusyId` tracks WHICH credential is resetting:
-  //   "primary" — the top-level shared credential (no binding id, back-compat)
-  //   <bindingId> — an individual per-email (case 3) or per-brand (case 4) row
-  const [pwBusyId, setPwBusyId] = useState<string | null>(null)
-  const [pwResult, setPwResult] = useState<string | null>(null)
-  const [pwError, setPwError] = useState<string | null>(null)
-
-  async function resetPassword(bindingId?: string) {
-    setPwError(null)
-    setPwResult(null)
-    const busyKey = bindingId ?? "primary"
-    if (!live) {
-      setPwResult("In production this sends an Auth0 password-reset email. This demo doesn't send mail.")
-      return
-    }
-    setPwBusyId(busyKey)
-    try {
-      const res = await fetch("/api/account/password-reset", {
-        method: "POST",
-        // A binding id targets ONE credential; no body resets the primary
-        // shared credential exactly as before.
-        ...(bindingId
-          ? {
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ bindingId }),
-            }
-          : {}),
-      })
-      const json = await res.json()
-      if (!res.ok) setPwError(json.error ?? "Could not create reset ticket.")
-      else setPwResult(json.ticket ? "A one-time password-reset link was generated. Open it to set a new password." : "Password reset initiated.")
-      if (res.ok && json.ticket) setPwResult(json.ticket)
-    } catch {
-      setPwError("Network error. Please try again.")
-    } finally {
-      setPwBusyId(null)
-    }
-  }
-
   // MFA is a SECOND FACTOR — kept separate from "ways you sign in" below.
   const mfa = useSWR<{ configured: boolean; enabled: boolean; enrollments: { id: string; type: string; status: string }[] }>(
     live ? "/api/account/mfa" : null,
@@ -1705,35 +1941,18 @@ function SecuritySection({
                   </p>
                 </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={pwBusyId !== null}
-                onClick={() => resetPassword()}
-              >
-                {pwBusyId === "primary" ? <Loader2 className="size-4 animate-spin" /> : null}
-                Reset password
-              </Button>
+              <ChangePasswordDialog
+                live={live}
+                target={{
+                  selector: { scope: "shared" },
+                  label: "Account password",
+                  line: "Works with your verified account emails across DeWalt and Stanley sites.",
+                }}
+                onChanged={() => loginMethods.mutate()}
+              />
             </div>
             <Separator />
           </>
-        ) : null}
-
-        {/* Reset feedback is GLOBAL: it also carries the result of the per-row
-            (case-3/4) individual resets, so it must render whether or not the
-            shared password row above is shown. */}
-        {pwError ? <Note tone="error">{pwError}</Note> : null}
-        {pwResult ? (
-          pwResult.startsWith("http") ? (
-            <Note>
-              One-time reset link:{" "}
-              <a href={pwResult} target="_blank" rel="noreferrer" className="font-medium text-primary underline">
-                open password reset
-              </a>
-            </Note>
-          ) : (
-            <Note>{pwResult}</Note>
-          )
         ) : null}
 
         {/* MFA */}
@@ -1897,17 +2116,27 @@ function SecuritySection({
                       ) : null}
                     </span>
                     {individualReset ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={pwBusyId !== null}
-                        onClick={() => resetPassword(m.resetBindingId)}
-                      >
-                        {pwBusyId === m.resetBindingId ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : null}
-                        Reset password
-                      </Button>
+                      <ChangePasswordDialog
+                        live={live}
+                        target={{
+                          selector: { bindingId: m.resetBindingId as string },
+                          label:
+                            m.connectionKey === "per-email"
+                              ? `Password for ${m.email ?? "this email"}`
+                              : `${m.brand === "dewalt" ? "DeWalt" : m.brand === "stanley" ? "Stanley" : "Brand"} password`,
+                          line:
+                            m.connectionKey === "per-email"
+                              ? `${m.email ?? "This email"} has its own password. Changing it will not affect your other sign-in emails.`
+                              : `Works only on ${m.brand === "dewalt" ? "DeWalt" : m.brand === "stanley" ? "Stanley" : "this brand"} sites. Changing it will not affect your other brand password.`,
+                          brand:
+                            m.connectionKey === "dewalt"
+                              ? "dewalt"
+                              : m.connectionKey === "stanley"
+                                ? "stanley"
+                                : undefined,
+                        }}
+                        onChanged={() => loginMethods.mutate()}
+                      />
                     ) : null}
                     {m.isPrimary ? (
                       <span
