@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { getUser, isManagementConfigured } from "@/lib/auth0-management"
 import { resolveRegionAuthConfig, regionFromCookieHeader } from "@/lib/auth0-regions"
-import { resolveSigninCredential } from "@/lib/credential-resolver"
+import {
+  resolveSigninCredential,
+  resolveSharedLoginAlias,
+} from "@/lib/credential-resolver"
 import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
 import { passwordRealmExchange } from "@/lib/auth0-password-grant"
 import {
@@ -128,7 +131,8 @@ export async function POST(request: NextRequest) {
       .trim()
     const connectionKey =
       resolution.kind === "resolved" ? resolution.connectionKey : "shared"
-    const token = await passwordRealmExchange({
+    // ATTEMPT 1 — the handoff email exactly as-is against the resolved realm.
+    let token = await passwordRealmExchange({
       domain,
       clientId,
       clientSecret,
@@ -137,6 +141,35 @@ export async function POST(request: NextRequest) {
       password,
       connectionKey,
     })
+
+    // ATTEMPT 2 — SHARED login-alias fallback (Model 2). The Google address in
+    // the handoff is a VERIFIED alternate email — a linked passwordless `email`
+    // identity that carries NO password of its own; the ONE shared password
+    // lives on the account's ROOT sbd-eu email. So a failed shared attempt with
+    // the alias must be retried against the canonical primary login email,
+    // exactly as the in-app sign-in route does. resolveSharedLoginAlias reuses
+    // the same fail-closed alias primitive: it resolves ONLY when the address is
+    // a verified alias/root of exactly one account that genuinely holds a shared
+    // identity, creates no second password/identity, and returns "none"/
+    // "ambiguous"/"unavailable"/"same-as-typed" (no retry) otherwise. Only the
+    // shared path is eligible — a resolved case-3/4 realm is authoritative and
+    // must never fall back to shared. This narrows ownership proof, never widens
+    // it: the tenant still verifies the real shared password against the real
+    // primary username.
+    if (!token && connectionKey === "shared") {
+      const alias = await resolveSharedLoginAlias(email)
+      if (alias.kind === "resolved") {
+        token = await passwordRealmExchange({
+          domain,
+          clientId,
+          clientSecret,
+          firstHop,
+          username: alias.primaryEmail,
+          password,
+          connectionKey: "shared",
+        })
+      }
+    }
     proven = Boolean(token)
   } else if (method === "code") {
     const creds = resolvePasswordlessCreds(region)
