@@ -1362,6 +1362,54 @@ all four options, `login_hint`/`returnTo` handling, open-redirect and
 cross-origin `returnTo` rejection, Google `prompt=login`, brand allow-list
 gating, and the not-configured / unknown-option fail-closed paths.
 
+## Model 2 alias sign-in + Google reconcile (two live defects fixed)
+
+Two live Model 2 defects, both fixed without changing the established UI.
+
+**Defect 1 — a verified alternate email could not use the shared password.**
+Root cause: the password route's attempt-2 alias fallback found the primary DB
+user by filtering identities on the legacy `PASSWORD_CONNECTION`
+(= `NEXT_PUBLIC_AUTH0_CONNECTION`), but the credential architecture's shared
+connection is `resolveConnectionNames().shared` (precedence
+`AUTH0_SHARED_CONNECTION → AUTH0_CONNECTION → NEXT_PUBLIC_AUTH0_CONNECTION →
+sbd-eu`). Both `AUTH0_CONNECTION` and `NEXT_PUBLIC_AUTH0_CONNECTION` are set and
+may differ, so a verified alternate never mapped back to the primary sbd-eu
+identifier and the shared-password retry was skipped. Fix: new pure planner
+`lib/login-alias.ts` (`planSharedLoginAlias`) + server bridge
+`resolveSharedLoginAlias` in `lib/credential-resolver.ts`, wired into
+`app/api/signin/password/route.ts` attempt 2, both using the AUTHORITATIVE
+shared connection name. An alias only resolves when its owning account actually
+holds a database identity on that shared connection; unverified roots, unbound
+addresses, stray aliases on non-shared accounts, connection-name mismatches, and
+two-owner collisions all fail closed. No second password or identity is ever
+created (that is Model 3).
+
+**Defect 2 — Google created a duplicate instead of linking.** Two causes: (a)
+the cold "Continue with Google" (`GOOGLE_SIGNIN_PATH`) returned straight to
+`/profile`, bypassing the cold-login reconcile gate, so a standalone
+`google-oauth2` duplicate was simply operated; and (b) even routed through it,
+`resolveExistingAccountByEmail` only matched the root email or a credential
+binding — not a verified ALTERNATE email — so a Model 2 Gmail alternate was not
+recognised as owned. Fix: `GOOGLE_SIGNIN_PATH` now returns to
+`/api/signin/google/reconcile`, and `resolveExistingAccountByEmail` additionally
+treats any `collectAccountVerifiedEmails` match (linked-identity verified email
+or persisted `login_alias_emails`) as proven ownership. The reconcile planner
+then routes a collision with a different account to the `/link-google`
+ownership-proof journey, links the exact `google-oauth2` identity onto the
+primary via the Management API, restores the primary session, and is idempotent
+(a re-login sees the linked multi-identity record and proceeds as the primary).
+Ambiguous / unverified / inconsistent matches fail closed and remove the
+duplicate. Alias and `credential_bindings` metadata are merged, never
+overwritten; public errors stay neutral.
+
+**Tests.** `lib/login-alias.test.ts` (14) covers primary-root + shared,
+verified-alternate resolution, same-as-typed (wrong-password) no-retry,
+unverified root, unbound address, non-shared-account alias, connection-name
+mismatch, missing shared connection, and two-owner ambiguity. Extra Defect 2
+scenario tests in `lib/google-reconcile.test.ts` map the reported flows
+(alternate-email reconcile → require-proof, idempotent repeat, conflicting
+Google refused). Full suite 264 green, tsc + build clean.
+
 ## Working with the v0 chat
 
 All application code is written and tested in the v0 chat; this side only

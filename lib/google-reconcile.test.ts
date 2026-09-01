@@ -111,3 +111,35 @@ test("management on but existing lookup says configured-off → proceed", () => 
   const d = planGoogleReconcile(ctx({ existing: { kind: "configured-off" } }))
   assert.equal(d.action === "proceed" && d.reason, "management-off")
 })
+
+// --- Defect 2 live-scenario mapping -----------------------------------------
+// These assert the exact reported flows. The NEW behaviour behind them lives in
+// resolveExistingAccountByEmail (a verified ALTERNATE email now resolves to its
+// owning primary as kind:"single"); once it does, the planner routes as below.
+
+test("Defect 2: signed-out Google whose email is a VERIFIED ALTERNATE of a primary → require-proof then link", () => {
+  // resolveExistingAccountByEmail matched the Gmail alternate to the primary and
+  // returned kind:"single" for a DIFFERENT account than the standalone Google.
+  const d = planGoogleReconcile(
+    ctx({
+      google: google({ sub: "google-oauth2|dup", email: "alt@gmail.com" }),
+      existing: { kind: "single", auth0UserId: "auth0|primary" },
+    }),
+  )
+  assert.equal(d.action, "require-proof")
+  assert.equal(d.action === "require-proof" && d.primaryUserId, "auth0|primary")
+})
+
+test("Defect 2: repeat Google login after linking returns the SAME primary (idempotent, no new duplicate)", () => {
+  // Second time around the Google identity is linked onto the primary, so the
+  // session carries >1 identity → proceed as the (primary) account, no relink.
+  const d = planGoogleReconcile(ctx({ google: google({ identityCount: 2 }) }))
+  assert.equal(d.action === "proceed" && d.reason, "already-linked")
+})
+
+test("Defect 2: a Google identity already attached elsewhere is never re-linked", () => {
+  // Ambiguous ownership must fail closed — never steal a Google identity from
+  // another customer.
+  const d = planGoogleReconcile(ctx({ existing: { kind: "ambiguous" } }))
+  assert.deepEqual(d, { action: "fail-closed", reason: "ambiguous" })
+})
