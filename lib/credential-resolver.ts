@@ -40,6 +40,10 @@ import {
   type LoginAliasCandidate,
   type SharedLoginAliasResolution,
 } from "@/lib/login-alias"
+import {
+  resolvePasswordChangeTarget,
+  type PasswordChangeSelector,
+} from "@/lib/password-change"
 import { SITE_BRAND } from "@/lib/site"
 import type { BrandId } from "@/lib/types"
 
@@ -476,5 +480,65 @@ export function resolveResetTarget(
     connectionName,
     email: binding.email,
     label: CONNECTION_KEY_META[binding.connectionKey].label,
+  }
+}
+
+// --- In-site password CHANGE coordinates ------------------------------------
+
+export interface ResolvedPasswordChangeTarget {
+  connectionKey: ConnectionKey
+  /** The password-realm NAME (for ROPG current-password verification). */
+  connectionName: string
+  /** The Auth0 database identity `user_id` to PATCH (secondary-safe). */
+  auth0UserId: string
+  /** The exact email this credential authenticates with. */
+  email: string
+  /** Customer-facing credential label. */
+  label: string
+  /** Brand for a per-brand credential; undefined for shared / per-email. */
+  brand?: BrandId
+}
+
+/**
+ * Resolve the coordinates for an IN-SITE password change from the SIGNED-IN
+ * primary account and a browser SELECTOR (never coordinates). Everything —
+ * connection name, connection key, and the database identity user_id to PATCH —
+ * is derived server-side from the account's own bindings + linked identities.
+ *
+ * Delegates the allow-listing / ownership / backing / configuration rules to the
+ * pure planner (resolvePasswordChangeTarget), then translates the resolved key
+ * to a connection NAME here. Returns null on ANY fail-closed outcome so the
+ * route answers with a single neutral rejection (never revealing which rule
+ * failed, nor whether a binding id exists). A social identity is unreachable:
+ * the shared path only considers auth0 database identities and the binding path
+ * requires a database binding.
+ */
+export function resolvePasswordChangeCoordinates(
+  primaryUser: Auth0User,
+  selector: PasswordChangeSelector,
+): ResolvedPasswordChangeTarget | null {
+  const names = resolveConnectionNames()
+  const configuredKeys = configuredConnectionKeys(names)
+
+  const resolution = resolvePasswordChangeTarget({
+    selector,
+    bindings: readBindings(primaryUser),
+    identities: mapIdentities(primaryUser),
+    configuredKeys,
+    rootEmail: primaryUser.email ?? "",
+  })
+  if (!resolution.ok) return null
+
+  const { target } = resolution
+  const connectionName = names[target.connectionKey]
+  if (!connectionName) return null
+
+  return {
+    connectionKey: target.connectionKey,
+    connectionName,
+    auth0UserId: target.auth0UserId,
+    email: target.email,
+    label: target.label,
+    brand: target.brand,
   }
 }
