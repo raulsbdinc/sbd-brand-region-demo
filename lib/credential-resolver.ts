@@ -30,6 +30,7 @@ import {
   type LinkedDbIdentity,
 } from "@/lib/credential-model"
 import {
+  getUser,
   getUsersByEmail,
   searchUsersStrict,
   listUsersPage,
@@ -40,6 +41,7 @@ import {
 import {
   collectIdentityOwnedEmails,
   enumerateOwnershipCandidates,
+  hydrateOwnershipCandidates,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
   type AddEmailCandidate,
@@ -489,36 +491,66 @@ const ADD_EMAIL_ENUM_PER_PAGE = 100
 // budget cannot be fully read, so enumeration reports ok=false and the guard
 // fails CLOSED (reject) rather than risk missing a foreign owner.
 const ADD_EMAIL_ENUM_MAX_PAGES = 20
+// Bounded parallelism for the per-user hydration re-fetch — small enough to stay
+// well under Auth0 Management rate limits on a small demo tenant.
+const ADD_EMAIL_HYDRATION_CONCURRENCY = 5
 
 /**
- * Candidate gather for the add-another-email OWNERSHIP guard via DETERMINISTIC
- * paginated Management-API enumeration of the whole directory — NOT the v3
- * indexed search, which on this tenant does not surface a linked SOCIAL
- * identity's `profileData.email` (the exact gap that let a foreign account's
- * linked Gmail be added to a second account). Every account is read and reduced
- * to its OWNERSHIP set:
- *   • every identity's email — a database identity's email AND a social
- *     identity's `profileData.email` (linked Google), via collectIdentityOwnedEmails,
- *   • credential-binding emails,
- *   • persisted verified aliases,
- * all normalized. A bare passwordless (`email`/`sms`) OTP stub is flagged so it
- * never counts as an owner.
+ * Candidate gather for the add-another-email OWNERSHIP guard. Two deterministic
+ * phases against the Management API — NOT the v3 indexed search, which on this
+ * tenant does not surface a linked SOCIAL identity's `profileData.email` (the
+ * exact gap that let a foreign account's linked Gmail be added to a second
+ * account):
  *
- * `ok` is false when the enumeration could not read the whole directory (a page
- * error, an inconsistent empty page, or truncation past the page budget) so the
- * ownership guard fails CLOSED. Never throws.
+ *   1. ENUMERATE every user id by paginating the whole directory. The list
+ *      payload's identity `profileData` is NOT trusted here — the `GET /users`
+ *      records omit `identities[].profileData.email` on this tenant — so only the
+ *      user id is taken from the list.
+ *   2. HYDRATE every enumerated id with `getUser(id)` (`GET /users/{id}`, which
+ *      DOES return identity `profileData`) under bounded concurrency, and reduce
+ *      each hydrated record to its OWNERSHIP set:
+ *        • every identity's email — a database identity's email AND a social
+ *          identity's `profileData.email` (linked Google), via
+ *          collectIdentityOwnedEmails,
+ *        • credential-binding emails,
+ *        • persisted verified aliases,
+ *      all normalized. A bare passwordless (`email`/`sms`) OTP stub is flagged so
+ *      it never counts as an owner.
+ *
+ * `ok` is false — so the ownership guard fails CLOSED (reject) — when either the
+ * enumeration could not read the whole directory (a page error, an inconsistent
+ * empty page, or truncation past the page budget) OR any per-user hydration threw
+ * / returned a mismatched id. Never throws.
  */
 async function enumerateAddEmailCandidates(): Promise<{
   candidates: AddEmailCandidate[]
   ok: boolean
 }> {
-  return enumerateOwnershipCandidates<Auth0User>({
+  // Phase 1: deterministically collect every user id. Do not read profileData
+  // from the list payload — it is unreliable here.
+  const enumeration = await enumerateOwnershipCandidates<Auth0User>({
     fetchPage: async (page, perPage) => {
       const res = await listUsersPage(page, perPage)
       return { users: res.users ?? [], total: res.total ?? 0 }
     },
     perPage: ADD_EMAIL_ENUM_PER_PAGE,
     maxPages: ADD_EMAIL_ENUM_MAX_PAGES,
+    identify: (user) => user.user_id ?? "",
+    toCandidate: (user) => ({
+      userId: user.user_id!,
+      ownedEmails: [],
+      hasRealIdentity: false,
+    }),
+  })
+
+  if (!enumeration.ok) return { candidates: enumeration.candidates, ok: false }
+
+  // Phase 2: hydrate every enumerated id with a full per-user read so the identity
+  // profileData (linked Google email) is actually present, then build ownership.
+  return hydrateOwnershipCandidates<Auth0User>({
+    userIds: enumeration.candidates.map((c) => c.userId),
+    concurrency: ADD_EMAIL_HYDRATION_CONCURRENCY,
+    fetchUser: (id) => getUser(id),
     identify: (user) => user.user_id ?? "",
     toCandidate: (user) => ({
       userId: user.user_id!,

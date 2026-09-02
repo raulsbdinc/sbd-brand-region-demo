@@ -220,6 +220,73 @@ export async function enumerateOwnershipCandidates<TUser>(params: {
 }
 
 /**
+ * Hydrate a set of enumerated user ids into full ownership candidates through an
+ * injected per-user fetch, with BOUNDED CONCURRENCY. This exists because the
+ * directory LIST payload (`GET /users`) omits `identities[].profileData.email` on
+ * this tenant, so the list records cannot be trusted to reveal a linked SOCIAL
+ * identity's email. Only a full per-user read (`GET /users/{id}`) returns the
+ * identity `profileData`, so every enumerated id is re-fetched here before its
+ * ownership set is built.
+ *
+ * FAILS CLOSED (`ok: false`) — so the ownership guard rejects rather than assume
+ * no foreign owner — on:
+ *   • any empty / missing user id in the input,
+ *   • any per-user fetch throwing,
+ *   • a hydrated record whose id does not match the requested id (mismatch).
+ * `ok` is TRUE only when every id hydrated successfully. Never throws.
+ */
+export async function hydrateOwnershipCandidates<TUser>(params: {
+  userIds: string[]
+  fetchUser: (userId: string) => Promise<TUser>
+  identify: (user: TUser) => string
+  toCandidate: (user: TUser) => AddEmailCandidate
+  concurrency: number
+}): Promise<EnumerationResult> {
+  const { userIds, fetchUser, identify, toCandidate, concurrency } = params
+
+  // A missing id means the enumeration handed us an unusable record — we cannot
+  // prove a foreign owner is absent from an incomplete id set. Fail closed.
+  if (userIds.some((id) => !id)) return { candidates: [], ok: false }
+  if (userIds.length === 0) return { candidates: [], ok: true }
+
+  const candidates: Array<AddEmailCandidate | undefined> = new Array(userIds.length)
+  let failed = false
+  let cursor = 0
+
+  const workerCount = Math.max(1, Math.min(concurrency, userIds.length))
+
+  async function worker(): Promise<void> {
+    while (!failed) {
+      const index = cursor++
+      if (index >= userIds.length) return
+      const id = userIds[index]
+      let user: TUser
+      try {
+        user = await fetchUser(id)
+      } catch {
+        failed = true
+        return
+      }
+      // The hydrated record must be exactly the one we asked for; a mismatch
+      // means we cannot trust the ownership set. Fail closed.
+      if (identify(user) !== id) {
+        failed = true
+        return
+      }
+      candidates[index] = toCandidate(user)
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+
+  const present = candidates.filter((c): c is AddEmailCandidate => c !== undefined)
+  if (failed || present.length !== userIds.length) {
+    return { candidates: present, ok: false }
+  }
+  return { candidates: present, ok: true }
+}
+
+/**
  * One top-level record for the transient-stub cleanup decision: its id, root
  * email, and the providers of its identities.
  */

@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import {
   evaluateAddEmailOwnership,
   enumerateOwnershipCandidates,
+  hydrateOwnershipCandidates,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
   collectIdentityOwnedEmails,
@@ -505,4 +506,176 @@ test("enumeration: same-canonical Model 4 (email on the CURRENT account) is allo
     lookupOk: ok,
   })
   assert.equal(decision.ok, true)
+})
+
+// ============================================================================
+// hydrateOwnershipCandidates — per-user re-fetch of every enumerated id. The
+// directory LIST payload omits identities[].profileData.email on the live
+// tenant, so ownership MUST be built from a full getUser(id) hydration. These
+// tests model that: the LIST record carries only user_id + root email, and the
+// HYDRATION read reveals the linked Google profileData.email.
+// ============================================================================
+
+/** A hydration fetcher backed by a fixed id→full-record map. */
+function hydrationFetcher(
+  fullById: Record<string, FakeUser>,
+  opts?: { throwOnId?: string; mismatchId?: string },
+) {
+  return async (userId: string): Promise<FakeUser> => {
+    if (opts?.throwOnId === userId) throw new Error("hydration read failed")
+    const full = fullById[userId]
+    if (!full) throw new Error(`no such user ${userId}`)
+    // Simulate a record whose returned id does not match the requested id.
+    if (opts?.mismatchId === userId) return { ...full, user_id: `${full.user_id}-different` }
+    return full
+  }
+}
+
+test("hydration: LIST gives only id/root, getUser reveals foreign Google email → REJECT", async () => {
+  // Enumeration (list payload) surfaces A with ONLY a root email — the linked
+  // Google identity is invisible in the list, exactly like the live tenant.
+  const listA: FakeUser = { user_id: "auth0|A", email: "dedes10491@mediseat.com" }
+  const listFiller: FakeUser[] = Array.from({ length: 4 }, (_, i) => ({
+    user_id: `auth0|f${i}`,
+    email: `f${i}@example.com`,
+  }))
+  const listUsers = [...listFiller, listA]
+
+  // getUser(A) returns the FULL record incl. the linked Google profileData.email.
+  const fullById: Record<string, FakeUser> = {
+    "auth0|A": {
+      user_id: "auth0|A",
+      email: "dedes10491@mediseat.com",
+      identities: [
+        { profileData: { email: "dedes10491@mediseat.com" } },
+        { email: "raul.sbdinc@gmail.com", profileData: { email: "raul.sbdinc@gmail.com" } },
+      ],
+    },
+    ...Object.fromEntries(listFiller.map((u) => [u.user_id, u])),
+  }
+
+  // Phase 1: enumerate ids from the list (do not trust list profileData).
+  const enumeration = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(listUsers),
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: (u) => ({ userId: u.user_id, ownedEmails: [], hasRealIdentity: false }),
+  })
+  assert.equal(enumeration.ok, true)
+
+  // Phase 2: hydrate every id → ownership now sees A's linked Gmail.
+  const { candidates, ok } = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: enumeration.candidates.map((c) => c.userId),
+    fetchUser: hydrationFetcher(fullById),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 3,
+  })
+  assert.equal(ok, true)
+
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, false)
+  assert.equal(decision.ok === false && decision.reason, "different-owner")
+})
+
+test("hydration: a per-user fetch FAILURE fails closed (unavailable)", async () => {
+  const fullById: Record<string, FakeUser> = {
+    "auth0|A": { user_id: "auth0|A", email: "a@example.com" },
+    "auth0|B": { user_id: "auth0|B", email: "b@example.com" },
+  }
+  const { ok, candidates } = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: ["auth0|A", "auth0|B"],
+    fetchUser: hydrationFetcher(fullById, { throwOnId: "auth0|B" }),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 3,
+  })
+  assert.equal(ok, false)
+
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, false)
+  assert.equal(decision.ok === false && decision.reason, "unavailable")
+})
+
+test("hydration: a MISSING user id in the input fails closed", async () => {
+  const { ok } = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: ["auth0|A", ""],
+    fetchUser: hydrationFetcher({ "auth0|A": { user_id: "auth0|A" } }),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 3,
+  })
+  assert.equal(ok, false)
+})
+
+test("hydration: a MISMATCHED returned id fails closed", async () => {
+  const fullById: Record<string, FakeUser> = {
+    "auth0|A": { user_id: "auth0|A", email: "a@example.com" },
+  }
+  const { ok } = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: ["auth0|A"],
+    fetchUser: hydrationFetcher(fullById, { mismatchId: "auth0|A" }),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 3,
+  })
+  assert.equal(ok, false)
+})
+
+test("hydration: same-canonical Model 4 preserved (email on the current account's linked identity)", async () => {
+  // getUser(B) reveals B owns the Gmail via its OWN linked Google identity.
+  const fullById: Record<string, FakeUser> = {
+    "auth0|B": {
+      user_id: "auth0|B",
+      email: "wacev92852@mapsguy.com",
+      identities: [
+        { email: "raul.sbdinc@gmail.com", profileData: { email: "raul.sbdinc@gmail.com" } },
+      ],
+    },
+    "auth0|o0": { user_id: "auth0|o0", email: "o0@example.com" },
+  }
+  const { candidates, ok } = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: ["auth0|o0", "auth0|B"],
+    fetchUser: hydrationFetcher(fullById),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 3,
+  })
+  assert.equal(ok, true)
+
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, true)
+})
+
+test("hydration: all ids hydrate successfully → ok true, every candidate present", async () => {
+  const fullById: Record<string, FakeUser> = {
+    "auth0|1": { user_id: "auth0|1", email: "1@example.com" },
+    "auth0|2": { user_id: "auth0|2", email: "2@example.com" },
+    "auth0|3": { user_id: "auth0|3", email: "3@example.com" },
+  }
+  const { candidates, ok } = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: ["auth0|1", "auth0|2", "auth0|3"],
+    fetchUser: hydrationFetcher(fullById),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 2,
+  })
+  assert.equal(ok, true)
+  assert.equal(candidates.length, 3)
 })
