@@ -102,6 +102,14 @@ interface CustomerProfileProps {
    * panel renders nothing in that case, so a first-time user sees no gap.
    */
   sites: OtherSite[]
+  /**
+   * Whether THIS storefront runs the Model 3-enabled (UK) experience, resolved
+   * server-side from SITE_MARKET. Gates the per-email "Add a password for
+   * <alternate>" activation UI: EU Models 1/2 must show ONE shared Account
+   * password only, so their linked alternates keep signing in with the same
+   * shared password and passcodes — never a per-email password row.
+   */
+  modelSelectionAvailable?: boolean
 }
 
 /** Throw on non-OK so SWR populates `error` (not `data`) on failure. */
@@ -207,7 +215,7 @@ function Badge({
 // ===========================================================================
 // Root
 // ===========================================================================
-export function CustomerProfile({ user, sites }: CustomerProfileProps) {
+export function CustomerProfile({ user, sites, modelSelectionAvailable = false }: CustomerProfileProps) {
   const { logout } = useApp()
 
   const name =
@@ -294,7 +302,7 @@ export function CustomerProfile({ user, sites }: CustomerProfileProps) {
 
         <CommunicationSection live={live} />
 
-        <SignInSection live={live} primaryEmail={email} />
+        <SignInSection live={live} primaryEmail={email} modelSelectionAvailable={modelSelectionAvailable} />
 
         <DeleteSection live={live} onClosed={() => logout()} />
       </div>
@@ -3192,7 +3200,15 @@ function PasswordCredentials({ live }: { live: boolean }) {
   )
 }
 
-function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
+function SignInSection({
+  live,
+  primaryEmail,
+  modelSelectionAvailable,
+}: {
+  live: boolean
+  primaryEmail: string | null
+  modelSelectionAvailable: boolean
+}) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section
   // uses, so the two stay in step.
@@ -3222,7 +3238,7 @@ function SignInSection({ live, primaryEmail }: { live: boolean; primaryEmail: st
         <ul className="space-y-2">
           {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).
                   Renders its own <li> rows directly into this <ul>. */}
-          <PasswordCredentials live={live} />
+          <PasswordCredentials live={live} modelSelectionAvailable={modelSelectionAvailable} />
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow

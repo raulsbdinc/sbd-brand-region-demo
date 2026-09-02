@@ -33,8 +33,15 @@ import {
   getUsersByEmail,
   searchUsersStrict,
   isManagementConfigured,
+  deleteUser,
   type Auth0User,
 } from "@/lib/auth0-management"
+import {
+  planAddEmailOwnership,
+  selectTransientEmailStubIds,
+  type AddEmailCandidate,
+  type AddEmailOwnershipDecision,
+} from "@/lib/add-email-ownership"
 import {
   planSharedLoginAlias,
   type LoginAliasCandidate,
@@ -442,6 +449,88 @@ export async function resolveExistingAccountByEmail(
       bindings: readBindings(user),
       verifiedEmails: collectAccountVerifiedEmails(user),
     },
+  }
+}
+
+// --- Add-another-email canonical ownership guard ---------------------------
+
+/**
+ * Decide whether the signed-in `currentUserId` may add `email` to their account,
+ * AFTER the emailed one-time code has proven mailbox control. Resolves every
+ * account that provably owns the normalized email — each already canonical
+ * because `getUsersByEmail`/the alias search return top-level records only — and
+ * defers to the pure planner. Bare passwordless (`email`/`sms`) OTP stubs minted
+ * by the code step are filtered so they never masquerade as a foreign owner.
+ *
+ * Fails CLOSED: Management not configured, or a directory lookup failed, both
+ * return "unavailable" (the guard is only reached from a Management-guarded
+ * route, so configured-off should not occur in practice). Runs post-verification
+ * only, so it is never an enumeration oracle.
+ */
+export async function resolveAddEmailOwnership(
+  email: string,
+  currentUserId: string,
+): Promise<AddEmailOwnershipDecision> {
+  if (!isManagementConfigured()) return { ok: false, reason: "unavailable" }
+
+  const normalized = normalizeEmail(email)
+  const { candidates: users, ok } = await gatherCandidates(email)
+
+  const byId = new Map<string, Auth0User>()
+  for (const u of users) if (u.user_id) byId.set(u.user_id, u)
+
+  const candidates: AddEmailCandidate[] = [...byId.values()].map((user) => ({
+    userId: user.user_id!,
+    ownedEmails: [
+      normalizeEmail(user.email),
+      ...readBindings(user).map((b) => normalizeEmail(b.email)),
+      ...collectAccountVerifiedEmails(user),
+    ].filter((e) => e.length > 0),
+    hasRealIdentity: (user.identities ?? []).some(
+      (id) => id.provider !== "email" && id.provider !== "sms",
+    ),
+  }))
+
+  return planAddEmailOwnership({ email: normalized, currentUserId, candidates, lookupOk: ok })
+}
+
+/**
+ * Best-effort cleanup of the transient passwordless OTP stub the emailed-code
+ * step minted, called when an add is rejected so no standalone/linked
+ * passwordless identity is left behind. Only deletes top-level records whose
+ * root email is the submitted address AND whose every identity is passwordless
+ * — never a record with a real identity. Swallows all errors (cleanup must
+ * never turn a clean rejection into a 5xx).
+ */
+export async function purgeTransientEmailStub(email: string): Promise<void> {
+  if (!isManagementConfigured()) return
+  const normalized = normalizeEmail(email)
+  if (!normalized) return
+
+  let users: Auth0User[]
+  try {
+    users = await getUsersByEmail(normalized)
+  } catch {
+    return
+  }
+
+  const stubIds = selectTransientEmailStubIds({
+    email: normalized,
+    candidates: users
+      .filter((u) => !!u.user_id)
+      .map((u) => ({
+        userId: u.user_id,
+        rootEmail: u.email ?? "",
+        identityProviders: (u.identities ?? []).map((id) => id.provider),
+      })),
+  })
+
+  for (const id of stubIds) {
+    try {
+      await deleteUser(id)
+    } catch {
+      // best-effort — a failed cleanup must not change the customer-facing result
+    }
   }
 }
 

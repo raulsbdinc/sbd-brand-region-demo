@@ -80,6 +80,97 @@ export function evaluateAddEmailOwnership(params: {
   return { ok: false, reason: "different-owner" }
 }
 
+/**
+ * One raw candidate account (a TOP-LEVEL Auth0 record) the server bridge gathered
+ * for the submitted email. `getUsersByEmail` + the alias/binding search return
+ * top-level records only — Auth0 collapses linked identities under their primary,
+ * so a top-level record IS its own canonical parent. The reduction below maps
+ * each owning real account to a `CanonicalOwner`.
+ */
+export interface AddEmailCandidate {
+  /** Top-level (canonical) Auth0 user id. */
+  userId: string
+  /** Every normalized email this account provably owns: root + binding + verified alias. */
+  ownedEmails: string[]
+  /**
+   * True when the account holds at least one REAL identity (a database `auth0`
+   * or social identity), i.e. it is a genuine account — NOT a bare passwordless
+   * (`email`/`sms`) OTP stub. A stub minted by the emailed-code step must never
+   * count as an owner, or a legitimate add to an unowned address would be
+   * rejected against the flow's own transient artifact.
+   */
+  hasRealIdentity: boolean
+}
+
+/**
+ * Reduce the gathered candidate set to a canonical-owner decision for an
+ * ownership-proven add. Filters bare passwordless stubs, keeps only accounts
+ * that actually OWN the normalized email, maps each to its canonical parent id,
+ * then defers to {@link evaluateAddEmailOwnership}. Fails closed on an empty
+ * email/current user or a failed directory lookup.
+ */
+export function planAddEmailOwnership(params: {
+  email: string
+  currentUserId: string
+  candidates: AddEmailCandidate[]
+  lookupOk: boolean
+}): AddEmailOwnershipDecision {
+  const normalized = normalizeEmail(params.email)
+  if (!normalized) return { ok: false, reason: "unavailable" }
+  if (!params.currentUserId) return { ok: false, reason: "unavailable" }
+  if (!params.lookupOk) return { ok: false, reason: "unavailable" }
+
+  const owners: CanonicalOwner[] = []
+  for (const candidate of params.candidates) {
+    if (!candidate.hasRealIdentity) continue // transient passwordless OTP stub — not an owner
+    const owns = candidate.ownedEmails.some((e) => normalizeEmail(e) === normalized)
+    if (!owns) continue
+    owners.push({ canonicalUserId: candidate.userId })
+  }
+
+  return evaluateAddEmailOwnership({
+    email: normalized,
+    currentUserId: params.currentUserId,
+    owners,
+    lookupOk: true,
+  })
+}
+
+/**
+ * One top-level record for the transient-stub cleanup decision: its id, root
+ * email, and the providers of its identities.
+ */
+export interface StubCandidate {
+  userId: string
+  rootEmail: string
+  identityProviders: string[]
+}
+
+/**
+ * Select the ids of TRANSIENT passwordless stubs to delete on a rejected add:
+ * top-level records whose root email is the submitted address AND whose every
+ * identity is passwordless (`email`/`sms`). A record holding any real identity
+ * (a genuine account) is NEVER selected, so cleanup can only ever remove the
+ * OTP artifact the emailed-code step minted — never a real customer's account.
+ */
+export function selectTransientEmailStubIds(params: {
+  email: string
+  candidates: StubCandidate[]
+}): string[] {
+  const normalized = normalizeEmail(params.email)
+  if (!normalized) return []
+  const out: string[] = []
+  for (const candidate of params.candidates) {
+    if (!candidate.userId) continue
+    if (normalizeEmail(candidate.rootEmail) !== normalized) continue
+    const providers = candidate.identityProviders
+    const allPasswordless =
+      providers.length > 0 && providers.every((p) => p === "email" || p === "sms")
+    if (allPasswordless) out.push(candidate.userId)
+  }
+  return out
+}
+
 /** Neutral, customer-safe copy for a rejected add. */
 export function addEmailRejectionCopy(
   reason: "different-owner" | "ambiguous" | "unavailable",
