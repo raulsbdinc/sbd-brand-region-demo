@@ -172,7 +172,13 @@ export async function POST(request: Request) {
     const firstHop = (request.headers.get("x-forwarded-for") ?? "").split(",")[0]?.trim() ?? ""
 
     const aResolution = await resolveSigninCredential(plan.primaryEmail)
-    const aConnectionKey = aResolution?.connectionKey ?? null
+    // The resolver returns a discriminated union: a concrete connection-keyed
+    // realm, or `shared-default` (Models 1/2 / verified alias). The shared-default
+    // branch carries no connectionKey; fall back to the shared realm so A's current
+    // password can be verified regardless of whether A currently signs in via the
+    // shared or a per-brand credential.
+    const aConnectionKey =
+      aResolution && "connectionKey" in aResolution ? aResolution.connectionKey : "shared"
     if (!aConnectionKey) {
       // Fail closed: we cannot prove A without a resolvable current credential.
       return NextResponse.json(
@@ -400,7 +406,6 @@ function activationRejection(reason: PerEmailActivationRejectReason): string {
     default:
       return "That request isn't valid."
   }
-}
 }
 
 /** Region OAuth config, read from env server-side (mirrors the sign-in route). */
