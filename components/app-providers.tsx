@@ -67,7 +67,14 @@ interface AppState {
    * drawer itself; these just flip the shared flag.
    */
   signInOpen: boolean
-  openSignIn: () => void
+  /**
+   * The mode the drawer should open in. "sign-in" shows the email/password
+   * step first; "create-account" opens straight on the Create Account step.
+   * Every entry point (storefront CTAs and the legacy compatibility redirects)
+   * routes through the SAME drawer — this only chooses which body it lands on.
+   */
+  signInMode: "sign-in" | "create-account" | "recover"
+  openSignIn: (mode?: "sign-in" | "create-account" | "recover") => void
   closeSignIn: () => void
   tokenInspectorOpen: boolean
   setTokenInspectorOpen: (o: boolean) => void
@@ -109,6 +116,9 @@ export function AppProviders({
   const [country, setCountry] = useState<CountryId>(SITE_MARKET)
   const [session, setSession] = useState<Session | null>(null)
   const [signInOpen, setSignInOpen] = useState(false)
+  const [signInMode, setSignInMode] = useState<"sign-in" | "create-account" | "recover">(
+    "sign-in",
+  )
   const [tokenInspectorOpen, setTokenInspectorOpen] = useState(false)
   const [activeFlow, setActiveFlow] = useState<MethodId | null>(null)
   const router = useRouter()
@@ -166,6 +176,7 @@ export function AppProviders({
       displayName,
       authLoading,
       signInOpen,
+      signInMode,
       // Guard: never open the sign-in drawer for someone already signed in
       // (mock or real). Raul's rule — "we should not be able to log in again if
       // we are already logged in" — and the backstop for any entry point that
@@ -178,8 +189,13 @@ export function AppProviders({
       // per-brand, Models 1–2 shared), so the customer never picks an identity
       // model. UK is simply the isolated demo environment for cases 3 and 4; it
       // gets the normal storefront sign-in experience, not a chooser.
-      openSignIn: () => {
+      //
+      // `mode` chooses which body the drawer lands on ("sign-in" default, or
+      // "create-account" so the legacy /register redirect opens straight on the
+      // Create Account step). It never changes WHICH drawer opens.
+      openSignIn: (mode: "sign-in" | "create-account" | "recover" = "sign-in") => {
         if (signedIn) return
+        setSignInMode(mode)
         setSignInOpen(true)
       },
       closeSignIn: () => setSignInOpen(false),
@@ -200,6 +216,7 @@ export function AppProviders({
       displayName,
       authLoading,
       signInOpen,
+      signInMode,
       tokenInspectorOpen,
       activeFlow,
       logout,

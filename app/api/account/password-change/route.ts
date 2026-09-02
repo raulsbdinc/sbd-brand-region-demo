@@ -3,15 +3,17 @@ import {
   requireAccountUser,
   managementErrorResponse,
 } from "@/lib/account-guard"
-import { getUser, updateUser, ManagementError } from "@/lib/auth0-management"
+import { getUser, ManagementError } from "@/lib/auth0-management"
 import { resolvePasswordChangeCoordinates } from "@/lib/credential-resolver"
 import {
   regionFromCookieHeader,
   resolveRegionAuthConfig,
 } from "@/lib/auth0-regions"
 import { passwordRealmExchange } from "@/lib/auth0-password-grant"
+import { applyPasswordUpdate } from "@/lib/apply-password-update"
 import {
   mapPasswordUpdateError,
+  planPasswordUpdate,
   validateNewPassword,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
@@ -168,20 +170,32 @@ export async function POST(request: NextRequest) {
     }
 
     // 7) Update ONLY that database identity's password through the Management
-    //    API. The PATCH id is the PRIMARY/ROOT account user (managementUserId),
-    //    and the `connection` property disambiguates WHICH database identity to
-    //    change under that primary. This is required for a linked SECONDARY
-    //    identity (case 3/4): after account linking the secondary has no
-    //    standalone Management user, so a PATCH to its own id returns 404
-    //    inexistent_user — Auth0 only updates it via the primary user + the
-    //    connection. For a primary/root credential the root id IS the matched
-    //    identity, so behavior is unchanged. A social identity is never a
+    //    API, hitting the EXACT identity and nothing else.
+    //
+    //    A connection-scoped PATCH on the primary (`{ password, connection }`)
+    //    is ambiguous whenever the account has MORE THAN ONE identity on that
+    //    connection — which is exactly the per-email model (emails A and B are
+    //    both linked on the shared per-email connection). Auth0 then updates
+    //    whichever identity it matches first (the primary/first), so the
+    //    selected email's password is never changed and another identity's is
+    //    silently overwritten.
+    //
+    //    So a LINKED SECONDARY identity is changed by targeting its exact
+    //    database user_id: unlink it (restoring it as a standalone Management
+    //    user), PATCH that user, then relink it — with rollback so a failure
+    //    never leaves the account split. Only the account's own ROOT identity
+    //    (shared Models 1-2, or a standalone per-email/brand account) uses the
+    //    direct connection-scoped PATCH, unchanged. A social identity is never a
     //    target. No password is logged or stored anywhere but the directory.
+    const plan = planPasswordUpdate({
+      auth0UserId: target.auth0UserId,
+      managementUserId: target.managementUserId,
+      isLinkedSecondary: target.isLinkedSecondary,
+      connectionName: target.connectionName,
+      connectionId: target.connectionId,
+    })
     try {
-      await updateUser(target.managementUserId, {
-        password: newPassword,
-        connection: target.connectionName,
-      })
+      await applyPasswordUpdate(plan, newPassword)
     } catch (err) {
       // Map Auth0 password-policy rejections to a safe hint; anything else
       // collapses to a neutral failure. Never surface the upstream body.

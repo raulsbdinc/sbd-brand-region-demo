@@ -21,7 +21,7 @@ import {
 export function SiteHeader() {
   // Real-session detection now lives in AppProviders (one source of truth),
   // so the header just reads `realUser` instead of doing its own /api/me fetch.
-  const { session, realUser, logout, signInOpen, openSignIn, closeSignIn } =
+  const { session, realUser, logout, signInOpen, signInMode, openSignIn, closeSignIn } =
     useApp()
   const router = useRouter()
 
@@ -203,7 +203,7 @@ export function SiteHeader() {
         </div>
       </div>
 
-      <SignInDrawer open={signInOpen} onClose={closeSignIn} />
+      <SignInDrawer open={signInOpen} initialMode={signInMode} onClose={closeSignIn} />
     </header>
   )
 }

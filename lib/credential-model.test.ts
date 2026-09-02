@@ -17,6 +17,8 @@ import {
   isBrandAllowed,
   isConnectionKey,
   normalizeEmail,
+  countBackedPerEmailBindings,
+  perEmailCapabilityActivated,
   resolveConnectionIds,
   resolveConnectionNames,
   resolveCredential,
@@ -1216,6 +1218,148 @@ test("uk sign-in: an UNOWNED email FAILS CLOSED to shared-default (no fabricated
     configuredKeys: ALL_KEYS,
   })
   assert.equal(res.ok && res.kind, "shared-default")
+})
+
+// --- Per-email PAIR activation: resolver precedence -------------------------
+// After a Model 3 activation the canonical account holds a COMPLETE per-email
+// set (≥2 backed per-email credentials). For a bound email the per-email
+// credential must then win, even when a per-brand credential coexists on the
+// SAME email (Model 4 data is preserved, not deleted). Accounts WITHOUT a
+// complete per-email set keep the existing per-brand/shared resolution.
+const ACT_A = "act.primary@prorises.com"
+const ACT_B = "act.secondary@prorises.com"
+
+function activatedAccount(accountId = "auth0|act"): CandidateAccount {
+  // Primary A: BOTH a coexisting DeWalt per-brand credential AND a per-email
+  // credential. Secondary B: a per-email credential. Two backed per-email
+  // credentials ⇒ activated.
+  return candidate(
+    accountId,
+    [
+      binding({ email: ACT_A, connectionKey: "dewalt", auth0UserId: "auth0|act-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: ACT_A, connectionKey: "per-email", auth0UserId: "auth0|act-pe-a", useCase: "per-email-password" }),
+      binding({ email: ACT_B, connectionKey: "per-email", auth0UserId: "auth0|act-pe-b", useCase: "per-email-password" }),
+    ],
+    [
+      identity("dewalt", "auth0|act-dw"),
+      identity("per-email", "auth0|act-pe-a"),
+      identity("per-email", "auth0|act-pe-b"),
+    ],
+  )
+}
+
+test("per-email activation: capability helper needs ≥2 BACKED per-email credentials", () => {
+  const acct = activatedAccount()
+  assert.equal(perEmailCapabilityActivated(acct.bindings, acct.identities), true)
+  assert.equal(countBackedPerEmailBindings(acct.bindings, acct.identities), 2)
+
+  // One per-email binding with NO backing identity does not count → not activated.
+  const oneUnbacked = [
+    binding({ email: ACT_A, connectionKey: "per-email", auth0UserId: "auth0|x1", useCase: "per-email-password" }),
+    binding({ email: ACT_B, connectionKey: "per-email", auth0UserId: "auth0|x2", useCase: "per-email-password" }),
+  ]
+  assert.equal(perEmailCapabilityActivated(oneUnbacked, [identity("per-email", "auth0|x1")]), false)
+})
+
+test("per-email activation: once ACTIVATED, per-email WINS over a coexisting per-brand credential for the primary email", () => {
+  // Primary A signs in on a DeWalt UK storefront. A has BOTH a dewalt and a
+  // per-email credential, but the completed pair makes per-email authoritative —
+  // no ambiguity, and the preserved Model 4 dewalt row does not win.
+  const res = resolveCredentialFromCandidates({
+    email: ACT_A,
+    siteBrand: "dewalt",
+    candidates: [activatedAccount()],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok && res.kind, "resolved")
+  assert.equal(res.ok && res.kind === "resolved" && res.connectionKey, "per-email")
+  assert.equal(res.ok && res.kind === "resolved" && res.binding?.auth0UserId, "auth0|act-pe-a")
+})
+
+test("per-email activation: secondary email resolves to its OWN per-email credential (A/B independence)", () => {
+  const acct = activatedAccount()
+  const resA = resolveCredentialFromCandidates({ email: ACT_A, siteBrand: "dewalt", candidates: [acct], configuredKeys: ALL_KEYS })
+  const resB = resolveCredentialFromCandidates({ email: ACT_B, siteBrand: "stanley", candidates: [acct], configuredKeys: ALL_KEYS })
+  assert.equal(resB.ok && resB.kind === "resolved" && resB.connectionKey, "per-email")
+  // A and B resolve to DIFFERENT per-email identities → independent passwords.
+  assert.notEqual(
+    resA.ok && resA.kind === "resolved" && resA.binding?.auth0UserId,
+    resB.ok && resB.kind === "resolved" && resB.binding?.auth0UserId,
+  )
+})
+
+test("per-email activation: a HALF-activated state (per-email + per-brand on one email, only 1 backed per-email) still FAILS CLOSED as ambiguous", () => {
+  // Not activated (only one backed per-email credential), and the primary email
+  // carries BOTH a per-email and a per-brand credential → two scoped matches →
+  // ambiguous. This is the fail-closed guard for an interrupted activation.
+  const acct = candidate(
+    "auth0|half",
+    [
+      binding({ email: ACT_A, connectionKey: "dewalt", auth0UserId: "auth0|h-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: ACT_A, connectionKey: "per-email", auth0UserId: "auth0|h-pe", useCase: "per-email-password" }),
+    ],
+    [identity("dewalt", "auth0|h-dw"), identity("per-email", "auth0|h-pe")],
+  )
+  const res = resolveCredentialFromCandidates({ email: ACT_A, siteBrand: "dewalt", candidates: [acct], configuredKeys: ALL_KEYS })
+  assert.equal(res.ok, false)
+  assert.equal(res.ok === false && res.reason, "ambiguous")
+})
+
+test("per-email activation: NO FALLBACK — once the pair is complete, B never falls back to shared/alias/brand even with a same-account shared login", () => {
+  // REGRESSION guard for the reported concern: after a COMPLETE per-email pair
+  // exists, signing in as B must resolve to B's OWN per-email identity and must
+  // NOT fall back to the shared/root password, a login alias, or a per-brand
+  // credential. We add a genuine SHARED (root) identity on the SAME account —
+  // the Model 1/2 login — to prove the completed pair still wins for both A and
+  // B and never degrades to shared-default.
+  const acct = candidate(
+    "auth0|nofallback",
+    [
+      // Coexisting per-brand credential on A (must be superseded, not win).
+      binding({ email: ACT_A, connectionKey: "dewalt", auth0UserId: "auth0|nf-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: ACT_A, connectionKey: "per-email", auth0UserId: "auth0|nf-pe-a", useCase: "per-email-password" }),
+      binding({ email: ACT_B, connectionKey: "per-email", auth0UserId: "auth0|nf-pe-b", useCase: "per-email-password" }),
+    ],
+    [
+      identity("shared", "auth0|nf-root"), // a real shared/root login on THIS account
+      identity("dewalt", "auth0|nf-dw"),
+      identity("per-email", "auth0|nf-pe-a"),
+      identity("per-email", "auth0|nf-pe-b"),
+    ],
+    /* sharedMatch */ true, // the shared password genuinely matches on this account
+  )
+  assert.equal(perEmailCapabilityActivated(acct.bindings, acct.identities), true)
+
+  // B → its own per-email identity, NOT shared-default, NOT the brand credential.
+  const resB = resolveCredentialFromCandidates({ email: ACT_B, siteBrand: "dewalt", candidates: [acct], configuredKeys: ALL_KEYS })
+  assert.equal(resB.ok && resB.kind, "resolved")
+  assert.equal(resB.ok && resB.kind === "resolved" && resB.connectionKey, "per-email")
+  assert.equal(resB.ok && resB.kind === "resolved" && resB.binding?.auth0UserId, "auth0|nf-pe-b")
+
+  // A → its own per-email identity too (brand credential on A is superseded).
+  const resA = resolveCredentialFromCandidates({ email: ACT_A, siteBrand: "dewalt", candidates: [acct], configuredKeys: ALL_KEYS })
+  assert.equal(resA.ok && resA.kind === "resolved" && resA.connectionKey, "per-email")
+  assert.equal(resA.ok && resA.kind === "resolved" && resA.binding?.auth0UserId, "auth0|nf-pe-a")
+
+  // Neither resolves to the shared default despite the real shared login.
+  assert.notEqual(resB.ok && resB.kind, "shared-default")
+  assert.notEqual(resA.ok && resA.kind, "shared-default")
+})
+
+test("per-email activation: Model 4 (per-brand only, NO per-email) is UNCHANGED — never treated as activated", () => {
+  // A pure Model 4 account has zero per-email credentials, so activation is off
+  // and brand resolution is exactly as before on each brand's site.
+  const account = candidate(
+    "auth0|m4-unchanged",
+    [
+      binding({ email: UK_M4_EMAIL, connectionKey: "dewalt", auth0UserId: "auth0|u-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: UK_M4_EMAIL, connectionKey: "stanley", auth0UserId: "auth0|u-st", useCase: "per-brand-password", brand: "stanley" }),
+    ],
+    [identity("dewalt", "auth0|u-dw"), identity("stanley", "auth0|u-st")],
+  )
+  assert.equal(perEmailCapabilityActivated(account.bindings, account.identities), false)
+  const onDewalt = resolveCredentialFromCandidates({ email: UK_M4_EMAIL, siteBrand: "dewalt", candidates: [account], configuredKeys: ALL_KEYS })
+  assert.equal(onDewalt.ok && onDewalt.kind === "resolved" && onDewalt.connectionKey, "dewalt")
 })
 
 test("ownership: no candidates / empty email → none", () => {

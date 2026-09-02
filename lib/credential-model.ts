@@ -581,6 +581,44 @@ export interface ResolveCredentialFromCandidatesParams {
 const SINGLE_ACCOUNT_ID = "__single__"
 
 /**
+ * Count the per-email credentials on ONE account that are genuinely BACKED by a
+ * real linked per-email identity on that same account. A binding with no
+ * matching identity does not count — it is not a usable credential.
+ */
+export function countBackedPerEmailBindings(
+  bindings: CredentialBinding[],
+  identities: LinkedDbIdentity[],
+): number {
+  return bindings.filter(
+    (b) =>
+      b.connectionKey === "per-email" &&
+      identities.some(
+        (i) => i.connectionKey === "per-email" && i.userId === b.auth0UserId,
+      ),
+  ).length
+}
+
+/**
+ * Whether an account has ACTIVATED per-email capability: a COMPLETE per-email
+ * set of two or more backed per-email credentials. This is the scoped, explicit
+ * condition (Confluence Model 3: "each independently passworded email is a
+ * separate identity … recorded as separate credential bindings on one primary
+ * account") that switches on per-email precedence in the resolver.
+ *
+ * It is deliberately derived from the bindings + identities themselves (not a
+ * free-floating flag) so it can never drift out of sync, and it fails closed:
+ * an incomplete set (0 or 1 backed per-email credential) is NOT activated, so
+ * such an account keeps the existing per-brand / shared resolution and any
+ * half-built state is caught by the ordinary ambiguity rule.
+ */
+export function perEmailCapabilityActivated(
+  bindings: CredentialBinding[],
+  identities: LinkedDbIdentity[],
+): boolean {
+  return countBackedPerEmailBindings(bindings, identities) >= 2
+}
+
+/**
  * Resolve exactly ONE database connection key for a submitted email on this
  * storefront across a set of CANDIDATE accounts, failing CLOSED on any GENUINE
  * ambiguity while intentionally honoring a customer's OWN scoped credential.
@@ -620,6 +658,18 @@ export function resolveCredentialFromCandidates(
   const sharedAccountIds = new Set<string>()
   for (const account of params.candidates) {
     if (account.sharedMatch) sharedAccountIds.add(account.accountId)
+
+    // Whether THIS account has a complete, activated per-email set. Computed per
+    // account so a binding can only ever be judged against its own account's
+    // identities (ownership is never crossed).
+    const activated = perEmailCapabilityActivated(
+      account.bindings,
+      account.identities,
+    )
+
+    // Gather this account's backed, allow-listed, brand-permitted, configured
+    // scoped credentials for the submitted email.
+    const local: CredentialBinding[] = []
     for (const b of account.bindings) {
       if (normalizeEmail(b.email) !== email) continue
       if (!isConnectionKey(b.connectionKey)) continue
@@ -631,6 +681,25 @@ export function resolveCredentialFromCandidates(
         (i) => i.connectionKey === b.connectionKey && i.userId === b.auth0UserId,
       )
       if (!backed) continue
+      local.push(b)
+    }
+
+    // PER-EMAIL PRECEDENCE (scoped, explicit): once this account has activated
+    // per-email capability AND the submitted email has its own per-email
+    // credential here, that per-email credential is AUTHORITATIVE for the email
+    // — a coexisting per-brand credential on the SAME email is superseded, not a
+    // conflict. This is the ONLY case that changes behavior; without a complete
+    // (≥2) backed per-email set, `local` is used unchanged, so per-brand (Model
+    // 4) and shared (Models 1/2) accounts resolve exactly as before, and a
+    // half-activated state (1 per-email + 1 per-brand on the same email) still
+    // yields two matches → ambiguous → fail closed.
+    let effective = local
+    if (activated) {
+      const perEmail = local.filter((b) => b.connectionKey === "per-email")
+      if (perEmail.length > 0) effective = perEmail
+    }
+
+    for (const b of effective) {
       const dedupeKey = `${b.connectionKey}|${b.auth0UserId}`
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
