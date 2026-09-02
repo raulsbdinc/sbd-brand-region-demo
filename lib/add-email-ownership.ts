@@ -171,6 +171,49 @@ export function selectTransientEmailStubIds(params: {
   return out
 }
 
+/**
+ * A minimal, framework-free shape of an Auth0 user for identity-email extraction:
+ * its root email plus each identity's own email (top-level and/or `profileData`).
+ */
+export interface IdentityEmailSource {
+  email?: unknown
+  identities?: Array<{
+    email?: unknown
+    profileData?: Record<string, unknown> | null
+  }> | null
+}
+
+/**
+ * Collect EVERY normalized email this account owns across its root email and
+ * ALL of its identities — a database identity's email AND a SOCIAL identity's
+ * `profileData.email` (e.g. a linked Google account), regardless of the
+ * identity's `email_verified` flag.
+ *
+ * This is deliberately BROADER than the login/provisioning notion of a
+ * "verified" email: for the canonical-ownership guard, an address that exists on
+ * ANY identity of an account IS owned by that account — a linked Google identity
+ * carrying `foo@gmail.com` means that account owns `foo@gmail.com`, even if the
+ * social profileData omits or stringifies `email_verified`. Missing this is what
+ * let a Gmail owned only via a foreign account's linked Google identity slip past
+ * discovery and be linked into a second account.
+ */
+export function collectIdentityOwnedEmails(user: IdentityEmailSource): string[] {
+  const out = new Set<string>()
+
+  const root = normalizeEmail(user.email)
+  if (root) out.add(root)
+
+  for (const identity of user.identities ?? []) {
+    const direct = normalizeEmail(identity?.email)
+    if (direct) out.add(direct)
+    const pd = (identity?.profileData ?? {}) as Record<string, unknown>
+    const pdEmail = normalizeEmail(pd.email)
+    if (pdEmail) out.add(pdEmail)
+  }
+
+  return [...out]
+}
+
 /** Neutral, customer-safe copy for a rejected add. */
 export function addEmailRejectionCopy(
   reason: "different-owner" | "ambiguous" | "unavailable",

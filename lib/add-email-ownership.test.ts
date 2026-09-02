@@ -4,6 +4,7 @@ import {
   evaluateAddEmailOwnership,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
+  collectIdentityOwnedEmails,
   addEmailRejectionCopy,
   type AddEmailCandidate,
 } from "./add-email-ownership.ts"
@@ -194,4 +195,104 @@ test("different-owner copy is the required customer string", () => {
     addEmailRejectionCopy("different-owner"),
     "This email is already used by another account and cannot be added here.",
   )
+})
+
+// ============================================================================
+// collectIdentityOwnedEmails — every identity's email counts as owned, incl.
+// an UNVERIFIED social profileData email (the linked-Google discovery gap).
+// ============================================================================
+
+test("collects a linked Google identity's profileData email even when unverified", () => {
+  // Canonical A: root email dedes10491@mediseat.com, with a linked Google
+  // identity carrying raul.sbdinc@gmail.com. The social profileData may omit or
+  // stringify email_verified — ownership must not depend on that flag.
+  const emails = collectIdentityOwnedEmails({
+    email: "dedes10491@mediseat.com",
+    identities: [
+      { profileData: {} }, // primary DB identity, no email in profileData
+      { profileData: { email: "raul.sbdinc@gmail.com" } }, // linked Google, no email_verified
+    ],
+  })
+  assert.ok(emails.includes("dedes10491@mediseat.com"))
+  assert.ok(emails.includes("raul.sbdinc@gmail.com"))
+})
+
+test("collects an identity's top-level email and normalizes casing/space", () => {
+  const emails = collectIdentityOwnedEmails({
+    email: "  Root@Example.com ",
+    identities: [{ email: "Alt@Example.com", profileData: { email: "  Third@Example.com" } }],
+  })
+  assert.deepEqual(
+    [...emails].sort(),
+    ["alt@example.com", "root@example.com", "third@example.com"].sort(),
+  )
+})
+
+test("tolerates missing/empty identities and emails", () => {
+  assert.deepEqual(collectIdentityOwnedEmails({}), [])
+  assert.deepEqual(collectIdentityOwnedEmails({ email: "", identities: null }), [])
+  assert.deepEqual(
+    collectIdentityOwnedEmails({ identities: [{ profileData: null }, {}] }),
+    [],
+  )
+})
+
+// ============================================================================
+// FOREIGN LINKED-GOOGLE OWNERSHIP — the reported preview defect, end to end
+// through the pure reduction with ownedEmails built the way the server bridge
+// now builds them (identity emails included).
+// ============================================================================
+
+test("rejects adding a Gmail owned ONLY via a foreign account's linked Google identity", () => {
+  // Signed in as canonical B (auth0|B). The Gmail raul.sbdinc@gmail.com is a
+  // linked Google identity on a DIFFERENT canonical A (auth0|A) — its root email
+  // is dedes10491@mediseat.com, so /users-by-email(Gmail) never surfaced A and
+  // the add was wrongly allowed. With identity emails included in ownedEmails,
+  // A is a real owner of the Gmail and the add must be rejected.
+  const foreignA: AddEmailCandidate = {
+    userId: "auth0|A",
+    ownedEmails: collectIdentityOwnedEmails({
+      email: "dedes10491@mediseat.com",
+      identities: [
+        { profileData: {} },
+        { profileData: { email: "raul.sbdinc@gmail.com" } },
+      ],
+    }),
+    hasRealIdentity: true,
+  }
+  // The transient passwordless OTP stub the code step minted for the Gmail.
+  const stub: AddEmailCandidate = {
+    userId: "auth0|stub",
+    ownedEmails: ["raul.sbdinc@gmail.com"],
+    hasRealIdentity: false,
+  }
+
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates: [foreignA, stub],
+    lookupOk: true,
+  })
+  assert.equal(decision.ok, false)
+  assert.equal(decision.ok === false && decision.reason, "different-owner")
+})
+
+test("Model 4 no-regression: same canonical owner via its own linked identity is allowed", () => {
+  // The email lives on the CURRENT account's own linked identity — adding/linking
+  // a new brand credential for it must still be allowed.
+  const selfOwned: AddEmailCandidate = {
+    userId: "auth0|B",
+    ownedEmails: collectIdentityOwnedEmails({
+      email: "wacev92852@mapsguy.com",
+      identities: [{ profileData: { email: "raul.sbdinc@gmail.com" } }],
+    }),
+    hasRealIdentity: true,
+  }
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates: [selfOwned],
+    lookupOk: true,
+  })
+  assert.equal(decision.ok, true)
 })

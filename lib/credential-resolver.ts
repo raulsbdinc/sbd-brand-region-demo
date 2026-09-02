@@ -37,6 +37,7 @@ import {
   type Auth0User,
 } from "@/lib/auth0-management"
 import {
+  collectIdentityOwnedEmails,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
   type AddEmailCandidate,
@@ -474,15 +475,21 @@ export async function resolveAddEmailOwnership(
   if (!isManagementConfigured()) return { ok: false, reason: "unavailable" }
 
   const normalized = normalizeEmail(email)
-  const { candidates: users, ok } = await gatherCandidates(email)
+  const { candidates: users, ok } = await gatherAddEmailCandidates(email)
 
   const byId = new Map<string, Auth0User>()
   for (const u of users) if (u.user_id) byId.set(u.user_id, u)
 
   const candidates: AddEmailCandidate[] = [...byId.values()].map((user) => ({
     userId: user.user_id!,
+    // OWNERSHIP (not login): every email on ANY of the account's identities
+    // counts — a database identity's email, a SOCIAL identity's profileData
+    // email (linked Google), root email, binding emails, and persisted verified
+    // aliases — regardless of a social profileData's email_verified flag. The
+    // narrower collectAccountVerifiedEmails alone missed a Gmail owned only via
+    // a foreign account's linked Google identity.
     ownedEmails: [
-      normalizeEmail(user.email),
+      ...collectIdentityOwnedEmails(user),
       ...readBindings(user).map((b) => normalizeEmail(b.email)),
       ...collectAccountVerifiedEmails(user),
     ].filter((e) => e.length > 0),
@@ -492,6 +499,37 @@ export async function resolveAddEmailOwnership(
   }))
 
   return planAddEmailOwnership({ email: normalized, currentUserId, candidates, lookupOk: ok })
+}
+
+/**
+ * Candidate gather for the add-another-email OWNERSHIP guard. Superset of
+ * {@link gatherCandidates}: in addition to the root-email lookup and the
+ * app_metadata (login alias + binding) search, it queries the v3 index by
+ * `identities.profileData.email` so an address owned ONLY via a linked SOCIAL
+ * identity (e.g. a Google account linked onto a different canonical customer)
+ * is discovered. `/users-by-email` matches only a record's NORMALIZED root
+ * email, so a linked-Gmail owner whose root email differs would otherwise never
+ * surface — that gap let such a Gmail be linked into a second account.
+ *
+ * `ok` is false when ANY of the three lookups failed: an incomplete candidate
+ * set cannot prove a foreign owner is absent, so the ownership guard fails
+ * CLOSED (reject) rather than risk linking a second person's mailbox. Uses the
+ * STRICT search (throws on error) so a failed lookup is never mistaken for
+ * "no owner". Never throws.
+ */
+async function gatherAddEmailCandidates(
+  email: string,
+): Promise<{ candidates: Auth0User[]; ok: boolean }> {
+  const typed = email.toLowerCase()
+  const q = luceneEscapePhrase(typed)
+  const aliasQuery = `app_metadata.login_alias_emails:"${q}" OR app_metadata.credential_bindings.email:"${q}" OR email:"${q}"`
+  const identityQuery = `identities.profileData.email:"${q}"`
+  const results = await Promise.allSettled([
+    getUsersByEmail(typed),
+    searchUsersStrict(aliasQuery),
+    searchUsersStrict(identityQuery),
+  ])
+  return aggregateCandidateLookups(results)
 }
 
 /**
