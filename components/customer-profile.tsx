@@ -3089,7 +3089,7 @@ function ActivatePerEmailDialog({
 // <li> nested in <li>, no wrapping <div>. Loading and failure never fabricate a
 // credential: they render honest neutral <li> states, and a genuinely
 // password-less account shows an honest empty row.
-function PasswordCredentials({ live }: { live: boolean }) {
+function PasswordCredentials({ live, perEmailActivationAvailable }: { live: boolean; perEmailActivationAvailable: boolean }) {
   const {
     data: methodsData,
     error: methodsError,
@@ -3152,13 +3152,20 @@ function PasswordCredentials({ live }: { live: boolean }) {
 
   // Alternate emails eligible for an "Add password" activation: verified, not
   // the primary, and not already backed by a per-email password.
-  const eligible = accountEmail
-    ? eligibleActivationEmails({
-        primaryEmail: accountEmail,
-        verifiedEmails,
-        backedPerEmailEmails,
-      })
-    : []
+  //
+  // Model 3 (per-email passwords) is a UK-only experience. On EU Models 1/2 the
+  // account has ONE shared password and its linked alternates sign in with that
+  // same shared password + passcodes — offering per-email activation there would
+  // blur the shared-password model, so we suppress activation entirely unless the
+  // Model-3 experience is enabled for this storefront.
+  const eligible =
+    perEmailActivationAvailable && accountEmail
+      ? eligibleActivationEmails({
+          primaryEmail: accountEmail,
+          verifiedEmails,
+          backedPerEmailEmails,
+        })
+      : []
 
   function refreshAfterActivation() {
     void mutateMethods()
@@ -3238,7 +3245,7 @@ function SignInSection({
         <ul className="space-y-2">
           {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).
                   Renders its own <li> rows directly into this <ul>. */}
-          <PasswordCredentials live={live} modelSelectionAvailable={modelSelectionAvailable} />
+          <PasswordCredentials live={live} perEmailActivationAvailable={modelSelectionAvailable} />
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow

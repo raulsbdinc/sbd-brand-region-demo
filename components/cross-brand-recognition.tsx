@@ -3,6 +3,7 @@ import { UserCheck } from "lucide-react"
 import type { OtherSite } from "@/lib/claims"
 import { SITE_COUNTRY } from "@/lib/site"
 import type { PasswordModelSummary } from "@/lib/credential-model"
+import { crossBrandRecognitionCopy } from "@/lib/cross-brand-copy"
 
 // Cross-brand recognition panel.
 //
@@ -84,12 +85,7 @@ export function CrossBrandRecognition({
   // First site ever for this account: deliberately no panel.
   if (sites.length === 0) return null
 
-  const oneSharedPassword = passwordModel?.singleSharedPassword ?? true
-  const recognitionCopy = oneSharedPassword
-    ? "Each Stanley Black & Decker site keeps its own sign-in, which is why we asked you again here, but it\u2019s one account, one password, one record in the directory."
-    : passwordModel?.perBrand
-      ? "Each Stanley Black & Decker brand keeps its own password here \u2014 the same person, recognised across sites, but with a separate credential per brand."
-      : "This email carries its own password here \u2014 the same person, recognised across sites, with a separate credential for this sign-in."
+  const recognitionCopy = crossBrandRecognitionCopy(passwordModel)
 
   return (
     <section
