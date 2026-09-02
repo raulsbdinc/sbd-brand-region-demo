@@ -6,11 +6,10 @@ import {
   decodeGoogleLinkHandoff,
 } from "@/lib/google-link-handoff"
 import {
-  SESSION_COOKIE_NAME,
-  SESSION_TTL_SECONDS,
   linkStandaloneGoogle,
   mintPrimarySessionCookie,
 } from "@/lib/google-link-core"
+import { applySessionCookie, SESSION_TTL_SECONDS } from "@/lib/session-cookie"
 
 // GET /api/account/identities/google/complete
 // ============================================
@@ -47,13 +46,14 @@ export async function GET(request: NextRequest) {
     const res = NextResponse.redirect(url)
     res.cookies.set(GOOGLE_LINK_COOKIE_NAME, "", { path: "/", maxAge: 0 })
     if (primaryCookie) {
-      res.cookies.set(SESSION_COOKIE_NAME, primaryCookie, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        path: "/",
-        maxAge: SESSION_TTL_SECONDS,
-      })
+      // Chunk-safe write so the restored primary session (a large shared
+      // account) is never dropped by the browser's single-cookie size limit.
+      applySessionCookie(
+        res.cookies,
+        primaryCookie,
+        request.cookies.getAll().map((c) => c.name),
+        { maxAge: SESSION_TTL_SECONDS },
+      )
     }
     return res
   }

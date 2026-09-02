@@ -13,14 +13,12 @@ import {
   passwordRealmExchange,
   type VerifiedTokenResponse,
 } from "@/lib/auth0-password-grant"
+import {
+  applySessionCookie,
+  SESSION_TTL_SECONDS,
+} from "@/lib/session-cookie"
 
 export const runtime = "nodejs"
-
-// The SDK hard-codes a 1-hour expiry inside generateSessionCookie (see step 5
-// comment below), so the cookie maxAge MUST match to avoid the browser holding
-// a cookie the encrypted payload already considers expired.
-const SESSION_TTL_SECONDS = 60 * 60
-const SESSION_COOKIE_NAME = "__session"
 
 // One generic message for every credential failure. Never say whether the
 // address exists — that would enable user enumeration.
@@ -187,12 +185,15 @@ export async function POST(request: NextRequest) {
   const cookieValue = await generateSessionCookie(session, { secret })
 
   const response = NextResponse.json({ ok: true })
-  response.cookies.set(SESSION_COOKIE_NAME, cookieValue, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
-  })
+  // Persist via the SDK-faithful chunked writer so a large shared-account
+  // session (linked identities + alias metadata + multi-site history) is never
+  // silently dropped by the browser's ~4KB single-cookie limit. Pass the
+  // request's cookie names so any stale chunks from a prior session are cleared.
+  applySessionCookie(
+    response.cookies,
+    cookieValue,
+    request.cookies.getAll().map((c) => c.name),
+    { maxAge: SESSION_TTL_SECONDS },
+  )
   return response
 }

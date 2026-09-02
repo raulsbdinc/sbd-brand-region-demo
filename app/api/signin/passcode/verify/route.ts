@@ -20,12 +20,9 @@ import {
   type TokenSet,
 } from "@/lib/auth0-passcode-signin"
 import { HANDOFF_COOKIE_NAME, decodeHandoff } from "@/lib/passcode-handoff"
+import { applySessionCookie, SESSION_TTL_SECONDS } from "@/lib/session-cookie"
 
 export const runtime = "nodejs"
-
-// Mirror the password route exactly so the session is byte-compatible.
-const SESSION_TTL_SECONDS = 60 * 60
-const SESSION_COOKIE_NAME = "__session"
 
 // The drawer's existing generic passcode failure copy — reused verbatim.
 const GENERIC_ERROR = "That code isn't right, or it's expired."
@@ -113,13 +110,14 @@ export async function POST(request: NextRequest) {
 
   const cookieValue = await generateSessionCookie(session, { secret })
   const response = NextResponse.json({ ok: true })
-  response.cookies.set(SESSION_COOKIE_NAME, cookieValue, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
-  })
+  // Chunk-safe session write (see lib/session-cookie): a large shared-account
+  // session must never be dropped by the browser's single-cookie size limit.
+  applySessionCookie(
+    response.cookies,
+    cookieValue,
+    request.cookies.getAll().map((c) => c.name),
+    { maxAge: SESSION_TTL_SECONDS },
+  )
   // Handoff has served its purpose.
   response.cookies.set(HANDOFF_COOKIE_NAME, "", { path: "/", maxAge: 0 })
   return response
