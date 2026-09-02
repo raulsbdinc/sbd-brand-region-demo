@@ -1070,6 +1070,154 @@ test("ownership: excluding a non-owner user_id has no effect", () => {
   assert.deepEqual(r, { kind: "single", userId: PRIMARY })
 })
 
+// --- UK storefront sign-in: Model 3 & Model 4 through the IDENTICAL form -----
+// The /sign-in/uk chooser ("how was your account set up?") was the regression.
+// Both DeWalt UK and Stanley UK now use the same branded drawer, which posts to
+// the single /api/signin/password route. That route derives the ONE connection
+// to authenticate against purely from the submitted email + the deployment's
+// SITE_BRAND via resolveSigninCredential → resolveCredentialFromCandidates (the
+// exact pure primitive exercised below). No model / connection / realm is ever
+// exposed to the customer. These lock in that both live cases resolve through
+// the identical public path, with wrong-password isolation and fail-closed
+// ambiguity.
+const UK_M3_A = "raul.primary@prorises.com"
+const UK_M3_B = "raul.secondary@prorises.com"
+const UK_M4_EMAIL = "pro@sbdinc.com"
+
+test("uk sign-in: Model 3 — two emails, ONE customer, each identifies its OWN per-email credential through the same form", () => {
+  // Model 3: two DIFFERENT emails identify the same customer; each owns an
+  // independent per-email password. Same submitted email + brand → per-email.
+  const accountA = candidate(
+    "auth0|uk-m3-a",
+    [binding({ email: UK_M3_A, connectionKey: "per-email", auth0UserId: "auth0|m3-a", useCase: "per-email-password" })],
+    [identity("per-email", "auth0|m3-a")],
+  )
+  const accountB = candidate(
+    "auth0|uk-m3-b",
+    [binding({ email: UK_M3_B, connectionKey: "per-email", auth0UserId: "auth0|m3-b", useCase: "per-email-password" })],
+    [identity("per-email", "auth0|m3-b")],
+  )
+
+  // Email A on a DeWalt UK storefront → per-email (its own credential).
+  const resA = resolveCredentialFromCandidates({
+    email: UK_M3_A,
+    siteBrand: "dewalt",
+    candidates: [accountA],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(resA.ok && resA.kind === "resolved" && resA.connectionKey, "per-email")
+
+  // Email B on a Stanley UK storefront → still per-email (brand does not matter
+  // for per-email); a DIFFERENT independent credential. Proves each email owns
+  // its own lifecycle through the identical form.
+  const resB = resolveCredentialFromCandidates({
+    email: UK_M3_B,
+    siteBrand: "stanley",
+    candidates: [accountB],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(resB.ok && resB.kind === "resolved" && resB.connectionKey, "per-email")
+  assert.notEqual(
+    resA.ok && resA.kind === "resolved" && resA.binding?.auth0UserId,
+    resB.ok && resB.kind === "resolved" && resB.binding?.auth0UserId,
+  )
+})
+
+test("uk sign-in: Model 4 — same email, ONE customer, DeWalt vs Stanley own INDEPENDENT brand credentials through the same form", () => {
+  // Model 4: the SAME email identifies one customer, but each brand owns its own
+  // password. The submitted email is identical; the deployment's SITE_BRAND is
+  // the ONLY thing that steers the connection — no customer model choice.
+  const account = candidate(
+    "auth0|uk-m4",
+    [
+      binding({ email: UK_M4_EMAIL, connectionKey: "dewalt", auth0UserId: "auth0|m4-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: UK_M4_EMAIL, connectionKey: "stanley", auth0UserId: "auth0|m4-st", useCase: "per-brand-password", brand: "stanley" }),
+    ],
+    [identity("dewalt", "auth0|m4-dw"), identity("stanley", "auth0|m4-st")],
+  )
+
+  const onDewalt = resolveCredentialFromCandidates({
+    email: UK_M4_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(onDewalt.ok && onDewalt.kind === "resolved" && onDewalt.connectionKey, "dewalt")
+
+  const onStanley = resolveCredentialFromCandidates({
+    email: UK_M4_EMAIL,
+    siteBrand: "stanley",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(onStanley.ok && onStanley.kind === "resolved" && onStanley.connectionKey, "stanley")
+})
+
+test("uk sign-in: Model 4 wrong-password ISOLATION — the DeWalt attempt only ever targets the dewalt realm (Stanley password can't satisfy it)", () => {
+  // The route attempts ONLY the resolved realm (see /api/signin/password: the
+  // "resolved" branch does a single passwordRealmExchange on that connection,
+  // with NO shared attempt and NO alias fallback). So on DeWalt UK the ONLY
+  // credential consulted is the dewalt one — the Stanley brand password is never
+  // tried, which is exactly what isolates the two brand lifecycles. We prove the
+  // resolution the route acts on pins dewalt (never stanley/shared) here.
+  const account = candidate(
+    "auth0|uk-m4-iso",
+    [
+      binding({ email: UK_M4_EMAIL, connectionKey: "dewalt", auth0UserId: "auth0|iso-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: UK_M4_EMAIL, connectionKey: "stanley", auth0UserId: "auth0|iso-st", useCase: "per-brand-password", brand: "stanley" }),
+    ],
+    [identity("dewalt", "auth0|iso-dw"), identity("stanley", "auth0|iso-st")],
+  )
+  const res = resolveCredentialFromCandidates({
+    email: UK_M4_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [account],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok && res.kind, "resolved")
+  assert.equal(res.ok && res.kind === "resolved" && res.connectionKey, "dewalt")
+  // Explicitly NOT stanley and NOT shared — the wrong-brand password is out of
+  // scope for this attempt, so it cannot authenticate.
+  assert.notEqual(res.ok && res.kind === "resolved" && res.connectionKey, "stanley")
+})
+
+test("uk sign-in: ambiguous mapping FAILS CLOSED through the same form — two distinct owners of one email → no realm attempt", () => {
+  // Two DIFFERENT accounts each own a valid scoped credential for the same
+  // submitted email. The single form cannot safely pick one → ambiguous → the
+  // route (signinResolutionPermitsRealmOperation === false) attempts NO realm
+  // and returns the generic 401. Never asks the customer to disambiguate.
+  const perEmailAccount = candidate(
+    "auth0|amb-a",
+    [binding({ email: UK_M4_EMAIL, connectionKey: "per-email", auth0UserId: "auth0|amb-pe", useCase: "per-email-password" })],
+    [identity("per-email", "auth0|amb-pe")],
+  )
+  const dewaltAccount = candidate(
+    "auth0|amb-b",
+    [binding({ email: UK_M4_EMAIL, connectionKey: "dewalt", auth0UserId: "auth0|amb-dw", useCase: "per-brand-password", brand: "dewalt" })],
+    [identity("dewalt", "auth0|amb-dw")],
+  )
+  const res = resolveCredentialFromCandidates({
+    email: UK_M4_EMAIL,
+    siteBrand: "dewalt",
+    candidates: [perEmailAccount, dewaltAccount],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok, false)
+  assert.equal(res.ok === false && res.reason, "ambiguous")
+})
+
+test("uk sign-in: an UNOWNED email FAILS CLOSED to shared-default (no fabricated scoped credential)", () => {
+  // An email with no candidates at all resolves to shared-default — the branded
+  // drawer's normal Models 1/2 path — never invents a per-email/brand credential.
+  const res = resolveCredentialFromCandidates({
+    email: "stranger@nowhere.example",
+    siteBrand: "stanley",
+    candidates: [],
+    configuredKeys: ALL_KEYS,
+  })
+  assert.equal(res.ok && res.kind, "shared-default")
+})
+
 test("ownership: no candidates / empty email → none", () => {
   assert.deepEqual(resolveEmailOwnership({ email: GMAIL, candidates: [] }), {
     kind: "none",
