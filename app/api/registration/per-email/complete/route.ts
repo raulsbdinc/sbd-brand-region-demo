@@ -13,10 +13,8 @@ import { resolveConnectionNames } from "@/lib/credential-model"
 import {
   readBindings,
   connectionIdForKey,
-  resolveAddEmailOwnership,
-  purgeTransientEmailStub,
+  guardAddEmailOwnership,
 } from "@/lib/credential-resolver"
-import { addEmailRejectionCopy } from "@/lib/add-email-ownership"
 import { planModel3Completion } from "@/lib/account-model"
 import { requireAccountUser } from "@/lib/account-guard"
 import { getUser } from "@/lib/auth0-management"
@@ -87,12 +85,11 @@ export async function POST(request: NextRequest) {
   // / partial-retry case). On rejection, purge the transient passwordless stub
   // the code step minted so no standalone/linked passwordless identity is left
   // behind, and return neutral copy.
-  const ownership = await resolveAddEmailOwnership(email, sub)
+  const ownership = await guardAddEmailOwnership({ email, currentUserId: sub })
   if (!ownership.ok) {
-    await purgeTransientEmailStub(email)
     const res = NextResponse.json(
-      { error: addEmailRejectionCopy(ownership.reason) },
-      { status: ownership.reason === "unavailable" ? 502 : 409 },
+      { error: ownership.error },
+      { status: ownership.status },
     )
     res.cookies.set(cookieName, "", { ...journeyCookieOptions(), maxAge: 0 })
     return res

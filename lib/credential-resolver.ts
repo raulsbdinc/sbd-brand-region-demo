@@ -42,6 +42,7 @@ import {
   collectIdentityOwnedEmails,
   enumerateOwnershipCandidates,
   hydrateOwnershipCandidates,
+  mapAddEmailGuardResponse,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
   type AddEmailCandidate,
@@ -604,6 +605,42 @@ export async function purgeTransientEmailStub(email: string): Promise<void> {
       // best-effort — a failed cleanup must not change the customer-facing result
     }
   }
+}
+
+/** The single decision every email-linking route must obey before linking. */
+export type AddEmailGuardResult =
+  | { ok: true }
+  | { ok: false; status: number; error: string }
+
+/**
+ * CENTRALIZED add-another-email ownership guard. This is the ONE gate every
+ * OTP-proven email-linking route must call after mailbox control is proven and
+ * BEFORE it links/creates any identity — so no path can diverge or bypass the
+ * canonical-ownership rule (the exact class of bug where one route carried a
+ * weaker `getUsersByEmail` check that could not see a foreign account's linked
+ * social identity).
+ *
+ * It runs the deterministic enumerate+hydrate resolver, and on ANY non-allow
+ * outcome it (a) purges the transient passwordless OTP stub the code step
+ * minted so nothing is left behind, and (b) returns the neutral customer copy +
+ * HTTP status the route should return verbatim. Allow only when every existing
+ * owner of the normalized address resolves to THIS account (unowned, or the
+ * same canonical parent — the Model 4 cross-brand / retry case).
+ */
+export async function guardAddEmailOwnership(params: {
+  email: string
+  currentUserId: string
+}): Promise<AddEmailGuardResult> {
+  const ownership = await resolveAddEmailOwnership(
+    params.email,
+    params.currentUserId,
+  )
+  const mapped = mapAddEmailGuardResponse(ownership)
+  if (mapped.ok) return mapped
+
+  // Rejected — clean up the transient stub before returning neutral copy.
+  await purgeTransientEmailStub(params.email)
+  return mapped
 }
 
 /**

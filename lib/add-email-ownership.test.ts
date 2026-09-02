@@ -8,6 +8,7 @@ import {
   selectTransientEmailStubIds,
   collectIdentityOwnedEmails,
   addEmailRejectionCopy,
+  mapAddEmailGuardResponse,
   type AddEmailCandidate,
 } from "./add-email-ownership.ts"
 
@@ -678,4 +679,136 @@ test("hydration: all ids hydrate successfully → ok true, every candidate prese
   })
   assert.equal(ok, true)
   assert.equal(candidates.length, 3)
+})
+
+// ============================================================================
+// ROUTE CONTRACT — the exact { status, error } every email-linking route
+// (POST /api/account/emails/verify AND POST /api/registration/per-email/complete)
+// returns for a guard decision, via the shared pure mapper `guardAddEmailOwnership`
+// funnels through. The reported defect was that /api/account/emails/verify linked
+// a foreign linked-Google Gmail with 200 ok:true; these lock in that the shared
+// guard maps that case to a 409 rejection with the required customer copy, and
+// that the same-canonical Model 4 case maps to an allow.
+// ============================================================================
+
+/**
+ * The full pipeline a route runs: enumerate+hydrate reduction → pure decision →
+ * HTTP mapping. This mirrors the server `guardAddEmailOwnership` bridge minus the
+ * Auth0 I/O, so the route contract can be asserted deterministically.
+ */
+function guardResponseFor(params: {
+  email: string
+  currentUserId: string
+  candidates: AddEmailCandidate[]
+  lookupOk: boolean
+}) {
+  const decision = planAddEmailOwnership(params)
+  return mapAddEmailGuardResponse(decision)
+}
+
+test("route contract: /emails/verify — foreign linked-Google Gmail → 409 + required copy", async () => {
+  // Reproduces the exact preview failure: signed in as canonical B, adding
+  // raul.sbdinc@gmail.com which is a linked Google identity on a DIFFERENT
+  // canonical A. The list payload hid A's Google email; the hydrated getUser(A)
+  // reveals it. The route MUST return a 409 refusal, NOT 200 ok:true.
+  const listUsers: FakeUser[] = [
+    { user_id: "auth0|B", email: "wacev92852@mapsguy.com" },
+    { user_id: "auth0|A", email: "dedes10491@mediseat.com" }, // Google email hidden in list
+    { user_id: "auth0|stub", email: "raul.sbdinc@gmail.com", passwordless: true }, // OTP stub
+  ]
+  const fullById: Record<string, FakeUser> = {
+    "auth0|B": { user_id: "auth0|B", email: "wacev92852@mapsguy.com" },
+    "auth0|A": {
+      user_id: "auth0|A",
+      email: "dedes10491@mediseat.com",
+      identities: [
+        { profileData: { email: "dedes10491@mediseat.com" } },
+        { email: "raul.sbdinc@gmail.com", profileData: { email: "raul.sbdinc@gmail.com" } },
+      ],
+    },
+    "auth0|stub": { user_id: "auth0|stub", email: "raul.sbdinc@gmail.com", passwordless: true },
+  }
+
+  // Phase 1: enumerate ids from the list (profileData NOT trusted).
+  const enumerated = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(listUsers),
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: (u) => ({ userId: u.user_id, ownedEmails: [], hasRealIdentity: !u.passwordless }),
+  })
+  assert.equal(enumerated.ok, true)
+
+  // Phase 2: hydrate every id via getUser → build ownedEmails from full records.
+  const hydrated = await hydrateOwnershipCandidates<FakeUser>({
+    userIds: listUsers.map((u) => u.user_id),
+    fetchUser: hydrationFetcher(fullById),
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+    concurrency: 5,
+  })
+  assert.equal(hydrated.ok, true)
+
+  const res = guardResponseFor({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates: hydrated.candidates,
+    lookupOk: enumerated.ok && hydrated.ok,
+  })
+  assert.equal(res.ok, false)
+  if (!res.ok) {
+    assert.equal(res.status, 409)
+    assert.equal(
+      res.error,
+      "This email is already used by another account and cannot be added here.",
+    )
+  }
+})
+
+test("route contract: /emails/verify — same-canonical Model 4 → allow (ok:true)", () => {
+  // The Gmail lives on the CURRENT account B's own linked identity — adding a new
+  // brand credential for it (Model 4 cross-brand) must be allowed.
+  const selfOwned: AddEmailCandidate = {
+    userId: "auth0|B",
+    ownedEmails: collectIdentityOwnedEmails({
+      email: "wacev92852@mapsguy.com",
+      identities: [{ email: "raul.sbdinc@gmail.com", profileData: { email: "raul.sbdinc@gmail.com" } }],
+    }),
+    hasRealIdentity: true,
+  }
+  const res = guardResponseFor({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates: [selfOwned],
+    lookupOk: true,
+  })
+  assert.equal(res.ok, true)
+})
+
+test("route contract: a failed lookup maps to 502 (fail-closed), never a silent link", () => {
+  const res = guardResponseFor({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates: [],
+    lookupOk: false,
+  })
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.status, 502)
+})
+
+test("route contract: mapper maps each decision reason to its status", () => {
+  assert.deepEqual(mapAddEmailGuardResponse({ ok: true }), { ok: true })
+  assert.deepEqual(mapAddEmailGuardResponse({ ok: false, reason: "different-owner" }), {
+    ok: false,
+    status: 409,
+    error: "This email is already used by another account and cannot be added here.",
+  })
+  assert.deepEqual(mapAddEmailGuardResponse({ ok: false, reason: "ambiguous" }), {
+    ok: false,
+    status: 409,
+    error: "This email is already used by another account and cannot be added here.",
+  })
+  const unavailable = mapAddEmailGuardResponse({ ok: false, reason: "unavailable" })
+  assert.equal(unavailable.ok, false)
+  if (!unavailable.ok) assert.equal(unavailable.status, 502)
 })

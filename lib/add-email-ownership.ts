@@ -377,3 +377,30 @@ export function addEmailRejectionCopy(
       return "We couldn't verify that email right now. Please try again."
   }
 }
+
+/** The HTTP contract every email-linking route returns for a guard decision. */
+export type AddEmailGuardResponse =
+  | { ok: true }
+  | { ok: false; status: number; error: string }
+
+/**
+ * PURE mapping from an ownership decision to the exact `{ status, error }` an
+ * email-linking route returns. This is the shared contract behind the server
+ * `guardAddEmailOwnership` bridge, extracted so every route's rejection copy and
+ * status can be asserted without booting the Next runtime or Auth0:
+ *   • allow                        → { ok: true }
+ *   • different-owner / ambiguous  → 409 + neutral "already used by another
+ *                                    account" copy (a foreign linked-Google
+ *                                    address lands here)
+ *   • unavailable (fail-closed)    → 502 + retry copy
+ */
+export function mapAddEmailGuardResponse(
+  decision: AddEmailOwnershipDecision,
+): AddEmailGuardResponse {
+  if (decision.ok) return { ok: true }
+  return {
+    ok: false,
+    status: decision.reason === "unavailable" ? 502 : 409,
+    error: addEmailRejectionCopy(decision.reason),
+  }
+}
