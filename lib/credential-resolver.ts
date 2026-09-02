@@ -46,7 +46,9 @@ import {
   type BrandDuplicateCandidate,
 } from "@/lib/brand-duplicate"
 import {
+  bareUserId,
   resolvePasswordChangeTarget,
+  toManagementUserId,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
 import { SITE_BRAND } from "@/lib/site"
@@ -607,5 +609,123 @@ export function resolvePasswordChangeCoordinates(
     email: target.email,
     label: target.label,
     brand: target.brand,
+  }
+}
+
+// --- Unauthenticated RECOVERY reset coordinates -----------------------------
+
+/**
+ * Resolve the EXACT database credential an unauthenticated "forgot password"
+ * reset must rewrite, from a submitted email + this deployment's SITE_BRAND —
+ * the SAME resolution the sign-in path uses, so the credential reset is the one
+ * that email would authenticate with:
+ *
+ *   • Model 3 (per-email): the address entered maps to its own per-email
+ *     identity → reset ONLY that identity (never the other email's password).
+ *   • Model 4 (per-brand): SITE_BRAND steers it to the current brand's identity
+ *     → reset ONLY this brand's password (never the other brand's).
+ *   • Models 1/2 (shared): the account's single shared identity.
+ *
+ * Ownership is proven out-of-band by a single-use emailed passcode BEFORE this
+ * is called; this function only decides WHICH identity to rewrite. It returns
+ * the same coordinates as an in-site change (so the shared executor + rollback
+ * apply verbatim), or null on ANY fail-closed outcome (not configured, a failed
+ * lookup, ambiguity, or no owned/backed identity) — the route then answers with
+ * a single neutral rejection that never reveals whether the email exists.
+ */
+export async function resolveRecoveryTarget(
+  email: string,
+  siteBrand: BrandId = SITE_BRAND,
+): Promise<ResolvedPasswordChangeTarget | null> {
+  if (!isManagementConfigured()) return null
+
+  const normalized = normalizeEmail(email)
+  if (!normalized) return null
+
+  const { candidates: users, ok } = await gatherCandidates(email)
+  // An incomplete candidate set cannot prove which identity (or whether a
+  // collision) — fail closed so recovery never rewrites the wrong credential.
+  if (!ok) return null
+
+  const names = resolveConnectionNames()
+  const ids = resolveConnectionIds()
+  const configuredKeys = configuredConnectionKeys(names)
+  const sharedMatchIds = computeSharedMatchAccountIds(users, normalized, names.shared)
+
+  const candidates: CandidateAccount[] = users.map((user) => ({
+    accountId: user.user_id ?? "",
+    bindings: readBindings(user),
+    identities: mapIdentities(user),
+    sharedMatch: user.user_id ? sharedMatchIds.has(user.user_id) : false,
+  }))
+
+  const resolution = resolveCredentialFromCandidates({
+    email,
+    siteBrand,
+    candidates,
+    configuredKeys,
+  })
+
+  // Ambiguous / not-configured → no safe single target.
+  if (!resolution.ok) return null
+
+  if (resolution.kind === "shared-default") {
+    // Shared reset: require EXACTLY one account that genuinely owns this email
+    // as a shared login and holds a real shared identity.
+    if (!configuredKeys.has("shared")) return null
+    if (sharedMatchIds.size !== 1) return null
+    const [ownerId] = [...sharedMatchIds]
+    const owner = users.find((u) => u.user_id === ownerId)
+    if (!owner) return null
+    const sharedIdentities = mapIdentities(owner).filter(
+      (i) => i.connectionKey === "shared" && Boolean(i.userId),
+    )
+    if (sharedIdentities.length !== 1) return null
+    const connectionName = names.shared
+    if (!connectionName) return null
+    const rootUserId = owner.user_id ?? ""
+    if (!rootUserId) return null
+    return {
+      connectionKey: "shared",
+      connectionName,
+      connectionId: ids.shared,
+      auth0UserId: sharedIdentities[0].userId,
+      managementUserId: toManagementUserId(rootUserId),
+      isLinkedSecondary:
+        bareUserId(sharedIdentities[0].userId) !== bareUserId(rootUserId),
+      email: normalizeEmail(owner.email) || normalized,
+      label: CONNECTION_KEY_META.shared.label,
+    }
+  }
+
+  // Resolved non-shared realm (per-email / per-brand). The binding carries the
+  // exact database identity to rewrite; find the account that OWNS it.
+  const { binding } = resolution
+  if (!binding || !binding.auth0UserId) return null
+  const connectionName = names[resolution.connectionKey]
+  const connectionId = ids[resolution.connectionKey]
+  if (!connectionName) return null
+
+  const targetBare = bareUserId(binding.auth0UserId)
+  const owner = users.find((user) =>
+    mapIdentities(user).some((i) => bareUserId(i.userId) === targetBare),
+  )
+  if (!owner || !owner.user_id) return null
+
+  const brand =
+    resolution.connectionKey === "dewalt" || resolution.connectionKey === "stanley"
+      ? (resolution.connectionKey as BrandId)
+      : binding.brand
+
+  return {
+    connectionKey: resolution.connectionKey,
+    connectionName,
+    connectionId,
+    auth0UserId: binding.auth0UserId,
+    managementUserId: toManagementUserId(owner.user_id),
+    isLinkedSecondary: targetBare !== bareUserId(owner.user_id),
+    email: binding.email || normalized,
+    label: CONNECTION_KEY_META[resolution.connectionKey].label,
+    brand,
   }
 }

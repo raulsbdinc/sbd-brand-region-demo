@@ -13,7 +13,7 @@ import { useBrand } from "@/components/app-providers"
 import { GoogleMark } from "@/components/google-mark"
 import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
-import { runForgotPasswordNavigation } from "@/lib/recovery-href"
+import { interpretRecoveryResetResponse } from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   crossBrandCollisionMessage,
@@ -27,10 +27,11 @@ interface SignInDrawerProps {
   /**
    * Which body to land on when the drawer opens. "sign-in" (default) shows the
    * email/password step; "create-account" opens straight on the Create Account
+   * step; "recover" opens straight on the inline "forgot password" recovery
    * step. Same drawer either way — this only picks the initial step so the
-   * legacy /register compatibility redirect lands the customer on create.
+   * legacy /register and /recover compatibility redirects land correctly.
    */
-  initialMode?: "sign-in" | "create-account"
+  initialMode?: "sign-in" | "create-account" | "recover"
   onClose: () => void
 }
 
@@ -87,7 +88,13 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   // of this same drawer, not separate screens — the heading, description and
   // tokens are unchanged.
   const [step, setStep] = useState<
-    "password" | "passcode" | "create" | "brand-proof"
+    | "password"
+    | "passcode"
+    | "create"
+    | "brand-proof"
+    | "recover-email"
+    | "recover-reset"
+    | "recover-done"
   >("password")
   // Create-account step state. Reuses the shared `email`/`password`/
   // `showPassword` above so whatever the user typed carries between steps.
@@ -117,9 +124,29 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const [brandProofVerifying, setBrandProofVerifying] = useState(false)
   const [brandProofSending, setBrandProofSending] = useState(false)
 
+  // In-drawer "forgot password" recovery state. The whole flow — enter email,
+  // receive an emailed one-time code, choose a new password, success — lives in
+  // THIS drawer; there is no standalone recovery page. The server resolves which
+  // exact credential the email + brand identifies and resets only that one, so
+  // the customer never picks a model or sees a connection.
+  const [recoverEmail, setRecoverEmail] = useState("")
+  const [recoverError, setRecoverError] = useState<string | null>(null)
+  const [recoverSending, setRecoverSending] = useState(false)
+  const [recoverCode, setRecoverCode] = useState("")
+  const [recoverNext, setRecoverNext] = useState("")
+  const [recoverConfirm, setRecoverConfirm] = useState("")
+  const [recoverResetError, setRecoverResetError] = useState<string | null>(null)
+  const [recoverResetting, setRecoverResetting] = useState(false)
+  // The masked address a code was sent to, shown on the reset step; the exact
+  // credential label, shown on success (Model 3 makes clear WHICH email).
+  const [recoverSentTo, setRecoverSentTo] = useState("")
+  const [recoverDoneLabel, setRecoverDoneLabel] = useState<string | null>(null)
+
   const panelRef = useRef<HTMLDivElement>(null)
   const otpInputRef = useRef<HTMLInputElement>(null)
   const brandOtpInputRef = useRef<HTMLInputElement>(null)
+  const recoverEmailInputRef = useRef<HTMLInputElement>(null)
+  const recoverCodeInputRef = useRef<HTMLInputElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
 
   // Mount + slide animation (0.4s ease-in-out).
@@ -141,7 +168,13 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   // that flips the mode lands straight on Create Account.
   useEffect(() => {
     if (open) {
-      setStep(initialMode === "create-account" ? "create" : "password")
+      setStep(
+        initialMode === "create-account"
+          ? "create"
+          : initialMode === "recover"
+            ? "recover-email"
+            : "password",
+      )
       return
     }
     setStep("password")
@@ -157,6 +190,16 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     setBrandOtpError(null)
     setBrandProofVerifying(false)
     setBrandProofSending(false)
+    setRecoverEmail("")
+    setRecoverError(null)
+    setRecoverSending(false)
+    setRecoverCode("")
+    setRecoverNext("")
+    setRecoverConfirm("")
+    setRecoverResetError(null)
+    setRecoverResetting(false)
+    setRecoverSentTo("")
+    setRecoverDoneLabel(null)
   }, [open])
 
   // Lock body scroll while the drawer occupies the DOM.
@@ -582,6 +625,146 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     }
   }
 
+  // --- In-drawer "forgot password" recovery -------------------------------
+  // Enter email -> emailed one-time code -> new password -> success, all in
+  // this drawer. The server (POST /api/recovery/start, then /reset) decides
+  // which exact credential the email + this brand resolves to and rewrites only
+  // that one. The responses stay privacy-neutral: /start never varies with
+  // whether an account exists, and /reset names only the requester's own inputs
+  // (wrong code, weak password) — everything else is one neutral failure.
+
+  // Open the recovery step, carrying over whatever email was already typed on
+  // the sign-in step so the customer doesn't retype it.
+  function goToRecover() {
+    setRecoverEmail(email)
+    setRecoverError(null)
+    setRecoverSending(false)
+    setRecoverCode("")
+    setRecoverNext("")
+    setRecoverConfirm("")
+    setRecoverResetError(null)
+    setRecoverResetting(false)
+    setRecoverSentTo("")
+    setRecoverDoneLabel(null)
+    setStep("recover-email")
+  }
+
+  // Leave recovery and return to password sign-in, prefilling the email used.
+  function backToSignInFromRecover() {
+    if (recoverEmail.trim()) setEmail(recoverEmail.trim())
+    setStep("password")
+  }
+
+  // STEP 1: email the one-time code. Always advances to the reset step on a
+  // non-error transport result — the neutral response is the same whether or
+  // not an account exists, so the UI cannot leak existence either.
+  async function handleRecoverStart(e: FormEvent) {
+    e.preventDefault()
+    if (recoverSending) return
+    if (!looksLikeEmail(recoverEmail)) {
+      setRecoverError("Enter a valid email address.")
+      return
+    }
+    setRecoverError(null)
+    setRecoverSending(true)
+    try {
+      await fetch("/api/recovery/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: recoverEmail.trim() }),
+      })
+      setRecoverSentTo(recoverEmail.trim())
+      setStep("recover-reset")
+    } catch {
+      setRecoverError("We couldn\u2019t send a code. Please try again.")
+    } finally {
+      setRecoverSending(false)
+    }
+  }
+
+  // Re-email the code without leaving the reset step.
+  async function handleRecoverResend() {
+    setRecoverSending(true)
+    setRecoverResetError(null)
+    try {
+      await fetch("/api/recovery/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: recoverSentTo }),
+      })
+    } catch {
+      setRecoverResetError("We couldn\u2019t resend the code. Please try again.")
+    } finally {
+      setRecoverSending(false)
+    }
+  }
+
+  // STEP 2: consume the code (proves ownership) and set the new password on the
+  // exact resolved credential. Wrong code / weak password get specific inline
+  // messages; anything else is the single neutral failure the server returns.
+  async function handleRecoverReset(e: FormEvent) {
+    e.preventDefault()
+    if (recoverResetting) return
+    const code = recoverCode.trim()
+    if (code.length === 0) {
+      setRecoverResetError("Enter the verification code we emailed you.")
+      return
+    }
+    if (recoverNext.length === 0) {
+      setRecoverResetError("Choose a new password.")
+      return
+    }
+    if (recoverNext !== recoverConfirm) {
+      setRecoverResetError("Those passwords don\u2019t match.")
+      return
+    }
+    setRecoverResetting(true)
+    setRecoverResetError(null)
+    try {
+      const res = await fetch("/api/recovery/reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: recoverSentTo,
+          code,
+          newPassword: recoverNext,
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      const action = interpretRecoveryResetResponse({
+        httpStatus: res.status,
+        body: data,
+      })
+
+      if (action.kind === "reset") {
+        setRecoverDoneLabel(action.label ?? null)
+        setStep("recover-done")
+        return
+      }
+      if (action.kind === "bad-code") {
+        setRecoverResetError(
+          "That code isn\u2019t right or has expired. Request a new one.",
+        )
+        return
+      }
+      if (action.kind === "weak-password") {
+        setRecoverResetError(
+          action.message ??
+            "Choose a stronger password. " + PASSWORD_REQUIREMENTS,
+        )
+        return
+      }
+      setRecoverResetError(
+        action.message ??
+          "We couldn\u2019t reset your password. Please try again.",
+      )
+    } catch {
+      setRecoverResetError("We couldn\u2019t reset your password. Please try again.")
+    } finally {
+      setRecoverResetting(false)
+    }
+  }
+
   const labelClass =
     "font-sans text-[14px] font-[600] [color:var(--brand-label-color)]"
   const requiredClass = "font-[500] [color:var(--brand-label-muted)]"
@@ -662,17 +845,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         <div className="mt-6">
           <button
             type="button"
-            onClick={() => {
-              // Close the drawer AND navigate to the shared recovery page (with
-              // the email prefill preserved via recoveryHref). Closing first
-              // stops the drawer from staying mounted on top of and blocking the
-              // recovery page. type="button" keeps this from submitting the
-              // sign-in form, and this path never fires a recovery request.
-              runForgotPasswordNavigation(email, {
-                close: onClose,
-                navigate: (href) => router.push(href),
-              })
-            }}
+            onClick={goToRecover}
             className="font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-color)] outline-none hover:underline focus-visible:underline"
           >
             Forgot password?
@@ -783,6 +956,210 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
           Back to password sign in
         </button>
       </form>
+    )
+  } else if (step === "recover-email") {
+    // In-drawer "forgot password" — step 1. Enter the email that needs a reset;
+    // the server mails a one-time code. Same drawer, same styling as sign-in.
+    body = (
+      <form onSubmit={handleRecoverStart} className="mt-6">
+        <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+          {
+            "Enter the email for the account you want to reset. We\u2019ll send a one-time verification code to confirm it\u2019s you."
+          }
+        </p>
+
+        <div className="mt-6 flex flex-col">
+          <label htmlFor="recover-email" className={labelClass}>
+            Email Address
+            <span className={requiredClass}>(Required)</span>
+          </label>
+          <input
+            id="recover-email"
+            ref={recoverEmailInputRef}
+            type="email"
+            autoComplete="username"
+            placeholder="Enter email address"
+            value={recoverEmail}
+            onChange={(e) => {
+              setRecoverEmail(e.target.value)
+              if (recoverError) setRecoverError(null)
+            }}
+            className={`${INPUT_CLASS} px-0`}
+          />
+        </div>
+
+        {recoverError && (
+          <p role="alert" className={alertClass}>
+            {recoverError}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={recoverSending}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
+          {recoverSending ? "Sending code…" : "Send verification code"}
+        </button>
+
+        <button
+          type="button"
+          onClick={backToSignInFromRecover}
+          className="mt-2 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline"
+        >
+          Back to sign in
+        </button>
+      </form>
+    )
+  } else if (step === "recover-reset") {
+    // Recovery step 2. Enter the emailed code and choose a new password. The
+    // server consumes the code (proving ownership) and rewrites ONLY the exact
+    // credential this email + brand resolves to — no model choice is exposed.
+    body = (
+      <form onSubmit={handleRecoverReset} className="mt-6">
+        <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+          {"We sent a one-time code to "}
+          <span className="font-[600] [color:var(--brand-label-color)]">
+            {maskEmail(recoverSentTo)}
+          </span>
+          {
+            ". Enter it below, then choose a new password for this email\u2019s sign-in."
+          }
+        </p>
+
+        <div className="mt-6 flex flex-col">
+          <label htmlFor="recover-otp" className={labelClass}>
+            Verification code
+            <span className={requiredClass}>(Required)</span>
+          </label>
+          <input
+            id="recover-otp"
+            ref={recoverCodeInputRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]*"
+            maxLength={6}
+            placeholder="Enter 6-digit code"
+            value={recoverCode}
+            onChange={(e) => {
+              setRecoverCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              if (recoverResetError) setRecoverResetError(null)
+            }}
+            className={`${INPUT_CLASS} px-0 tracking-[0.5em]`}
+          />
+        </div>
+
+        <div className="mt-6 flex flex-col">
+          <label htmlFor="recover-new" className={labelClass}>
+            New password
+            <span className={requiredClass}>(Required)</span>
+          </label>
+          <p className="mt-1 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-label-muted)]">
+            {PASSWORD_REQUIREMENTS}
+          </p>
+          <div className="relative mt-1">
+            <input
+              id="recover-new"
+              type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
+              placeholder="Create a new password"
+              value={recoverNext}
+              onChange={(e) => {
+                setRecoverNext(e.target.value)
+                if (recoverResetError) setRecoverResetError(null)
+              }}
+              className={`${INPUT_CLASS} pl-0 pr-9`}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+              className="absolute right-0 top-1/2 -translate-y-1/2 p-1 [color:var(--brand-label-muted)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+            >
+              {showPassword ? (
+                <EyeOff className="size-5" />
+              ) : (
+                <Eye className="size-5" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 flex flex-col">
+          <label htmlFor="recover-confirm" className={labelClass}>
+            Confirm new password
+            <span className={requiredClass}>(Required)</span>
+          </label>
+          <input
+            id="recover-confirm"
+            type={showPassword ? "text" : "password"}
+            autoComplete="new-password"
+            placeholder="Re-enter your new password"
+            value={recoverConfirm}
+            onChange={(e) => {
+              setRecoverConfirm(e.target.value)
+              if (recoverResetError) setRecoverResetError(null)
+            }}
+            className={`${INPUT_CLASS} pl-0 pr-9`}
+          />
+        </div>
+
+        {recoverResetError && (
+          <p role="alert" className={alertClass}>
+            {recoverResetError}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={recoverResetting || recoverCode.trim().length === 0}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
+          {recoverResetting ? "Updating password…" : "Reset password"}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleRecoverResend}
+          disabled={recoverSending}
+          className="mt-4 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-color)] outline-none hover:underline focus-visible:underline disabled:opacity-60"
+        >
+          {recoverSending ? "Resending…" : "Resend code"}
+        </button>
+
+        <button
+          type="button"
+          onClick={backToSignInFromRecover}
+          className="mt-2 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline"
+        >
+          Back to sign in
+        </button>
+      </form>
+    )
+  } else if (step === "recover-done") {
+    // Recovery success. The exact credential was reset; return to sign-in.
+    body = (
+      <div className="mt-6">
+        <p className="font-sans text-[13px] font-[600] leading-[19px] [color:var(--brand-label-color)]">
+          {"Your password has been updated."}
+        </p>
+        <p className="mt-2 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+          {recoverDoneLabel
+            ? `We reset the password for ${recoverDoneLabel}. Sign in with your new password.`
+            : "Sign in with your new password."}
+        </p>
+
+        <button
+          type="button"
+          onClick={backToSignInFromRecover}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
+          <UserRound className="size-4" />
+          Back to sign in
+        </button>
+      </div>
     )
   } else if (step === "brand-proof") {
     // UK cross-brand (Model 4) ownership step. The email already has an account
@@ -1002,13 +1379,21 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         >
           {step === "create" || step === "brand-proof"
             ? "Create an account"
-            : "Sign in"}
+            : step === "recover-email" ||
+                step === "recover-reset" ||
+                step === "recover-done"
+              ? "Reset your password"
+              : "Sign in"}
         </h2>
 
         <p className="mt-2 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
           {step === "create" || step === "brand-proof"
             ? `Create your ${brand.name} account to manage your profile, register your tools, and track your orders.`
-            : `Sign in to your ${brand.name} account to manage your profile, register your tools, and track your orders.`}
+            : step === "recover-email" ||
+                step === "recover-reset" ||
+                step === "recover-done"
+              ? `Reset the password for your ${brand.name} account. We\u2019ll email a one-time code to confirm it\u2019s you.`
+              : `Sign in to your ${brand.name} account to manage your profile, register your tools, and track your orders.`}
         </p>
 
         {/* Static cross-brand notice, shown to every visitor. Deliberately NOT

@@ -73,8 +73,8 @@ interface AppState {
    * Every entry point (storefront CTAs and the legacy compatibility redirects)
    * routes through the SAME drawer — this only chooses which body it lands on.
    */
-  signInMode: "sign-in" | "create-account"
-  openSignIn: (mode?: "sign-in" | "create-account") => void
+  signInMode: "sign-in" | "create-account" | "recover"
+  openSignIn: (mode?: "sign-in" | "create-account" | "recover") => void
   closeSignIn: () => void
   tokenInspectorOpen: boolean
   setTokenInspectorOpen: (o: boolean) => void
@@ -116,7 +116,7 @@ export function AppProviders({
   const [country, setCountry] = useState<CountryId>(SITE_MARKET)
   const [session, setSession] = useState<Session | null>(null)
   const [signInOpen, setSignInOpen] = useState(false)
-  const [signInMode, setSignInMode] = useState<"sign-in" | "create-account">(
+  const [signInMode, setSignInMode] = useState<"sign-in" | "create-account" | "recover">(
     "sign-in",
   )
   const [tokenInspectorOpen, setTokenInspectorOpen] = useState(false)
@@ -193,7 +193,7 @@ export function AppProviders({
       // `mode` chooses which body the drawer lands on ("sign-in" default, or
       // "create-account" so the legacy /register redirect opens straight on the
       // Create Account step). It never changes WHICH drawer opens.
-      openSignIn: (mode: "sign-in" | "create-account" = "sign-in") => {
+      openSignIn: (mode: "sign-in" | "create-account" | "recover" = "sign-in") => {
         if (signedIn) return
         setSignInMode(mode)
         setSignInOpen(true)
