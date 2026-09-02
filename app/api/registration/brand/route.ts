@@ -135,8 +135,15 @@ export async function POST(request: NextRequest) {
     (b) => b.connectionKey === plan.connectionKey,
   )
   if (alreadyThisBrand) {
+    // Machine-readable discriminator (additive) so the storefront Create Account
+    // drawer can show existing-account / sign-in guidance for THIS brand rather
+    // than a neutral "try again". Existing consumers that only read `error` are
+    // unaffected.
     return NextResponse.json(
-      { error: "An account already exists for this brand. Try signing in instead." },
+      {
+        error: "An account already exists for this brand. Try signing in instead.",
+        reason: "already-brand",
+      },
       { status: 409 },
     )
   }

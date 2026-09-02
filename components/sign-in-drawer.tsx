@@ -14,6 +14,13 @@ import { GoogleMark } from "@/components/google-mark"
 import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
 import { runForgotPasswordNavigation } from "@/lib/recovery-href"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import {
+  crossBrandCollisionMessage,
+  interpretBrandProofResponse,
+  interpretBrandSignupResponse,
+  signupUsesBrandFlow,
+} from "@/lib/drawer-signup"
 
 interface SignInDrawerProps {
   open: boolean
@@ -72,9 +79,9 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   // Which body the same drawer is showing. "passcode" and "create" are states
   // of this same drawer, not separate screens — the heading, description and
   // tokens are unchanged.
-  const [step, setStep] = useState<"password" | "passcode" | "create">(
-    "password",
-  )
+  const [step, setStep] = useState<
+    "password" | "passcode" | "create" | "brand-proof"
+  >("password")
   // Create-account step state. Reuses the shared `email`/`password`/
   // `showPassword` above so whatever the user typed carries between steps.
   // `createExists` drives the hedged "you may already have an account" block;
@@ -93,8 +100,19 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   const [otpError, setOtpError] = useState<string | null>(null)
   const [verifying, setVerifying] = useState(false)
 
+  // UK cross-brand (Model 4) proof state. When the SAME email already owns the
+  // OTHER UK brand, the drawer stays open and asks for an emailed one-time code
+  // to prove ownership before adding THIS brand's credential and linking it to
+  // the same canonical account. The customer never learns this is "Model 4" or
+  // sees a connection/realm — it's the ordinary Create Account drawer.
+  const [brandOtp, setBrandOtp] = useState("")
+  const [brandOtpError, setBrandOtpError] = useState<string | null>(null)
+  const [brandProofVerifying, setBrandProofVerifying] = useState(false)
+  const [brandProofSending, setBrandProofSending] = useState(false)
+
   const panelRef = useRef<HTMLDivElement>(null)
   const otpInputRef = useRef<HTMLInputElement>(null)
+  const brandOtpInputRef = useRef<HTMLInputElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
 
   // Mount + slide animation (0.4s ease-in-out).
@@ -122,6 +140,10 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setCreating(false)
     setCreateError(null)
     setCreateExists(false)
+    setBrandOtp("")
+    setBrandOtpError(null)
+    setBrandProofVerifying(false)
+    setBrandProofSending(false)
   }, [open])
 
   // Lock body scroll while the drawer occupies the DOM.
@@ -137,6 +159,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
   // Move focus to the passcode field when that step appears.
   useEffect(() => {
     if (step === "passcode") otpInputRef.current?.focus()
+    if (step === "brand-proof") brandOtpInputRef.current?.focus()
   }, [step])
 
   // Move focus into the panel, trap Tab, close on Escape, and restore focus to
@@ -325,10 +348,41 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setCreateExists(false)
   }
 
-  // Create the account via our server route, then — on success — reuse the
-  // EXISTING sign-in route to mint the session (never duplicated here) and
-  // navigate exactly like the password path. Every failure clears the in-flight
-  // flag so no button is left spinning, and the typed email/password are kept.
+  // After an account is created OR a cross-brand credential is linked, reuse the
+  // EXISTING password sign-in route to mint the session (never duplicated) and
+  // navigate exactly like the password path. Returns false when the follow-on
+  // sign-in didn't take, so the caller can fall back to the sign-in step.
+  async function finishWithSignIn(): Promise<boolean> {
+    try {
+      const signIn = await fetch("/api/signin/password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
+      if (signIn.ok) {
+        // Full document navigation, same reasoning as the password path: tears
+        // the drawer down and re-renders against the just-set __session cookie.
+        window.location.assign("/profile")
+        return true
+      }
+    } catch {
+      // fall through
+    }
+    return false
+  }
+
+  // Create the account, then — on success — sign in and navigate. Every failure
+  // clears the in-flight flag so no button is left spinning, and the typed
+  // email/password are kept.
+  //
+  // The SAME drawer serves every storefront and the customer NEVER picks an
+  // account model. Only the endpoint differs, decided purely from this
+  // deployment's market:
+  //   • FR/DE  → the shared Model 1/2 signup (/api/signup), unchanged.
+  //   • UK     → the per-brand endpoint, which either creates a first-brand
+  //              account OR, when the SAME email already owns the other UK brand,
+  //              returns "proof-required" so we collect an emailed one-time code
+  //              inline and link this brand to the same canonical account.
   async function handleCreateSubmit(e: FormEvent) {
     e.preventDefault()
     if (creating) return
@@ -343,6 +397,12 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     setCreating(true)
     setCreateError(null)
     setCreateExists(false)
+
+    if (signupUsesBrandFlow(SITE_MARKET)) {
+      await handleBrandCreate()
+      return
+    }
+
     try {
       const res = await fetch("/api/signup", {
         method: "POST",
@@ -352,22 +412,7 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
       const data = (await res.json().catch(() => ({}))) as { status?: string }
 
       if (data.status === "created") {
-        // Reuse the existing password sign-in route to establish the session.
-        try {
-          const signIn = await fetch("/api/signin/password", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ email, password }),
-          })
-          if (signIn.ok) {
-            // Same full document navigation as the password path: tears the
-            // drawer down and re-renders against the just-set __session cookie.
-            window.location.assign("/profile")
-            return
-          }
-        } catch {
-          // Fall through to the sign-in fallback below.
-        }
+        if (await finishWithSignIn()) return
         // Follow-on sign-in failed for any reason: drop to the sign-in step with
         // the email preserved and the generic sign-in error.
         setStep("password")
@@ -399,6 +444,128 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
         "Something went wrong creating your account. Please try again.",
       )
       setCreating(false)
+    }
+  }
+
+  // UK Create Account submit. Posts the same email/password to the per-brand
+  // endpoint and maps the response (via the pure interpreter) to a drawer action.
+  async function handleBrandCreate() {
+    try {
+      const res = await fetch("/api/registration/brand", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      const action = interpretBrandSignupResponse({ httpStatus: res.status, body: data })
+
+      if (action.kind === "created") {
+        if (await finishWithSignIn()) return
+        setStep("password")
+        setPasswordError("That email or password isn't right.")
+        setCreating(false)
+        return
+      }
+
+      if (action.kind === "proof-required") {
+        // The email already owns the OTHER UK brand. Keep the customer in the
+        // drawer, move to the ownership-code step, and email a code right away.
+        setBrandOtp("")
+        setBrandOtpError(null)
+        setStep("brand-proof")
+        setCreating(false)
+        void startBrandProof()
+        return
+      }
+
+      if (action.kind === "brand-exists") {
+        // This brand already has a credential — existing-account / sign-in
+        // guidance, never a duplicate.
+        setCreateExists(true)
+        setCreating(false)
+        return
+      }
+
+      if (action.kind === "not-configured") {
+        setCreateError(
+          "Account creation isn\u2019t available on this storefront right now.",
+        )
+        setCreating(false)
+        return
+      }
+
+      setCreateError(
+        action.message ??
+          "Something went wrong creating your account. Please try again.",
+      )
+      setCreating(false)
+    } catch {
+      setCreateError(
+        "Something went wrong creating your account. Please try again.",
+      )
+      setCreating(false)
+    }
+  }
+
+  // Email (or re-email) the one-time ownership code for the UK cross-brand link.
+  // The server keeps the target address in a short-lived handoff, so no address
+  // is sent from the browser here.
+  async function startBrandProof() {
+    setBrandProofSending(true)
+    setBrandOtpError(null)
+    try {
+      const res = await fetch("/api/registration/brand/proof/start", {
+        method: "POST",
+      })
+      if (!res.ok) throw new Error("start failed")
+    } catch {
+      setBrandOtpError("We couldn\u2019t email a code. Please try again.")
+    } finally {
+      setBrandProofSending(false)
+    }
+  }
+
+  // Verify the emailed code and, on success, create THIS brand's credential with
+  // the password already entered, link it to the same canonical account, then
+  // sign in. A wrong/expired code keeps the customer on this step.
+  async function handleBrandProofVerify(e: FormEvent) {
+    e.preventDefault()
+    const code = brandOtp.trim()
+    if (code.length === 0 || brandProofVerifying) return
+    setBrandProofVerifying(true)
+    setBrandOtpError(null)
+    try {
+      const res = await fetch("/api/registration/brand/proof", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ method: "email-code", newPassword: password, code }),
+      })
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      const action = interpretBrandProofResponse({ httpStatus: res.status, body: data })
+
+      if (action.kind === "linked") {
+        if (await finishWithSignIn()) return
+        setStep("password")
+        setPasswordError("That email or password isn\u2019t right.")
+        setBrandProofVerifying(false)
+        return
+      }
+
+      if (action.kind === "bad-code") {
+        setBrandOtpError("That code isn\u2019t right, or it\u2019s expired.")
+        setBrandProofVerifying(false)
+        return
+      }
+
+      setBrandOtpError(
+        action.kind === "not-configured"
+          ? "This isn\u2019t available right now."
+          : action.message ?? "We couldn\u2019t verify that. Please try again.",
+      )
+      setBrandProofVerifying(false)
+    } catch {
+      setBrandOtpError("We couldn\u2019t verify that. Please try again.")
+      setBrandProofVerifying(false)
     }
   }
 
@@ -604,6 +771,81 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
         </button>
       </form>
     )
+  } else if (step === "brand-proof") {
+    // UK cross-brand (Model 4) ownership step. The email already has an account
+    // on the other UK brand; we prove ownership with an emailed code, then add
+    // THIS brand's credential to the same canonical account. Same drawer, same
+    // styling as the passcode step — the customer is never told this is "Model 4".
+    body = (
+      <form onSubmit={handleBrandProofVerify} className="mt-6">
+        {crossBrandCollisionMessage(SITE_BRAND) && (
+          <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+            {crossBrandCollisionMessage(SITE_BRAND)}
+          </p>
+        )}
+        <p className="mt-3 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+          {"We emailed a one-time code to "}
+          <span className="font-[600] [color:var(--brand-label-color)]">
+            {maskEmail(email)}
+          </span>
+          {`. Enter it below to add your ${brand.name} sign-in.`}
+        </p>
+
+        <div className="mt-6 flex flex-col">
+          <label htmlFor="brand-proof-otp" className={labelClass}>
+            One-time code
+            <span className={requiredClass}>(Required)</span>
+          </label>
+          <input
+            id="brand-proof-otp"
+            ref={brandOtpInputRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]*"
+            maxLength={6}
+            placeholder="Enter 6-digit code"
+            value={brandOtp}
+            onChange={(e) => {
+              setBrandOtp(e.target.value.replace(/\D/g, "").slice(0, 6))
+              if (brandOtpError) setBrandOtpError(null)
+            }}
+            className={`${INPUT_CLASS} px-0 tracking-[0.5em]`}
+          />
+        </div>
+
+        {brandOtpError && (
+          <p role="alert" className={alertClass}>
+            {brandOtpError}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={brandProofVerifying || brandOtp.trim().length === 0}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
+          {brandProofVerifying ? "Verifying…" : `Verify & add ${brand.name}`}
+        </button>
+
+        <button
+          type="button"
+          onClick={startBrandProof}
+          disabled={brandProofSending}
+          className="mt-4 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-color)] outline-none hover:underline focus-visible:underline disabled:opacity-60"
+        >
+          {brandProofSending ? "Sending…" : "Resend code"}
+        </button>
+
+        <button
+          type="button"
+          onClick={backToSignInFromCreate}
+          className="mt-2 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline"
+        >
+          Back to sign in
+        </button>
+      </form>
+    )
   } else {
     body = (
       <form onSubmit={handleCreateSubmit} className="mt-6">
@@ -745,11 +987,13 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
           id="sign-in-drawer-title"
           className="pr-10 font-[900] text-black [font-family:var(--brand-display-font)] [font-size:var(--brand-heading-size)] [font-stretch:var(--brand-display-stretch)] [letter-spacing:var(--brand-display-tracking)] [line-height:var(--brand-heading-line)] [text-transform:var(--brand-display-case)]"
         >
-          {step === "create" ? "Create an account" : "Sign in"}
+          {step === "create" || step === "brand-proof"
+            ? "Create an account"
+            : "Sign in"}
         </h2>
 
         <p className="mt-2 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
-          {step === "create"
+          {step === "create" || step === "brand-proof"
             ? `Create your ${brand.name} account to manage your profile, register your tools, and track your orders.`
             : `Sign in to your ${brand.name} account to manage your profile, register your tools, and track your orders.`}
         </p>
