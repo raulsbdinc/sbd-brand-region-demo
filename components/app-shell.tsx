@@ -7,6 +7,7 @@ import { SiteHeader } from "@/components/site-header"
 import { SiteFooter } from "@/components/site-footer"
 import { DeviceFrame } from "@/components/device-frame"
 import { ToastProvider } from "@/components/ui/toast"
+import { AuthEntrySignal } from "@/components/auth-entry-signal"
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { brand } = useApp()
@@ -23,6 +24,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           skin (and var(--brand) resolves), and every surface under the shell —
           including the header's tenant switcher — can call useToast(). */}
       <ToastProvider>
+        <AuthEntrySignal />
         <SiteHeader />
         <DeviceFrame>{children}</DeviceFrame>
         <SiteFooter />

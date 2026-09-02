@@ -24,6 +24,13 @@ import {
 
 interface SignInDrawerProps {
   open: boolean
+  /**
+   * Which body to land on when the drawer opens. "sign-in" (default) shows the
+   * email/password step; "create-account" opens straight on the Create Account
+   * step. Same drawer either way — this only picks the initial step so the
+   * legacy /register compatibility redirect lands the customer on create.
+   */
+  initialMode?: "sign-in" | "create-account"
   onClose: () => void
 }
 
@@ -61,7 +68,7 @@ function maskEmail(value: string): string {
 // Every brand difference (display font, case, tracking, heading size, button
 // radius, input underline, muted label colour, …) flows in from Brand.vars,
 // applied by AppShell on the brand root — there is no per-brand branching here.
-export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
+export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInDrawerProps) {
   const brand = useBrand()
   // `mounted` keeps the panel in the DOM through the exit animation; `shown`
   // drives the enter/exit transform + scrim fade.
@@ -127,10 +134,16 @@ export function SignInDrawer({ open, onClose }: SignInDrawerProps) {
     return () => clearTimeout(t)
   }, [open])
 
-  // Reset to the password step whenever the drawer is fully closed, so it never
-  // reopens mid-passcode.
+  // Land the drawer on the correct body each time it OPENS ("create" when the
+  // caller asked for create-account mode, otherwise the password step), and
+  // reset it to a clean state whenever it is fully closed so it never reopens
+  // mid-passcode. Keyed on `open` + `initialMode` so a legacy /register redirect
+  // that flips the mode lands straight on Create Account.
   useEffect(() => {
-    if (open) return
+    if (open) {
+      setStep(initialMode === "create-account" ? "create" : "password")
+      return
+    }
     setStep("password")
     setRequestError(null)
     setPasswordError(null)

@@ -1,10 +1,11 @@
 "use client"
 
+import { useEffect } from "react"
 import useSWR from "swr"
 import { Loader2 } from "lucide-react"
 import { CustomerProfile } from "@/components/customer-profile"
-import { AccountClient } from "@/components/account-client"
 import { extractOtherSites } from "@/lib/claims"
+import { buildDrawerRedirect } from "@/lib/auth-entry"
 
 // PROFILE RESOLVER (client safety net)
 // ====================================
@@ -31,16 +32,19 @@ export function ProfileResolver() {
     revalidateOnFocus: false,
   })
 
-  if (isLoading) {
-    return (
-      <main className="flex min-h-[60vh] w-full items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" />
-          Loading your account…
-        </div>
-      </main>
+  // Definitively logged out: /api/me resolved with no claims. Send the customer
+  // to the storefront root and open the SAME standard drawer in sign-in mode,
+  // carrying a safe returnTo=/profile so a successful sign-in lands back here.
+  // A full-document navigation (not router.push) guarantees the drawer mounts
+  // fresh against the cleaned URL and picks up the ?auth= signal.
+  const loggedOut = !isLoading && !data?.claims
+  useEffect(() => {
+    if (!loggedOut) return
+    if (typeof window === "undefined") return
+    window.location.assign(
+      buildDrawerRedirect({ mode: "sign-in", returnTo: "/profile" }),
     )
-  }
+  }, [loggedOut])
 
   if (data?.claims) {
     // Same claim shape as the server session, so the cross-brand panel works on
@@ -53,5 +57,14 @@ export function ProfileResolver() {
     )
   }
 
-  return <AccountClient />
+  // Both the loading state and the brief pre-redirect logged-out state show the
+  // same neutral spinner — no parallel account UI is ever rendered.
+  return (
+    <main className="flex min-h-[60vh] w-full items-center justify-center">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        Loading your account…
+      </div>
+    </main>
+  )
 }
