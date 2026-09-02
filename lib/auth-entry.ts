@@ -14,7 +14,7 @@
  * Auth0 access — so the redirect/return contract is provable in isolation.
  */
 
-export type DrawerAuthMode = "sign-in" | "create-account"
+export type DrawerAuthMode = "sign-in" | "create-account" | "recover"
 
 /** Query key that signals the root drawer should open, and in which mode. */
 export const AUTH_QUERY_KEY = "auth"
@@ -26,6 +26,8 @@ const MODE_VALUES: Record<string, DrawerAuthMode> = {
   "sign-in": "sign-in",
   create: "create-account",
   "create-account": "create-account",
+  recover: "recover",
+  recovery: "recover",
 }
 
 /**
@@ -39,7 +41,9 @@ export function parseAuthMode(value: string | null | undefined): DrawerAuthMode 
 
 /** The canonical query value we EMIT for a given drawer mode. */
 export function authModeQueryValue(mode: DrawerAuthMode): string {
-  return mode === "create-account" ? "create" : "signin"
+  if (mode === "create-account") return "create"
+  if (mode === "recover") return "recover"
+  return "signin"
 }
 
 /**

@@ -3,26 +3,19 @@ import {
   requireAccountUser,
   managementErrorResponse,
 } from "@/lib/account-guard"
-import {
-  getUser,
-  updateUser,
-  linkIdentity,
-  unlinkIdentity,
-  ManagementError,
-} from "@/lib/auth0-management"
+import { getUser, ManagementError } from "@/lib/auth0-management"
 import { resolvePasswordChangeCoordinates } from "@/lib/credential-resolver"
 import {
   regionFromCookieHeader,
   resolveRegionAuthConfig,
 } from "@/lib/auth0-regions"
 import { passwordRealmExchange } from "@/lib/auth0-password-grant"
+import { applyPasswordUpdate } from "@/lib/apply-password-update"
 import {
   mapPasswordUpdateError,
   planPasswordUpdate,
   validateNewPassword,
   type PasswordChangeSelector,
-  type PasswordUpdatePlan,
-  type RelinkPasswordUpdatePlan,
 } from "@/lib/password-change"
 
 // POST /api/account/password-change
@@ -227,68 +220,5 @@ export async function POST(request: NextRequest) {
     })
   } catch (err) {
     return managementErrorResponse(err)
-  }
-}
-
-/** Relink body for restoring a temporarily-unlinked secondary identity. */
-function relinkBody(plan: RelinkPasswordUpdatePlan) {
-  return {
-    provider: plan.provider,
-    user_id: plan.secondaryUserId,
-    ...(plan.connectionId ? { connection_id: plan.connectionId } : {}),
-  } as const
-}
-
-/**
- * Execute a resolved {@link PasswordUpdatePlan} so the write lands on EXACTLY
- * one database identity.
- *
- * - `direct`: an unambiguous root identity — PATCH it with `{ password,
- *   connection }` (unchanged legacy behavior for shared Models 1-2 and
- *   standalone per-email/brand accounts).
- * - `relink`: a linked secondary — UNLINK it so it becomes a standalone
- *   Management user, PATCH that user's own id (never ambiguous), then RELINK it.
- *   If the PATCH fails we relink first so the account is never left split; if
- *   the relink itself fails we retry once before surfacing the error.
- */
-async function applyPasswordUpdate(
-  plan: PasswordUpdatePlan,
-  newPassword: string,
-): Promise<void> {
-  if (plan.mode === "direct") {
-    await updateUser(plan.patchUserId, {
-      password: newPassword,
-      connection: plan.connectionName,
-    })
-    return
-  }
-
-  // relink mode — detach the exact secondary identity so it is standalone.
-  await unlinkIdentity(plan.primaryUserId, plan.provider, plan.secondaryUserId)
-
-  try {
-    await updateUser(plan.secondaryPatchUserId, {
-      password: newPassword,
-      connection: plan.connectionName,
-    })
-  } catch (patchErr) {
-    // The password write failed: restore the linkage before surfacing the
-    // error so we never leave the account permanently split.
-    try {
-      await linkIdentity(plan.primaryUserId, relinkBody(plan))
-    } catch (restoreErr) {
-      console.log(
-        "[v0] password-change relink-after-patch-failure failed:",
-        restoreErr instanceof Error ? restoreErr.message : "unknown",
-      )
-    }
-    throw patchErr
-  }
-
-  // Password changed on the exact identity — now re-attach it. Retry once.
-  try {
-    await linkIdentity(plan.primaryUserId, relinkBody(plan))
-  } catch {
-    await linkIdentity(plan.primaryUserId, relinkBody(plan))
   }
 }
