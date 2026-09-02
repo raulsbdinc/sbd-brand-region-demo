@@ -171,19 +171,15 @@ export function AppProviders({
       // we are already logged in" — and the backstop for any entry point that
       // forgets to branch on `signedIn` itself.
       //
-      // UK routing: the branded drawer posts to /api/signin/password, which
-      // resolves ONE connection per attempt — fine for FR/DE, but the UK
-      // storefront supports several connections (shared / per-email / per-brand
-      // / Google) that only the customer can disambiguate. So on UK we send
-      // every drawer entry point (header, hero CTA, add-to-cart, welcome guard)
-      // to the dedicated chooser instead of opening the drawer. FR/DE keep the
-      // existing drawer untouched.
+      // Every market — including UK (DeWalt UK / Stanley UK) — opens the SAME
+      // branded drawer. The drawer posts to /api/signin/password, which resolves
+      // the one connection to authenticate against purely from the submitted
+      // email + this deployment's SITE_BRAND (Model 3 per-email, Model 4
+      // per-brand, Models 1–2 shared), so the customer never picks an identity
+      // model. UK is simply the isolated demo environment for cases 3 and 4; it
+      // gets the normal storefront sign-in experience, not a chooser.
       openSignIn: () => {
         if (signedIn) return
-        if (SITE_MARKET === "uk") {
-          router.push("/sign-in/uk")
-          return
-        }
         setSignInOpen(true)
       },
       closeSignIn: () => setSignInOpen(false),
