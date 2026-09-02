@@ -3,6 +3,9 @@ import { extractOtherSites } from "@/lib/claims"
 import { AccountClient } from "@/components/account-client"
 import { CustomerProfile } from "@/components/customer-profile"
 import { ProfileResolver } from "@/components/profile-resolver"
+import { SITE_MARKET } from "@/lib/site"
+import { accountModelSelectionAvailable } from "@/lib/account-model"
+import { effectiveMarket, previewOverrideAllowed } from "@/lib/preview-market"
 
 // /profile is the CUSTOMER-facing account page — the projector-friendly view.
 //
@@ -16,7 +19,11 @@ import { ProfileResolver } from "@/components/profile-resolver"
 // stays unchanged at /account.
 export const dynamic = "force-dynamic"
 
-export default async function ProfilePage() {
+export default async function ProfilePage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   let session: { user: Record<string, unknown> } | null = null
   if (isAuthConfigured()) {
     try {
@@ -31,7 +38,29 @@ export default async function ProfilePage() {
     // hand it to the customer profile, which renders the recognition panel at
     // the top. Empty on a first-ever site — the panel renders nothing then.
     const otherSites = extractOtherSites(session.user)
-    return <CustomerProfile user={session.user} sites={otherSites} />
+
+    // Per-email password ACTIVATION ("Add a password" on a linked alternate)
+    // is a Model-3 (UK) capability only. EU Models 1/2 must show one shared
+    // Account password, so the activation rows are gated behind the same UK
+    // predicate the registration routes use. Honor the non-prod `?market=`
+    // preview override so the UK journey can be walked on an fr/de preview.
+    const sp = await searchParams
+    const rawMarket = sp?.market
+    const overrideMarket = Array.isArray(rawMarket) ? rawMarket[0] : rawMarket
+    const { market } = effectiveMarket({
+      siteMarket: SITE_MARKET,
+      override: overrideMarket ?? null,
+      allowOverride: previewOverrideAllowed(process.env.VERCEL_ENV),
+    })
+    const perEmailActivationAvailable = accountModelSelectionAvailable(market)
+
+    return (
+      <CustomerProfile
+        user={session.user}
+        sites={otherSites}
+        modelSelectionAvailable={perEmailActivationAvailable}
+      />
+    )
   }
 
   if (isAuthConfigured()) {

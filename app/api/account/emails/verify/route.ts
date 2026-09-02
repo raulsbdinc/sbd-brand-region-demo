@@ -6,12 +6,11 @@ import {
 } from "@/lib/account-guard"
 import {
   getUser,
-  getUsersByEmail,
   linkIdentity,
   updateUser,
   ManagementError,
 } from "@/lib/auth0-management"
-import { PASSWORD_CONNECTION } from "@/lib/auth0-connections"
+import { guardAddEmailOwnership } from "@/lib/credential-resolver"
 import {
   resolvePasswordlessCreds,
   verifyEmailPasscode,
@@ -98,28 +97,21 @@ export async function POST(request: Request) {
     }
   }
 
-  // STEP (guard) — now that ownership is proven, refuse if the address already
-  // signs in to a DIFFERENT account on our database connection.
-  try {
-    const matches = await getUsersByEmail(email)
-    const conflict = matches.find(
-      (u) =>
-        u.user_id !== guard.user.sub &&
-        u.user_id !== secondary.sub &&
-        (u.identities ?? []).some(
-          (id) => id.connection === PASSWORD_CONNECTION,
-        ),
-    )
-    if (conflict) {
-      return NextResponse.json({ error: IN_USE_ELSEWHERE }, { status: 409 })
-    }
-  } catch (err) {
-    // If the lookup itself fails, don't link blind — surface a soft error.
-    console.log("[v0] emails/verify lookup failed:", (err as Error).message)
-    return NextResponse.json(
-      { error: "We couldn't finish adding that address. Please try again shortly." },
-      { status: 502 },
-    )
+  // STEP (guard) — CENTRALIZED canonical-ownership guard. Mailbox control is now
+  // proven, so this is not an enumeration oracle. Refuse the link unless every
+  // existing owner of the normalized address resolves to THIS account. This is
+  // the SAME deterministic enumerate+hydrate guard the per-email completion
+  // route uses — it inspects every Auth0 identity's email (including a linked
+  // SOCIAL identity's profileData.email, which getUsersByEmail cannot see), so a
+  // foreign account's linked Google address is correctly rejected here. On
+  // rejection it also purges the transient passwordless stub the code step
+  // minted, so no standalone/linked passwordless identity is left behind.
+  const ownership = await guardAddEmailOwnership({
+    email,
+    currentUserId: guard.user.sub,
+  })
+  if (!ownership.ok) {
+    return NextResponse.json({ error: ownership.error }, { status: ownership.status })
   }
 
   // STEP c — link the proven secondary identity onto the primary account.

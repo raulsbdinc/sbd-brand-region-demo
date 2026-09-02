@@ -264,6 +264,33 @@ export async function searchUsers(query: string): Promise<Auth0User[]> {
   }
 }
 
+/** One page of the full user directory (object form, `include_totals=true`). */
+export interface Auth0UsersPage {
+  users: Auth0User[]
+  /** Grand total of records in the directory (across all pages). */
+  total: number
+  start: number
+  limit: number
+  length: number
+}
+
+/**
+ * GET /users?include_totals=true&page=N&per_page=M — one deterministic page of
+ * the ENTIRE user directory (no query, stable created_at sort). THROWS on any
+ * Management error so a failed page is never mistaken for "no more users".
+ *
+ * Used by the add-another-email ownership guard to enumerate every account and
+ * inspect each identity's `profileData.email` directly — the reliable path on a
+ * tenant whose v3 index does not surface linked-identity emails. Auth0 caps deep
+ * pagination of this endpoint (~1000 records); the caller treats not reaching
+ * the reported total within its page budget as truncation and fails closed.
+ */
+export function listUsersPage(page: number, perPage: number): Promise<Auth0UsersPage> {
+  return mgmtFetch<Auth0UsersPage>(
+    `/users?include_totals=true&per_page=${perPage}&page=${page}&sort=created_at:1`,
+  )
+}
+
 /**
  * PATCH /users/{id} — update profile fields. Only a safe allowlist is accepted
  * by the route; this client doesn't restrict, so callers must sanitize.

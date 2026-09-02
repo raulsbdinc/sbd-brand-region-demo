@@ -10,7 +10,11 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { SITE_MARKET } from "@/lib/site"
 import { resolveConnectionNames } from "@/lib/credential-model"
-import { readBindings, connectionIdForKey } from "@/lib/credential-resolver"
+import {
+  readBindings,
+  connectionIdForKey,
+  guardAddEmailOwnership,
+} from "@/lib/credential-resolver"
 import { planModel3Completion } from "@/lib/account-model"
 import { requireAccountUser } from "@/lib/account-guard"
 import { getUser } from "@/lib/auth0-management"
@@ -71,6 +75,24 @@ export async function POST(request: NextRequest) {
     await verifyEmailPasscode(creds, email, otp)
   } catch {
     return NextResponse.json({ error: "That code isn't right. Please try again." }, { status: 400 })
+  }
+
+  // Canonical-ownership guard. Mailbox control is now proven, so this is not an
+  // enumeration oracle. The submitted address may already belong to a DIFFERENT
+  // canonical customer — linking it would silently attach a second person's
+  // mailbox to this account. Allow ONLY when every existing owner resolves to
+  // THIS account (unowned, or the same canonical parent — the Model 4 cross-brand
+  // / partial-retry case). On rejection, purge the transient passwordless stub
+  // the code step minted so no standalone/linked passwordless identity is left
+  // behind, and return neutral copy.
+  const ownership = await guardAddEmailOwnership({ email, currentUserId: sub })
+  if (!ownership.ok) {
+    const res = NextResponse.json(
+      { error: ownership.error },
+      { status: ownership.status },
+    )
+    res.cookies.set(cookieName, "", { ...journeyCookieOptions(), maxAge: 0 })
+    return res
   }
 
   // Re-plan with ownership proven; the connection is resolved server-side.

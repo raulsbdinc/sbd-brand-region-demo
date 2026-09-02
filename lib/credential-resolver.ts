@@ -30,11 +30,24 @@ import {
   type LinkedDbIdentity,
 } from "@/lib/credential-model"
 import {
+  getUser,
   getUsersByEmail,
   searchUsersStrict,
+  listUsersPage,
   isManagementConfigured,
+  deleteUser,
   type Auth0User,
 } from "@/lib/auth0-management"
+import {
+  collectIdentityOwnedEmails,
+  enumerateOwnershipCandidates,
+  hydrateOwnershipCandidates,
+  mapAddEmailGuardResponse,
+  planAddEmailOwnership,
+  selectTransientEmailStubIds,
+  type AddEmailCandidate,
+  type AddEmailOwnershipDecision,
+} from "@/lib/add-email-ownership"
 import {
   planSharedLoginAlias,
   type LoginAliasCandidate,
@@ -443,6 +456,191 @@ export async function resolveExistingAccountByEmail(
       verifiedEmails: collectAccountVerifiedEmails(user),
     },
   }
+}
+
+// --- Add-another-email canonical ownership guard ---------------------------
+
+/**
+ * Decide whether the signed-in `currentUserId` may add `email` to their account,
+ * AFTER the emailed one-time code has proven mailbox control. Resolves every
+ * account that provably owns the normalized email — each already canonical
+ * because `getUsersByEmail`/the alias search return top-level records only — and
+ * defers to the pure planner. Bare passwordless (`email`/`sms`) OTP stubs minted
+ * by the code step are filtered so they never masquerade as a foreign owner.
+ *
+ * Fails CLOSED: Management not configured, or a directory lookup failed, both
+ * return "unavailable" (the guard is only reached from a Management-guarded
+ * route, so configured-off should not occur in practice). Runs post-verification
+ * only, so it is never an enumeration oracle.
+ */
+export async function resolveAddEmailOwnership(
+  email: string,
+  currentUserId: string,
+): Promise<AddEmailOwnershipDecision> {
+  if (!isManagementConfigured()) return { ok: false, reason: "unavailable" }
+
+  const normalized = normalizeEmail(email)
+  const { candidates, ok } = await enumerateAddEmailCandidates()
+
+  return planAddEmailOwnership({ email: normalized, currentUserId, candidates, lookupOk: ok })
+}
+
+/** Per-page size and page budget for the add-email ownership enumeration. */
+const ADD_EMAIL_ENUM_PER_PAGE = 100
+// 100 * 20 = 2000 covers a small demo tenant with margin. Auth0 caps this
+// endpoint's deep pagination near 1000 records; a directory larger than the
+// budget cannot be fully read, so enumeration reports ok=false and the guard
+// fails CLOSED (reject) rather than risk missing a foreign owner.
+const ADD_EMAIL_ENUM_MAX_PAGES = 20
+// Bounded parallelism for the per-user hydration re-fetch — small enough to stay
+// well under Auth0 Management rate limits on a small demo tenant.
+const ADD_EMAIL_HYDRATION_CONCURRENCY = 5
+
+/**
+ * Candidate gather for the add-another-email OWNERSHIP guard. Two deterministic
+ * phases against the Management API — NOT the v3 indexed search, which on this
+ * tenant does not surface a linked SOCIAL identity's `profileData.email` (the
+ * exact gap that let a foreign account's linked Gmail be added to a second
+ * account):
+ *
+ *   1. ENUMERATE every user id by paginating the whole directory. The list
+ *      payload's identity `profileData` is NOT trusted here — the `GET /users`
+ *      records omit `identities[].profileData.email` on this tenant — so only the
+ *      user id is taken from the list.
+ *   2. HYDRATE every enumerated id with `getUser(id)` (`GET /users/{id}`, which
+ *      DOES return identity `profileData`) under bounded concurrency, and reduce
+ *      each hydrated record to its OWNERSHIP set:
+ *        • every identity's email — a database identity's email AND a social
+ *          identity's `profileData.email` (linked Google), via
+ *          collectIdentityOwnedEmails,
+ *        • credential-binding emails,
+ *        • persisted verified aliases,
+ *      all normalized. A bare passwordless (`email`/`sms`) OTP stub is flagged so
+ *      it never counts as an owner.
+ *
+ * `ok` is false — so the ownership guard fails CLOSED (reject) — when either the
+ * enumeration could not read the whole directory (a page error, an inconsistent
+ * empty page, or truncation past the page budget) OR any per-user hydration threw
+ * / returned a mismatched id. Never throws.
+ */
+async function enumerateAddEmailCandidates(): Promise<{
+  candidates: AddEmailCandidate[]
+  ok: boolean
+}> {
+  // Phase 1: deterministically collect every user id. Do not read profileData
+  // from the list payload — it is unreliable here.
+  const enumeration = await enumerateOwnershipCandidates<Auth0User>({
+    fetchPage: async (page, perPage) => {
+      const res = await listUsersPage(page, perPage)
+      return { users: res.users ?? [], total: res.total ?? 0 }
+    },
+    perPage: ADD_EMAIL_ENUM_PER_PAGE,
+    maxPages: ADD_EMAIL_ENUM_MAX_PAGES,
+    identify: (user) => user.user_id ?? "",
+    toCandidate: (user) => ({
+      userId: user.user_id!,
+      ownedEmails: [],
+      hasRealIdentity: false,
+    }),
+  })
+
+  if (!enumeration.ok) return { candidates: enumeration.candidates, ok: false }
+
+  // Phase 2: hydrate every enumerated id with a full per-user read so the identity
+  // profileData (linked Google email) is actually present, then build ownership.
+  return hydrateOwnershipCandidates<Auth0User>({
+    userIds: enumeration.candidates.map((c) => c.userId),
+    concurrency: ADD_EMAIL_HYDRATION_CONCURRENCY,
+    fetchUser: (id) => getUser(id),
+    identify: (user) => user.user_id ?? "",
+    toCandidate: (user) => ({
+      userId: user.user_id!,
+      ownedEmails: [
+        ...collectIdentityOwnedEmails(user),
+        ...readBindings(user).map((b) => normalizeEmail(b.email)),
+        ...collectAccountVerifiedEmails(user),
+      ].filter((e) => e.length > 0),
+      hasRealIdentity: (user.identities ?? []).some(
+        (id) => id.provider !== "email" && id.provider !== "sms",
+      ),
+    }),
+  })
+}
+
+/**
+ * Best-effort cleanup of the transient passwordless OTP stub the emailed-code
+ * step minted, called when an add is rejected so no standalone/linked
+ * passwordless identity is left behind. Only deletes top-level records whose
+ * root email is the submitted address AND whose every identity is passwordless
+ * — never a record with a real identity. Swallows all errors (cleanup must
+ * never turn a clean rejection into a 5xx).
+ */
+export async function purgeTransientEmailStub(email: string): Promise<void> {
+  if (!isManagementConfigured()) return
+  const normalized = normalizeEmail(email)
+  if (!normalized) return
+
+  let users: Auth0User[]
+  try {
+    users = await getUsersByEmail(normalized)
+  } catch {
+    return
+  }
+
+  const stubIds = selectTransientEmailStubIds({
+    email: normalized,
+    candidates: users
+      .filter((u) => !!u.user_id)
+      .map((u) => ({
+        userId: u.user_id,
+        rootEmail: u.email ?? "",
+        identityProviders: (u.identities ?? []).map((id) => id.provider),
+      })),
+  })
+
+  for (const id of stubIds) {
+    try {
+      await deleteUser(id)
+    } catch {
+      // best-effort — a failed cleanup must not change the customer-facing result
+    }
+  }
+}
+
+/** The single decision every email-linking route must obey before linking. */
+export type AddEmailGuardResult =
+  | { ok: true }
+  | { ok: false; status: number; error: string }
+
+/**
+ * CENTRALIZED add-another-email ownership guard. This is the ONE gate every
+ * OTP-proven email-linking route must call after mailbox control is proven and
+ * BEFORE it links/creates any identity — so no path can diverge or bypass the
+ * canonical-ownership rule (the exact class of bug where one route carried a
+ * weaker `getUsersByEmail` check that could not see a foreign account's linked
+ * social identity).
+ *
+ * It runs the deterministic enumerate+hydrate resolver, and on ANY non-allow
+ * outcome it (a) purges the transient passwordless OTP stub the code step
+ * minted so nothing is left behind, and (b) returns the neutral customer copy +
+ * HTTP status the route should return verbatim. Allow only when every existing
+ * owner of the normalized address resolves to THIS account (unowned, or the
+ * same canonical parent — the Model 4 cross-brand / retry case).
+ */
+export async function guardAddEmailOwnership(params: {
+  email: string
+  currentUserId: string
+}): Promise<AddEmailGuardResult> {
+  const ownership = await resolveAddEmailOwnership(
+    params.email,
+    params.currentUserId,
+  )
+  const mapped = mapAddEmailGuardResponse(ownership)
+  if (mapped.ok) return mapped
+
+  // Rejected — clean up the transient stub before returning neutral copy.
+  await purgeTransientEmailStub(params.email)
+  return mapped
 }
 
 /**
