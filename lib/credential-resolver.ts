@@ -41,6 +41,11 @@ import {
   type SharedLoginAliasResolution,
 } from "@/lib/login-alias"
 import {
+  detectCurrentBrandCredential,
+  type BrandConnectionKey,
+  type BrandDuplicateCandidate,
+} from "@/lib/brand-duplicate"
+import {
   resolvePasswordChangeTarget,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
@@ -436,6 +441,40 @@ export async function resolveExistingAccountByEmail(
       verifiedEmails: collectAccountVerifiedEmails(user),
     },
   }
+}
+
+/**
+ * Whether THIS storefront brand's sign-in already exists for `email` — the
+ * deterministic, privacy-safe signal the UK Create Account route uses to guide a
+ * current-brand duplicate back to Sign in instead of failing closed.
+ *
+ * Gathers the same trusted candidate set the other resolvers use, reduces each
+ * to its owned emails + real identities, and defers the decision to the pure
+ * detector. Deliberately conservative: only a candidate that BOTH owns the email
+ * AND holds a real identity on `brandKey`'s connection counts. Fails SAFE to
+ * `false` when Management is unconfigured or a lookup failed — the route's normal
+ * (none/single/ambiguous) handling then applies — so this can only ever ADD
+ * correct sign-in guidance, never suppress a needed create/link.
+ */
+export async function currentBrandCredentialExists(
+  email: string,
+  brandKey: BrandConnectionKey,
+): Promise<boolean> {
+  if (!isManagementConfigured()) return false
+
+  const { candidates: users, ok } = await gatherCandidates(email)
+  if (!ok) return false
+
+  const candidates: BrandDuplicateCandidate[] = users.map((user) => ({
+    ownedEmails: [
+      normalizeEmail(user.email),
+      ...readBindings(user).map((b) => normalizeEmail(b.email)),
+      ...collectAccountVerifiedEmails(user),
+    ].filter((e) => e.length > 0),
+    identities: mapIdentities(user),
+  }))
+
+  return detectCurrentBrandCredential({ email, brandKey, candidates })
 }
 
 export interface ResolvedResetTarget {
