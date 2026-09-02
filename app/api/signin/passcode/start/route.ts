@@ -17,7 +17,7 @@ import {
   startDatabaseChallenge,
 } from "@/lib/auth0-passcode-signin"
 import { resolveSigninCredential } from "@/lib/credential-resolver"
-import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
+import { planPasscodeStart } from "@/lib/passcode-start-plan"
 import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
@@ -56,14 +56,21 @@ export async function POST(request: NextRequest) {
   const resolution = await resolveSigninCredential(email).catch(
     () => ({ kind: "unavailable" }) as const,
   )
-  const permitsChallenge = signinResolutionPermitsRealmOperation(resolution.kind)
 
-  let flow = await resolvePasscodeFlow(email)
-  let dbConnectionName: string | undefined
-  if (resolution.kind === "resolved") {
-    flow = "database"
-    dbConnectionName = resolution.connectionName
-  }
+  // Resolve the base flow via the DIRECT users-by-email lookup, then let the
+  // pure planner decide the final flow/connection. A per-email (case 3) /
+  // per-brand (case 4) binding only REFINES an already-database challenge — it
+  // must NEVER promote a passwordless resolution (a linked ALTERNATE email that
+  // lives on the passwordless "email" connection) into a database challenge the
+  // address can't satisfy. Doing so sent nothing and the failure was swallowed
+  // for anti-enumeration, so the customer never received a code.
+  const baseFlow = await resolvePasscodeFlow(email)
+  const { flow, dbConnectionName, permitsChallenge } = planPasscodeStart({
+    baseFlow,
+    resolutionKind: resolution.kind,
+    resolvedConnectionName:
+      resolution.kind === "resolved" ? resolution.connectionName : undefined,
+  })
 
   let authSession: string | undefined
   // AMBIGUOUS or UNAVAILABLE — fail CLOSED: issue NO challenge on ANY realm. We
