@@ -55,6 +55,7 @@ import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
 import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
+import { eligibleActivationEmails } from "@/lib/per-email-activation"
 import {
   passwordCredentialLabel,
   passwordCredentialLine,
@@ -2887,6 +2888,190 @@ function PasswordCredentialRow({
   )
 }
 
+// In-site "Add password" activation for a verified alternate email that has no
+// password of its own yet. Opens over /profile (no redirect, no model
+// vocabulary). It names BOTH operations plainly: confirm the CURRENT password
+// for the primary email, then set a DIFFERENT new password for the exact
+// alternate email. On success the account holds two independent per-email
+// passwords and the caller refreshes so the two rows + controls appear.
+function ActivatePerEmailDialog({
+  secondaryEmail,
+  primaryEmail,
+  onActivated,
+}: {
+  secondaryEmail: string
+  primaryEmail: string | null
+  onActivated?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState("")
+  const [next, setNext] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  const policy = validateNewPassword(next)
+  const confirmMismatch = confirm.length > 0 && confirm !== next
+  const canSubmit =
+    !busy && current.length > 0 && policy.ok && confirm === next && confirm.length > 0
+
+  function wipe() {
+    setCurrent("")
+    setNext("")
+    setConfirm("")
+  }
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (!v) {
+      wipe()
+      setError(null)
+      setDone(null)
+      setBusy(false)
+    }
+  }
+
+  async function submit() {
+    setError(null)
+    if (!canSubmit) return
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/passwords/per-email-activate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          secondaryEmail,
+          currentPassword: current,
+          newPassword: next,
+        }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        activated?: boolean
+        error?: string
+      }
+      if (!res.ok || !json.activated) {
+        setError(json.error ?? "We couldn't set up that password. Please try again.")
+        return
+      }
+      wipe()
+      setDone(`${secondaryEmail} now has its own password.`)
+      onActivated?.()
+    } catch {
+      setError("Network error. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="sm">
+            <Plus className="size-4" />
+            Add password
+          </Button>
+        }
+      />
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add a password for {secondaryEmail}</DialogTitle>
+          <DialogDescription>
+            Confirm your current password for {primaryEmail ?? "your primary email"}, then choose a
+            different password for {secondaryEmail}. Afterwards each email signs in with its own
+            password.
+          </DialogDescription>
+        </DialogHeader>
+
+        {done ? (
+          <div className="space-y-4">
+            <Note>
+              <span className="inline-flex items-center gap-2">
+                <BadgeCheck className="size-4 text-primary" />
+                {done}
+              </span>
+            </Note>
+            <DialogFooter>
+              <DialogClose render={<Button>Done</Button>} />
+            </DialogFooter>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+            className="space-y-4"
+          >
+            <PasswordField
+              id={`activate-current-${secondaryEmail}`}
+              label={`Current password for ${primaryEmail ?? "your primary email"}`}
+              value={current}
+              onChange={setCurrent}
+              autoComplete="current-password"
+              invalid={Boolean(error)}
+            />
+            <div className="h-px bg-border" role="presentation" />
+            <PasswordField
+              id={`activate-new-${secondaryEmail}`}
+              label={`New password for ${secondaryEmail}`}
+              value={next}
+              onChange={setNext}
+              autoComplete="new-password"
+              invalid={next.length > 0 && !policy.ok}
+              describedBy={`activate-policy-${secondaryEmail}`}
+            />
+            <ul
+              id={`activate-policy-${secondaryEmail}`}
+              className="space-y-1 text-xs text-muted-foreground"
+            >
+              {[
+                { ok: next.length >= 8, text: "At least 8 characters" },
+                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
+                { ok: /[0-9]/.test(next), text: "At least one number" },
+              ].map((r) => (
+                <li key={r.text} className="flex items-center gap-1.5">
+                  <Check
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      r.ok ? "text-primary" : "text-muted-foreground/40",
+                    )}
+                  />
+                  <span className={cn(r.ok && "text-foreground")}>{r.text}</span>
+                </li>
+              ))}
+            </ul>
+            <PasswordField
+              id={`activate-confirm-${secondaryEmail}`}
+              label={`Confirm new password for ${secondaryEmail}`}
+              value={confirm}
+              onChange={setConfirm}
+              autoComplete="new-password"
+              invalid={confirmMismatch}
+            />
+            {confirmMismatch ? (
+              <p className="text-xs text-destructive">Both new passwords must match.</p>
+            ) : null}
+            {error ? (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <DialogFooter className="gap-2 sm:gap-2">
+              <DialogClose render={<Button variant="ghost" type="button">Cancel</Button>} />
+              <Button type="submit" disabled={!canSubmit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                Add password
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // The password-credentials block inside "How you sign in". Reads the REAL
 // credentials from login-methods (one reset per credential) and offers a
 // restrained "Add password" command driven by server-computed availability.
@@ -2900,12 +3085,20 @@ function PasswordCredentials({ live }: { live: boolean }) {
   const {
     data: methodsData,
     error: methodsError,
+    mutate: mutateMethods,
   } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
   }>(live ? "/api/account/login-methods" : null, fetcher, {
     onError: (err) => warnUnavailable("Passwords", (err as { status?: number })?.status),
   })
+
+  // Profile gives us the account's verified emails so we know which alternate
+  // addresses are eligible to be given their OWN password (Model 3 activation).
+  const { data: profileData, mutate: mutateProfile } = useSWR<{
+    configured: boolean
+    user: { email?: string; identities?: Identity[] }
+  }>(live ? "/api/account/profile" : null, fetcher)
 
   // Still loading: no data and no error yet. Restrained placeholder — never a
   // fabricated "Account password".
@@ -2933,6 +3126,37 @@ function PasswordCredentials({ live }: { live: boolean }) {
 
   const passwords = (methodsData?.methods ?? []).filter((m) => m.kind === "password")
 
+  // Emails that ALREADY have their own per-email password (so they must not be
+  // offered activation again). Derived from the real credential rows.
+  const backedPerEmailEmails = passwords
+    .filter((m) => m.connectionKey === "per-email" && m.email)
+    .map((m) => (m.email as string).toLowerCase())
+
+  // Verified alternate emails on the account (the "email" OTP identities).
+  const accountEmail = profileData?.user?.email ?? null
+  const verifiedEmails = [
+    ...(accountEmail ? [accountEmail] : []),
+    ...(profileData?.user?.identities ?? [])
+      .filter((id) => id.provider === "email")
+      .map((id) => ((id.profileData?.email as string | undefined) ?? id.user_id) || "")
+      .filter(Boolean),
+  ]
+
+  // Alternate emails eligible for an "Add password" activation: verified, not
+  // the primary, and not already backed by a per-email password.
+  const eligible = accountEmail
+    ? eligibleActivationEmails({
+        primaryEmail: accountEmail,
+        verifiedEmails,
+        backedPerEmailEmails,
+      })
+    : []
+
+  function refreshAfterActivation() {
+    void mutateMethods()
+    void mutateProfile()
+  }
+
   return (
     <>
       {passwords.length === 0 ? (
@@ -2946,6 +3170,24 @@ function PasswordCredentials({ live }: { live: boolean }) {
           <PasswordCredentialRow key={m.key} method={m} live={live} />
         ))
       )}
+
+      {/* Email-specific "Add password" activation rows: one per verified
+          alternate email that doesn't yet have its own password. */}
+      {eligible.map((addr) => (
+        <MethodRow
+          key={`activate-${addr}`}
+          icon={<KeyRound className="size-4" />}
+          name={`Add a password for ${addr}`}
+          line={`${addr} signs in with an email passcode today. Give it its own password so it signs in independently from your other emails.`}
+          right={
+            <ActivatePerEmailDialog
+              secondaryEmail={addr}
+              primaryEmail={accountEmail}
+              onActivated={refreshAfterActivation}
+            />
+          }
+        />
+      ))}
     </>
   )
 }

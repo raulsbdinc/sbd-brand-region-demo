@@ -144,3 +144,33 @@ export function planPerEmailActivation(
     alreadyActivated: !createPrimary && !createSecondary,
   }
 }
+
+/**
+ * PURE UI helper: from the verified emails and the emails that already have a
+ * backed per-email credential, list the alternate emails that are ELIGIBLE for
+ * an "Add password" activation on THIS account.
+ *
+ * An alternate is eligible when it is verified/owned, is not the primary, and
+ * does not already have its own per-email password. This does not itself gate
+ * on configuration or on the primary — the route's planner is the real gate and
+ * fails closed; this only drives which email rows show the action.
+ */
+export function eligibleActivationEmails(input: {
+  primaryEmail: string
+  verifiedEmails: string[]
+  backedPerEmailEmails: string[]
+}): string[] {
+  const primary = normalizeEmail(input.primaryEmail)
+  const backed = new Set(input.backedPerEmailEmails.map(normalizeEmail).filter(Boolean))
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of input.verifiedEmails) {
+    const email = normalizeEmail(raw)
+    if (!email || email === primary) continue
+    if (backed.has(email)) continue
+    if (seen.has(email)) continue
+    seen.add(email)
+    out.push(email)
+  }
+  return out
+}

@@ -6,6 +6,7 @@ import assert from "node:assert/strict"
 
 import {
   planPerEmailActivation,
+  eligibleActivationEmails,
   type PerEmailActivationContext,
 } from "./per-email-activation.ts"
 import {
@@ -143,4 +144,32 @@ test("activation: emails are normalized (casing/whitespace) before planning", ()
   assert.equal(plan.ok, true)
   assert.equal(plan.ok && plan.primaryEmail, A)
   assert.equal(plan.ok && plan.secondaryEmail, B)
+})
+
+// --- Eligible-emails UI helper ---------------------------------------------
+test("eligibleActivationEmails: verified alternate with no per-email password is offered", () => {
+  const out = eligibleActivationEmails({
+    primaryEmail: A,
+    verifiedEmails: [A, B],
+    backedPerEmailEmails: [],
+  })
+  assert.deepEqual(out, [B])
+})
+
+test("eligibleActivationEmails: excludes the primary and already-backed emails", () => {
+  const out = eligibleActivationEmails({
+    primaryEmail: A,
+    verifiedEmails: [A, B, "third@prorises.com"],
+    backedPerEmailEmails: [B],
+  })
+  assert.deepEqual(out, ["third@prorises.com"])
+})
+
+test("eligibleActivationEmails: dedupes and normalizes casing", () => {
+  const out = eligibleActivationEmails({
+    primaryEmail: A.toUpperCase(),
+    verifiedEmails: [A, B, B.toUpperCase(), ` ${B} `],
+    backedPerEmailEmails: [],
+  })
+  assert.deepEqual(out, [B])
 })
