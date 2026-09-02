@@ -216,6 +216,8 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   useEffect(() => {
     if (step === "passcode") otpInputRef.current?.focus()
     if (step === "brand-proof") brandOtpInputRef.current?.focus()
+    if (step === "recover-email") recoverEmailInputRef.current?.focus()
+    if (step === "recover-reset") recoverCodeInputRef.current?.focus()
   }, [step])
 
   // Move focus into the panel, trap Tab, close on Escape, and restore focus to
@@ -749,14 +751,12 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       }
       if (action.kind === "weak-password") {
         setRecoverResetError(
-          action.message ??
-            "Choose a stronger password. " + PASSWORD_REQUIREMENTS,
+          "Choose a stronger password. " + PASSWORD_REQUIREMENTS,
         )
         return
       }
       setRecoverResetError(
-        action.message ??
-          "We couldn\u2019t reset your password. Please try again.",
+        "We couldn\u2019t reset your password. Please try again.",
       )
     } catch {
       setRecoverResetError("We couldn\u2019t reset your password. Please try again.")

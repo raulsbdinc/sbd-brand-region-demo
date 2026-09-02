@@ -14,7 +14,10 @@ import { buildDrawerRedirect, parseAuthMode, AUTH_QUERY_KEY, RETURN_TO_QUERY_KEY
  *  `app/register/uk/page.tsx` -> create-account.)
  */
 
-function assertRootDrawer(target: string, expectedMode: "sign-in" | "create-account") {
+function assertRootDrawer(
+  target: string,
+  expectedMode: "sign-in" | "create-account" | "recover",
+) {
   const url = new URL(target, "https://example.com")
   assert.equal(url.pathname, "/", "must land on the storefront root")
   assert.equal(
@@ -34,6 +37,10 @@ test("/sign-in/uk redirects into the root drawer in sign-in mode (no model choos
 
 test("/register/uk redirects into the root drawer in create-account mode (no standalone UI)", () => {
   assertRootDrawer(buildDrawerRedirect({ mode: "create-account" }), "create-account")
+})
+
+test("/recover redirects into the root drawer in recover mode (no standalone recovery UI)", () => {
+  assertRootDrawer(buildDrawerRedirect({ mode: "recover" }), "recover")
 })
 
 test("unauthenticated /profile redirects into the root drawer (sign-in) with safe returnTo=/profile", () => {

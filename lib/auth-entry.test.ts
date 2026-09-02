@@ -24,6 +24,12 @@ test("parseAuthMode maps create-account aliases", () => {
   assert.equal(parseAuthMode("CREATE"), "create-account")
 })
 
+test("parseAuthMode maps recover aliases", () => {
+  assert.equal(parseAuthMode("recover"), "recover")
+  assert.equal(parseAuthMode("recovery"), "recover")
+  assert.equal(parseAuthMode("RECOVER"), "recover")
+})
+
 test("parseAuthMode returns null for absent/unknown values (no auto-open on a normal / visit)", () => {
   assert.equal(parseAuthMode(null), null)
   assert.equal(parseAuthMode(undefined), null)
