@@ -311,6 +311,23 @@ test("planModel4CrossBrandLink: links the second brand under the existing primar
   }
 })
 
+test("planModel4CrossBrandLink: reverse order — DeWalt storefront links under an existing Stanley account", () => {
+  const r = planModel4CrossBrandLink(
+    crossCtx({
+      siteBrand: "dewalt",
+      existingAccount: { auth0UserId: "auth0|primary", bindings: [binding("stanley")] },
+    }),
+  )
+  assert.equal(r.ok, true)
+  if (r.ok) {
+    assert.equal(r.brand, "dewalt")
+    assert.equal(r.connectionKey, "dewalt")
+    assert.equal(r.connectionName, "sbd-demo-dewalt")
+    assert.equal(r.primaryUserId, "auth0|primary")
+    assert.equal(r.email, "jane@example.com")
+  }
+})
+
 test("planModel4CrossBrandLink: no single account resolved → no-existing-account", () => {
   assert.deepEqual(planModel4CrossBrandLink(crossCtx({ existingAccount: null })), {
     ok: false,

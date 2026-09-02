@@ -274,6 +274,104 @@ export function resolvePasswordChangeTarget(
   return { ok: false, reason: "invalid-selector" }
 }
 
+// --- Pure UPDATE-EXECUTION planner ------------------------------------------
+// Resolving WHICH credential to change (above) is separate from HOW to apply
+// the change through the Management API. The "how" carries a correctness
+// constraint proven by a live defect:
+//
+//   Auth0 `PATCH /users/{primaryId}` with `{ password, connection }` scopes the
+//   write by CONNECTION NAME. That is only unambiguous when the account has
+//   EXACTLY ONE identity on that connection. In the per-email model TWO verified
+//   emails (A and B) are linked as separate database identities on the SAME
+//   connection, so a connection-scoped PATCH updates whichever identity Auth0
+//   matches first (in practice the primary/first), NOT the selected email. The
+//   observed result: the selected email's password never changes (its old
+//   password still authenticates) while another identity's password is silently
+//   overwritten — corrupting A+P_A.
+//
+// Therefore a LINKED SECONDARY database identity must be changed by targeting
+// its EXACT database user_id. Auth0 has no endpoint to PATCH a specific linked
+// secondary directly (a PATCH to its own id returns 404 inexistent_user, and a
+// connection-scoped PATCH is ambiguous), so the only precise path is to
+// temporarily UNLINK it (restoring it as a standalone Management user), PATCH
+// that user, then RELINK it. A ROOT/primary identity (shared Models 1-2, or a
+// standalone per-email/brand account whose sole identity IS the root) is
+// unambiguous and uses a direct connection-scoped PATCH, unchanged.
+
+/** Direct PATCH on the root/primary user — used only for an unambiguous root identity. */
+export interface DirectPasswordUpdatePlan {
+  mode: "direct"
+  /** Provider-qualified id to PATCH (the root/primary account user). */
+  patchUserId: string
+  /** Connection name sent in the PATCH body to scope the password write. */
+  connectionName: string
+}
+
+/** Unlink → PATCH the standalone secondary → relink — targets the EXACT identity. */
+export interface RelinkPasswordUpdatePlan {
+  mode: "relink"
+  /** The primary/root account user the secondary is currently linked under. */
+  primaryUserId: string
+  /** Provider of the secondary database identity (always "auth0" for a password). */
+  provider: "auth0"
+  /** Provider-LESS secondary user_id — the unlink path segment + relink `user_id`. */
+  secondaryUserId: string
+  /** Provider-qualified secondary id to PATCH once it is standalone again. */
+  secondaryPatchUserId: string
+  /** Connection name sent in the PATCH body. */
+  connectionName: string
+  /** Connection id for the by-reference relink (when configured). */
+  connectionId?: string
+}
+
+export type PasswordUpdatePlan =
+  | DirectPasswordUpdatePlan
+  | RelinkPasswordUpdatePlan
+
+export interface PlanPasswordUpdateInput {
+  /** Provider-LESS matched database identity id (from the resolved target). */
+  auth0UserId: string
+  /** Provider-qualified root/primary account user id. */
+  managementUserId: string
+  /** True when the matched identity is a linked secondary (not the account root). */
+  isLinkedSecondary: boolean
+  /** Resolved connection name for the target key. */
+  connectionName: string
+  /** Resolved connection id for the target key (for the relink). */
+  connectionId?: string
+}
+
+/**
+ * Decide HOW to apply a verified password change so it hits EXACTLY the resolved
+ * database identity and nothing else. Pure + unit-tested; the route executes the
+ * returned plan (with rollback for the relink path).
+ *
+ * A linked secondary ALWAYS uses the relink path — even on a connection that
+ * currently holds a single identity — so the write can never be mis-scoped by
+ * connection matching (the per-email model puts two identities on one
+ * connection). Only the account's own root identity uses the direct PATCH.
+ */
+export function planPasswordUpdate(
+  input: PlanPasswordUpdateInput,
+): PasswordUpdatePlan {
+  if (input.isLinkedSecondary) {
+    return {
+      mode: "relink",
+      primaryUserId: input.managementUserId,
+      provider: "auth0",
+      secondaryUserId: bareUserId(input.auth0UserId),
+      secondaryPatchUserId: toManagementUserId(input.auth0UserId),
+      connectionName: input.connectionName,
+      connectionId: input.connectionId,
+    }
+  }
+  return {
+    mode: "direct",
+    patchUserId: input.managementUserId,
+    connectionName: input.connectionName,
+  }
+}
+
 // --- New-password policy (pure, client + server share it) -------------------
 // A minimal, honest local policy that mirrors Auth0's common "good" policy
 // (≥8 chars, at least one lower, one upper, and one number). The tenant remains

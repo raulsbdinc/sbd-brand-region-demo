@@ -20,6 +20,7 @@ import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { resolveConnectionNames } from "@/lib/credential-model"
 import {
   connectionIdForKey,
+  currentBrandCredentialExists,
   resolveExistingAccountByEmail,
 } from "@/lib/credential-resolver"
 import {
@@ -79,6 +80,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ configured: false, reason: "management-not-configured" }, { status: 200 })
   }
 
+  // Current-brand duplicate takes PRECEDENCE over every fail-closed path below.
+  // If THIS brand's sign-in already exists for this email, guide the customer to
+  // Sign in (never a duplicate, never a generic failure) — even when the broader
+  // owning-account lookup is momentarily ambiguous right after a cross-brand
+  // link (the freshly created-then-linked secondary can transiently appear as a
+  // second candidate for the same email). Symmetric across DeWalt/Stanley.
+  if (await currentBrandCredentialExists(plan.email, plan.connectionKey)) {
+    return NextResponse.json(
+      {
+        error: "An account already exists for this brand. Try signing in instead.",
+        reason: "already-brand",
+      },
+      { status: 409 },
+    )
+  }
+
   // Detect an existing account server-side. Fail closed on anything but a clear
   // "none" (first registration) or a single owning account (cross-brand).
   const existing = await resolveExistingAccountByEmail(email)
@@ -135,8 +152,15 @@ export async function POST(request: NextRequest) {
     (b) => b.connectionKey === plan.connectionKey,
   )
   if (alreadyThisBrand) {
+    // Machine-readable discriminator (additive) so the storefront Create Account
+    // drawer can show existing-account / sign-in guidance for THIS brand rather
+    // than a neutral "try again". Existing consumers that only read `error` are
+    // unaffected.
     return NextResponse.json(
-      { error: "An account already exists for this brand. Try signing in instead." },
+      {
+        error: "An account already exists for this brand. Try signing in instead.",
+        reason: "already-brand",
+      },
       { status: 409 },
     )
   }
