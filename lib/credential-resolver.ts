@@ -490,6 +490,12 @@ export interface ResolvedPasswordChangeTarget {
   /** The password-realm NAME (for ROPG current-password verification). */
   connectionName: string
   /**
+   * The connection's Auth0 id, when configured. Needed to relink a linked
+   * secondary identity by reference after its standalone password PATCH; may be
+   * undefined for the shared/root path (the direct PATCH never relinks).
+   */
+  connectionId?: string
+  /**
    * Provider-LESS identity `user_id` (ownership matching only; e.g. "6a97…").
    * Never send to the Management API — use `managementUserId` for the PATCH.
    */
@@ -531,6 +537,7 @@ export function resolvePasswordChangeCoordinates(
   selector: PasswordChangeSelector,
 ): ResolvedPasswordChangeTarget | null {
   const names = resolveConnectionNames()
+  const ids = resolveConnectionIds()
   const configuredKeys = configuredConnectionKeys(names)
 
   const resolution = resolvePasswordChangeTarget({
@@ -554,6 +561,7 @@ export function resolvePasswordChangeCoordinates(
   return {
     connectionKey: target.connectionKey,
     connectionName,
+    connectionId: ids[target.connectionKey],
     auth0UserId: target.auth0UserId,
     managementUserId: target.managementUserId,
     isLinkedSecondary: target.isLinkedSecondary,

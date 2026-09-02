@@ -1305,6 +1305,47 @@ test("per-email activation: a HALF-activated state (per-email + per-brand on one
   assert.equal(res.ok === false && res.reason, "ambiguous")
 })
 
+test("per-email activation: NO FALLBACK — once the pair is complete, B never falls back to shared/alias/brand even with a same-account shared login", () => {
+  // REGRESSION guard for the reported concern: after a COMPLETE per-email pair
+  // exists, signing in as B must resolve to B's OWN per-email identity and must
+  // NOT fall back to the shared/root password, a login alias, or a per-brand
+  // credential. We add a genuine SHARED (root) identity on the SAME account —
+  // the Model 1/2 login — to prove the completed pair still wins for both A and
+  // B and never degrades to shared-default.
+  const acct = candidate(
+    "auth0|nofallback",
+    [
+      // Coexisting per-brand credential on A (must be superseded, not win).
+      binding({ email: ACT_A, connectionKey: "dewalt", auth0UserId: "auth0|nf-dw", useCase: "per-brand-password", brand: "dewalt" }),
+      binding({ email: ACT_A, connectionKey: "per-email", auth0UserId: "auth0|nf-pe-a", useCase: "per-email-password" }),
+      binding({ email: ACT_B, connectionKey: "per-email", auth0UserId: "auth0|nf-pe-b", useCase: "per-email-password" }),
+    ],
+    [
+      identity("shared", "auth0|nf-root"), // a real shared/root login on THIS account
+      identity("dewalt", "auth0|nf-dw"),
+      identity("per-email", "auth0|nf-pe-a"),
+      identity("per-email", "auth0|nf-pe-b"),
+    ],
+    /* sharedMatch */ true, // the shared password genuinely matches on this account
+  )
+  assert.equal(perEmailCapabilityActivated(acct.bindings, acct.identities), true)
+
+  // B → its own per-email identity, NOT shared-default, NOT the brand credential.
+  const resB = resolveCredentialFromCandidates({ email: ACT_B, siteBrand: "dewalt", candidates: [acct], configuredKeys: ALL_KEYS })
+  assert.equal(resB.ok && resB.kind, "resolved")
+  assert.equal(resB.ok && resB.kind === "resolved" && resB.connectionKey, "per-email")
+  assert.equal(resB.ok && resB.kind === "resolved" && resB.binding?.auth0UserId, "auth0|nf-pe-b")
+
+  // A → its own per-email identity too (brand credential on A is superseded).
+  const resA = resolveCredentialFromCandidates({ email: ACT_A, siteBrand: "dewalt", candidates: [acct], configuredKeys: ALL_KEYS })
+  assert.equal(resA.ok && resA.kind === "resolved" && resA.connectionKey, "per-email")
+  assert.equal(resA.ok && resA.kind === "resolved" && resA.binding?.auth0UserId, "auth0|nf-pe-a")
+
+  // Neither resolves to the shared default despite the real shared login.
+  assert.notEqual(resB.ok && resB.kind, "shared-default")
+  assert.notEqual(resA.ok && resA.kind, "shared-default")
+})
+
 test("per-email activation: Model 4 (per-brand only, NO per-email) is UNCHANGED — never treated as activated", () => {
   // A pure Model 4 account has zero per-email credentials, so activation is off
   // and brand resolution is exactly as before on each brand's site.

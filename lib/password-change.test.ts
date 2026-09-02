@@ -4,6 +4,7 @@ import {
   bareUserId,
   canSubmitPasswordChange,
   mapPasswordUpdateError,
+  planPasswordUpdate,
   resolvePasswordChangeTarget,
   toManagementUserId,
   validateNewPassword,
@@ -474,4 +475,112 @@ test("mapPasswordUpdateError surfaces a policy hint only for real policy failure
   const generic = mapPasswordUpdateError({ status: 500, message: "boom upstream" })
   assert.match(generic, /couldn't change your password/i)
   assert.doesNotMatch(generic, /boom upstream/i)
+})
+
+// --- planPasswordUpdate: HOW the write is applied ---------------------------
+// REGRESSION (live defect on commit 00329d5): changing password B on a complete
+// per-email pair (A + B linked on the SAME sbd-demo-per-email connection) left
+// B's old password valid. Root cause: the route PATCHed the ROOT user with
+// `{ password, connection }`, which is ambiguous when two identities share one
+// connection — Auth0 updated the first match (A), never B. The execution planner
+// must target a linked secondary by its EXACT id via unlink/patch/relink, and
+// only use the direct PATCH for an unambiguous root identity.
+
+test("planPasswordUpdate: a linked per-email SECONDARY uses unlink/patch/relink on the EXACT id", () => {
+  // Live shape: primary root auth0|6a97a3a8…; B = taltijukko's own per-email id.
+  const rootId = "auth0|6a97a3a8a48750e919055e2f"
+  const bBareId = "6a97b1b4a48750e919055e46" // taltijukko@necub.com identity
+  const plan = planPasswordUpdate({
+    auth0UserId: bBareId, // provider-less matched identity (B)
+    managementUserId: rootId, // the account root
+    isLinkedSecondary: true,
+    connectionName: "sbd-demo-per-email",
+    connectionId: "con_perEmail123",
+  })
+  assert.equal(plan.mode, "relink")
+  if (plan.mode === "relink") {
+    assert.equal(plan.primaryUserId, rootId)
+    assert.equal(plan.provider, "auth0")
+    // Unlink path segment + relink user_id = B's PROVIDER-LESS id (never A, never root).
+    assert.equal(plan.secondaryUserId, bBareId)
+    // The standalone PATCH targets B's OWN provider-qualified id.
+    assert.equal(plan.secondaryPatchUserId, `auth0|${bBareId}`)
+    assert.equal(plan.connectionName, "sbd-demo-per-email")
+    assert.equal(plan.connectionId, "con_perEmail123")
+    // It must NEVER PATCH the root (that is what corrupted A+P_A).
+    assert.notEqual(plan.secondaryPatchUserId, rootId)
+  }
+})
+
+test("planPasswordUpdate: the OTHER pair member (A) plans to ITS own id, not B and not the root", () => {
+  const rootId = "auth0|6a97a3a8a48750e919055e2f"
+  const aBareId = "6a97b1b3ec1273ecd6facb45" // cartocepsu@necub.com identity
+  const plan = planPasswordUpdate({
+    auth0UserId: aBareId,
+    managementUserId: rootId,
+    isLinkedSecondary: true,
+    connectionName: "sbd-demo-per-email",
+    connectionId: "con_perEmail123",
+  })
+  assert.equal(plan.mode, "relink")
+  if (plan.mode === "relink") {
+    assert.equal(plan.secondaryUserId, aBareId)
+    assert.equal(plan.secondaryPatchUserId, `auth0|${aBareId}`)
+    // Distinct from B — the two pair members never collide on a target.
+    assert.notEqual(plan.secondaryPatchUserId, "auth0|6a97b1b4a48750e919055e46")
+    assert.notEqual(plan.secondaryPatchUserId, rootId)
+  }
+})
+
+test("planPasswordUpdate: an already-qualified secondary id is not double-prefixed", () => {
+  const plan = planPasswordUpdate({
+    auth0UserId: "auth0|6a97b1b4a48750e919055e46",
+    managementUserId: "auth0|6a97a3a8a48750e919055e2f",
+    isLinkedSecondary: true,
+    connectionName: "sbd-demo-per-email",
+  })
+  assert.equal(plan.mode, "relink")
+  if (plan.mode === "relink") {
+    assert.equal(plan.secondaryUserId, "6a97b1b4a48750e919055e46")
+    assert.equal(plan.secondaryPatchUserId, "auth0|6a97b1b4a48750e919055e46")
+  }
+})
+
+test("planPasswordUpdate: a linked SECONDARY with no configured connection id still relinks (by-provider)", () => {
+  const plan = planPasswordUpdate({
+    auth0UserId: "6a97b1b4a48750e919055e46",
+    managementUserId: "auth0|root",
+    isLinkedSecondary: true,
+    connectionName: "sbd-demo-per-email",
+    connectionId: undefined,
+  })
+  assert.equal(plan.mode, "relink")
+  if (plan.mode === "relink") assert.equal(plan.connectionId, undefined)
+})
+
+test("planPasswordUpdate: a ROOT/shared identity uses a direct connection-scoped PATCH", () => {
+  const rootId = "auth0|sharedroot0000000000001"
+  const plan = planPasswordUpdate({
+    auth0UserId: "sharedroot0000000000001",
+    managementUserId: rootId,
+    isLinkedSecondary: false,
+    connectionName: "sbd-eu",
+  })
+  assert.equal(plan.mode, "direct")
+  if (plan.mode === "direct") {
+    assert.equal(plan.patchUserId, rootId)
+    assert.equal(plan.connectionName, "sbd-eu")
+  }
+})
+
+test("planPasswordUpdate: a standalone per-email account (root IS the identity) uses direct PATCH", () => {
+  const rootId = "auth0|peonly000000000000001"
+  const plan = planPasswordUpdate({
+    auth0UserId: "peonly000000000000001",
+    managementUserId: rootId,
+    isLinkedSecondary: false,
+    connectionName: "sbd-demo-per-email",
+  })
+  assert.equal(plan.mode, "direct")
+  if (plan.mode === "direct") assert.equal(plan.patchUserId, rootId)
 })
