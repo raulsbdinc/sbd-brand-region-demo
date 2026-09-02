@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth0-passwordless"
 import { resolveRecoveryTarget } from "@/lib/credential-resolver"
 import { applyPasswordUpdate } from "@/lib/apply-password-update"
+import { BRANDS } from "@/lib/brands"
 import {
   mapPasswordUpdateError,
   planPasswordUpdate,
@@ -123,9 +124,24 @@ export async function POST(request: Request) {
     )
   }
 
+  // Post-proof, the customer has demonstrated ownership of this exact mailbox,
+  // so it is appropriate to name precisely which credential changed — but in
+  // plain customer language, never internal jargon:
+  //   • per-email (Model 3) -> the exact proven email address.
+  //   • per-brand (Model 4) -> the current brand's natural name.
+  //   • shared   (Model 1/2) -> a generic "your password".
+  const scope: "per-email" | "brand" | "shared" =
+    target.connectionKey === "dewalt" || target.connectionKey === "stanley"
+      ? "brand"
+      : target.connectionKey === "per-email"
+        ? "per-email"
+        : "shared"
+  const brandName =
+    scope === "brand" && target.brand ? BRANDS[target.brand].name : undefined
+
   return NextResponse.json({
     ok: true,
     message: "Your password has been updated. Sign in with your new password.",
-    credential: { email: target.email, label: target.label },
+    credential: { email: target.email, scope, brandName },
   })
 }

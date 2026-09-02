@@ -4,6 +4,7 @@ import assert from "node:assert/strict"
 import {
   interpretRecoveryStartResponse,
   interpretRecoveryResetResponse,
+  recoverySuccessMessage,
   canSubmitRecoveryReset,
   selectorForRecovery,
 } from "./recovery-drawer.ts"
@@ -35,17 +36,76 @@ test("recovery start: a transport/server failure keeps the customer on email", (
 
 // --- reset step --------------------------------------------------------------
 
-test("recovery reset: 2xx surfaces the exact reset credential label/email", () => {
+test("recovery reset: 2xx surfaces the exact reset email + customer-facing scope", () => {
   const action = interpretRecoveryResetResponse({
     httpStatus: 200,
-    body: { credential: { email: "b@necub.com", label: "Password for b@necub.com" } },
+    body: { credential: { email: "b@necub.com", scope: "per-email" } },
   })
   assert.equal(action.kind, "reset")
   assert.equal(action.kind === "reset" ? action.email : null, "b@necub.com")
+  assert.equal(action.kind === "reset" ? action.scope : null, "per-email")
+})
+
+test("recovery reset: 2xx carries the brand name for a brand-scoped reset", () => {
+  const action = interpretRecoveryResetResponse({
+    httpStatus: 200,
+    body: { credential: { email: "x@necub.com", scope: "brand", brandName: "DeWalt" } },
+  })
+  assert.equal(action.kind, "reset")
+  assert.equal(action.kind === "reset" ? action.scope : null, "brand")
+  assert.equal(action.kind === "reset" ? action.brandName : null, "DeWalt")
+})
+
+test("recovery reset: an unknown scope is dropped (defends the success copy)", () => {
+  const action = interpretRecoveryResetResponse({
+    httpStatus: 200,
+    body: { credential: { email: "b@necub.com", scope: "per-email-binding" } },
+  })
+  assert.equal(action.kind === "reset" ? action.scope : "MISSING", undefined)
+})
+
+// --- success copy (customer-facing, no internal jargon) ----------------------
+
+test("recoverySuccessMessage: Model 3 names the exact proven email", () => {
   assert.equal(
-    action.kind === "reset" ? action.label : null,
-    "Password for b@necub.com",
+    recoverySuccessMessage({ scope: "per-email", email: "lodresarde@necub.com" }),
+    "The password for lodresarde@necub.com has been updated.",
   )
+})
+
+test("recoverySuccessMessage: Model 4 names the brand naturally", () => {
+  assert.equal(
+    recoverySuccessMessage({ scope: "brand", brandName: "DeWalt" }),
+    "Your DeWalt password has been updated.",
+  )
+})
+
+test("recoverySuccessMessage: shared / unresolved stays generic — never jargon", () => {
+  assert.equal(
+    recoverySuccessMessage({ scope: "shared", email: "a@necub.com" }),
+    "Your password has been updated.",
+  )
+  // Missing pieces must never fall back to a label like "Per-email password".
+  assert.equal(
+    recoverySuccessMessage({ scope: "per-email" }),
+    "Your password has been updated.",
+  )
+  assert.equal(
+    recoverySuccessMessage({ scope: "brand" }),
+    "Your password has been updated.",
+  )
+  assert.equal(recoverySuccessMessage({}), "Your password has been updated.")
+})
+
+test("recoverySuccessMessage: never emits internal jargon for any scope", () => {
+  for (const message of [
+    recoverySuccessMessage({ scope: "per-email", email: "b@necub.com" }),
+    recoverySuccessMessage({ scope: "brand", brandName: "Stanley" }),
+    recoverySuccessMessage({ scope: "shared" }),
+    recoverySuccessMessage({}),
+  ]) {
+    assert.doesNotMatch(message, /per-email|binding|connection|model\s*\d/i)
+  }
 })
 
 test("recovery reset: a wrong/expired code stays on the step (bad-code)", () => {

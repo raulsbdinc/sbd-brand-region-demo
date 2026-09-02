@@ -36,9 +36,17 @@ export function interpretRecoveryStartResponse(input: {
 
 // --- Recovery reset ----------------------------------------------------------
 
+/** The customer-facing scope of the credential that was reset. */
+export type RecoveryResetScope = "per-email" | "brand" | "shared"
+
 /** What the drawer should do after submitting the code + new password. */
 export type RecoveryResetAction =
-  | { kind: "reset"; email?: string; label?: string }
+  | {
+      kind: "reset"
+      email?: string
+      scope?: RecoveryResetScope
+      brandName?: string
+    }
   | { kind: "bad-code" }
   | { kind: "weak-password" }
   | { kind: "generic"; message?: string }
@@ -57,10 +65,18 @@ export function interpretRecoveryResetResponse(input: {
   const { httpStatus, body } = input
   if (httpStatus >= 200 && httpStatus < 300) {
     const credential = (body.credential ?? {}) as Record<string, unknown>
+    const scope =
+      credential.scope === "per-email" ||
+      credential.scope === "brand" ||
+      credential.scope === "shared"
+        ? (credential.scope as RecoveryResetScope)
+        : undefined
     return {
       kind: "reset",
       email: typeof credential.email === "string" ? credential.email : undefined,
-      label: typeof credential.label === "string" ? credential.label : undefined,
+      scope,
+      brandName:
+        typeof credential.brandName === "string" ? credential.brandName : undefined,
     }
   }
   const code = typeof body.code === "string" ? body.code : ""
@@ -68,6 +84,29 @@ export function interpretRecoveryResetResponse(input: {
   if (httpStatus === 400 && code === "weak-password") return { kind: "weak-password" }
   const message = typeof body.error === "string" ? body.error : undefined
   return { kind: "generic", message }
+}
+
+/**
+ * Build the polished, customer-facing success line naming EXACTLY which
+ * password changed. Only reached AFTER the emailed code proved ownership of the
+ * mailbox, so showing the exact submitted address is appropriate. Never exposes
+ * "per-email", "binding", model numbers, or connection names:
+ *   • per-email (Model 3) -> "The password for <email> has been updated."
+ *   • brand     (Model 4) -> "Your <Brand> password has been updated."
+ *   • shared / anything unresolved -> "Your password has been updated."
+ */
+export function recoverySuccessMessage(action: {
+  scope?: RecoveryResetScope
+  email?: string
+  brandName?: string
+}): string {
+  if (action.scope === "per-email" && action.email) {
+    return `The password for ${action.email} has been updated.`
+  }
+  if (action.scope === "brand" && action.brandName) {
+    return `Your ${action.brandName} password has been updated.`
+  }
+  return "Your password has been updated."
 }
 
 /**

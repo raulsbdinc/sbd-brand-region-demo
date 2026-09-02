@@ -13,7 +13,10 @@ import { useBrand } from "@/components/app-providers"
 import { GoogleMark } from "@/components/google-mark"
 import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
-import { interpretRecoveryResetResponse } from "@/lib/recovery-drawer"
+import {
+  interpretRecoveryResetResponse,
+  recoverySuccessMessage,
+} from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   crossBrandCollisionMessage,
@@ -137,10 +140,11 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const [recoverConfirm, setRecoverConfirm] = useState("")
   const [recoverResetError, setRecoverResetError] = useState<string | null>(null)
   const [recoverResetting, setRecoverResetting] = useState(false)
-  // The masked address a code was sent to, shown on the reset step; the exact
-  // credential label, shown on success (Model 3 makes clear WHICH email).
+  // The masked address a code was sent to, shown on the reset step; the polished
+  // customer-facing success line naming exactly which password changed (the
+  // proven email for Model 3, the brand for Model 4).
   const [recoverSentTo, setRecoverSentTo] = useState("")
-  const [recoverDoneLabel, setRecoverDoneLabel] = useState<string | null>(null)
+  const [recoverDoneMessage, setRecoverDoneMessage] = useState<string | null>(null)
 
   const panelRef = useRef<HTMLDivElement>(null)
   const otpInputRef = useRef<HTMLInputElement>(null)
@@ -199,7 +203,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     setRecoverResetError(null)
     setRecoverResetting(false)
     setRecoverSentTo("")
-    setRecoverDoneLabel(null)
+    setRecoverDoneMessage(null)
   }, [open])
 
   // Lock body scroll while the drawer occupies the DOM.
@@ -647,7 +651,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     setRecoverResetError(null)
     setRecoverResetting(false)
     setRecoverSentTo("")
-    setRecoverDoneLabel(null)
+    setRecoverDoneMessage(null)
     setStep("recover-email")
   }
 
@@ -739,7 +743,13 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       })
 
       if (action.kind === "reset") {
-        setRecoverDoneLabel(action.label ?? null)
+        setRecoverDoneMessage(
+          recoverySuccessMessage({
+            scope: action.scope,
+            email: action.email,
+            brandName: action.brandName,
+          }),
+        )
         setStep("recover-done")
         return
       }
@@ -1143,12 +1153,10 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     body = (
       <div className="mt-6">
         <p className="font-sans text-[13px] font-[600] leading-[19px] [color:var(--brand-label-color)]">
-          {"Your password has been updated."}
+          {recoverDoneMessage ?? "Your password has been updated."}
         </p>
         <p className="mt-2 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
-          {recoverDoneLabel
-            ? `We reset the password for ${recoverDoneLabel}. Sign in with your new password.`
-            : "Sign in with your new password."}
+          {"Sign in with your new password."}
         </p>
 
         <button
