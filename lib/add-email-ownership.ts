@@ -137,6 +137,89 @@ export function planAddEmailOwnership(params: {
 }
 
 /**
+ * One page of a deterministic user-directory enumeration: the records on the
+ * page plus the directory's reported grand total (used to detect completeness).
+ */
+export interface EnumeratedUserPage<TUser> {
+  users: TUser[]
+  total: number
+}
+
+/**
+ * The result of a full enumeration: the reduced add-email candidates plus an
+ * `ok` completeness flag. `ok` is TRUE only when every reported record was
+ * fetched without error; a thrown page, an unexpected empty page before the
+ * total is reached, or hitting `maxPages` before the total all yield `ok: false`
+ * so the ownership guard fails CLOSED (reject) rather than assume no foreign
+ * owner from a partial directory read.
+ */
+export interface EnumerationResult {
+  candidates: AddEmailCandidate[]
+  ok: boolean
+}
+
+/**
+ * Deterministically enumerate the ENTIRE user directory through an injected
+ * paginated fetch and reduce each record to an {@link AddEmailCandidate}. This
+ * replaces the eventually-consistent v3 indexed search, which does NOT surface a
+ * linked SOCIAL identity's `profileData.email` on this tenant — the exact gap
+ * that let a foreign account's linked Gmail be added to a second account.
+ *
+ * Correctness over performance: it reads every page (deduped by id) until the
+ * collected count reaches the directory total. It FAILS CLOSED on:
+ *   • any page fetch throwing (directory error),
+ *   • a page returning zero records before the total is reached (cannot make
+ *     progress / inconsistent directory),
+ *   • exhausting `maxPages` before the total is reached (truncation — e.g. the
+ *     directory is larger than the deep-pagination cap).
+ * The pure core takes the fetch as a dependency so pagination, later-page owner
+ * discovery, failure and truncation are all unit-testable without Auth0.
+ */
+export async function enumerateOwnershipCandidates<TUser>(params: {
+  fetchPage: (page: number, perPage: number) => Promise<EnumeratedUserPage<TUser>>
+  perPage: number
+  maxPages: number
+  identify: (user: TUser) => string
+  toCandidate: (user: TUser) => AddEmailCandidate
+}): Promise<EnumerationResult> {
+  const collected = new Map<string, AddEmailCandidate>()
+  let total = Number.POSITIVE_INFINITY
+
+  for (let page = 0; page < params.maxPages; page++) {
+    let result: EnumeratedUserPage<TUser>
+    try {
+      result = await params.fetchPage(page, params.perPage)
+    } catch {
+      // A directory read failed — an incomplete set cannot prove a foreign owner
+      // is absent. Fail closed.
+      return { candidates: [...collected.values()], ok: false }
+    }
+
+    if (page === 0) total = result.total
+
+    for (const user of result.users) {
+      const id = params.identify(user)
+      if (!id) continue
+      if (!collected.has(id)) collected.set(id, params.toCandidate(user))
+    }
+
+    if (collected.size >= total) {
+      return { candidates: [...collected.values()], ok: true }
+    }
+
+    // No further progress is possible but the total was not reached: the
+    // directory is inconsistent or truncated. Fail closed.
+    if (result.users.length === 0) {
+      return { candidates: [...collected.values()], ok: false }
+    }
+  }
+
+  // Exhausted the page budget before covering the whole directory (truncation).
+  const complete = collected.size >= total
+  return { candidates: [...collected.values()], ok: complete }
+}
+
+/**
  * One top-level record for the transient-stub cleanup decision: its id, root
  * email, and the providers of its identities.
  */

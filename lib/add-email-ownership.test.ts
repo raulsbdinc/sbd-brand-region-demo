@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   evaluateAddEmailOwnership,
+  enumerateOwnershipCandidates,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
   collectIdentityOwnedEmails,
@@ -293,6 +294,215 @@ test("Model 4 no-regression: same canonical owner via its own linked identity is
     currentUserId: "auth0|B",
     candidates: [selfOwned],
     lookupOk: true,
+  })
+  assert.equal(decision.ok, true)
+})
+
+// ============================================================================
+// enumerateOwnershipCandidates — deterministic paginated directory enumeration.
+// This replaces the eventually-consistent v3 indexed search that did NOT
+// surface a linked social identity's profileData.email on the live tenant.
+// ============================================================================
+
+interface FakeUser {
+  user_id: string
+  email?: string
+  identities?: Array<{ email?: unknown; profileData?: Record<string, unknown> | null }>
+  passwordless?: boolean
+}
+
+function toFakeCandidate(u: FakeUser): AddEmailCandidate {
+  return {
+    userId: u.user_id,
+    ownedEmails: collectIdentityOwnedEmails(u),
+    hasRealIdentity: !u.passwordless,
+  }
+}
+
+/** Build a paginated fetcher over a fixed user list, reporting a grand total. */
+function pagedFetcher(users: FakeUser[], opts?: { total?: number; throwOnPage?: number }) {
+  const total = opts?.total ?? users.length
+  return async (page: number, perPage: number) => {
+    if (opts?.throwOnPage === page) throw new Error("directory read failed")
+    const start = page * perPage
+    return { users: users.slice(start, start + perPage), total }
+  }
+}
+
+test("enumeration: collects owners across MULTIPLE pages and allows unowned add", async () => {
+  const users: FakeUser[] = Array.from({ length: 25 }, (_, i) => ({
+    user_id: `auth0|u${i}`,
+    email: `user${i}@example.com`,
+  }))
+  const { candidates, ok } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(users),
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, true)
+  assert.equal(candidates.length, 25) // all 3 pages (10 + 10 + 5) collected
+
+  const decision = planAddEmailOwnership({
+    email: "brand-new@example.com",
+    currentUserId: "auth0|u0",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, true)
+})
+
+test("enumeration: LATER-PAGE foreign linked-Google owner is discovered and rejected", async () => {
+  // Fill page 0, then place foreign owner A (owns the Gmail ONLY via a linked
+  // Google identity's profileData.email) on page 2 — exactly the record the
+  // indexed search missed on the live tenant.
+  const filler: FakeUser[] = Array.from({ length: 20 }, (_, i) => ({
+    user_id: `auth0|f${i}`,
+    email: `f${i}@example.com`,
+  }))
+  const foreignA: FakeUser = {
+    user_id: "auth0|A",
+    email: "dedes10491@mediseat.com",
+    identities: [
+      { profileData: { email: "dedes10491@mediseat.com" } },
+      { email: "raul.sbdinc@gmail.com", profileData: { email: "raul.sbdinc@gmail.com" } },
+    ],
+  }
+  const users = [...filler, foreignA] // A is the 21st record → page 2 at perPage 10
+
+  const { candidates, ok } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(users),
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, true)
+
+  // Signed in as B, adding A's linked Gmail must be REJECTED.
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, false)
+  assert.equal(decision.ok === false && decision.reason, "different-owner")
+})
+
+test("enumeration: a page FAILURE fails closed (unavailable), never a silent allow", async () => {
+  const users: FakeUser[] = Array.from({ length: 25 }, (_, i) => ({
+    user_id: `auth0|u${i}`,
+    email: `user${i}@example.com`,
+  }))
+  const { ok, candidates } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(users, { throwOnPage: 1 }),
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, false)
+
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, false)
+  assert.equal(decision.ok === false && decision.reason, "unavailable")
+})
+
+test("enumeration: TRUNCATION (total exceeds page budget) fails closed", async () => {
+  const users: FakeUser[] = Array.from({ length: 30 }, (_, i) => ({
+    user_id: `auth0|u${i}`,
+    email: `user${i}@example.com`,
+  }))
+  // Report a total far larger than what the tiny page budget can ever read.
+  const { ok } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(users, { total: 5000 }),
+    perPage: 10,
+    maxPages: 2, // can read at most 20 of a claimed 5000
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, false)
+})
+
+test("enumeration: an unexpected EMPTY page before the total fails closed", async () => {
+  const fetchPage = async (page: number) => {
+    if (page === 0) return { users: [{ user_id: "auth0|u0", email: "u0@example.com" }], total: 100 }
+    return { users: [] as FakeUser[], total: 100 } // cannot make progress to 100
+  }
+  const { ok } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage,
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, false)
+})
+
+test("enumeration: transient passwordless STUB on a later page is never counted as owner", async () => {
+  const filler: FakeUser[] = Array.from({ length: 10 }, (_, i) => ({
+    user_id: `auth0|f${i}`,
+    email: `f${i}@example.com`,
+  }))
+  // The OTP stub the code step minted for the Gmail — root email is the target,
+  // no real identity.
+  const stub: FakeUser = {
+    user_id: "auth0|stub",
+    email: "brand-new@example.com",
+    passwordless: true,
+  }
+  const users = [...filler, stub]
+  const { candidates, ok } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(users),
+    perPage: 10,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, true)
+
+  // Adding this brand-new address must still be ALLOWED — the stub is not an owner.
+  const decision = planAddEmailOwnership({
+    email: "brand-new@example.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
+  })
+  assert.equal(decision.ok, true)
+})
+
+test("enumeration: same-canonical Model 4 (email on the CURRENT account) is allowed", async () => {
+  const self: FakeUser = {
+    user_id: "auth0|B",
+    email: "wacev92852@mapsguy.com",
+    identities: [{ email: "raul.sbdinc@gmail.com", profileData: { email: "raul.sbdinc@gmail.com" } }],
+  }
+  const others: FakeUser[] = Array.from({ length: 12 }, (_, i) => ({
+    user_id: `auth0|o${i}`,
+    email: `o${i}@example.com`,
+  }))
+  const users = [...others, self]
+  const { candidates, ok } = await enumerateOwnershipCandidates<FakeUser>({
+    fetchPage: pagedFetcher(users),
+    perPage: 5,
+    maxPages: 20,
+    identify: (u) => u.user_id,
+    toCandidate: toFakeCandidate,
+  })
+  assert.equal(ok, true)
+
+  const decision = planAddEmailOwnership({
+    email: "raul.sbdinc@gmail.com",
+    currentUserId: "auth0|B",
+    candidates,
+    lookupOk: ok,
   })
   assert.equal(decision.ok, true)
 })

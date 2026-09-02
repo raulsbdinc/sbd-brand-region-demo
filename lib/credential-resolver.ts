@@ -32,12 +32,14 @@ import {
 import {
   getUsersByEmail,
   searchUsersStrict,
+  listUsersPage,
   isManagementConfigured,
   deleteUser,
   type Auth0User,
 } from "@/lib/auth0-management"
 import {
   collectIdentityOwnedEmails,
+  enumerateOwnershipCandidates,
   planAddEmailOwnership,
   selectTransientEmailStubIds,
   type AddEmailCandidate,
@@ -475,61 +477,61 @@ export async function resolveAddEmailOwnership(
   if (!isManagementConfigured()) return { ok: false, reason: "unavailable" }
 
   const normalized = normalizeEmail(email)
-  const { candidates: users, ok } = await gatherAddEmailCandidates(email)
-
-  const byId = new Map<string, Auth0User>()
-  for (const u of users) if (u.user_id) byId.set(u.user_id, u)
-
-  const candidates: AddEmailCandidate[] = [...byId.values()].map((user) => ({
-    userId: user.user_id!,
-    // OWNERSHIP (not login): every email on ANY of the account's identities
-    // counts — a database identity's email, a SOCIAL identity's profileData
-    // email (linked Google), root email, binding emails, and persisted verified
-    // aliases — regardless of a social profileData's email_verified flag. The
-    // narrower collectAccountVerifiedEmails alone missed a Gmail owned only via
-    // a foreign account's linked Google identity.
-    ownedEmails: [
-      ...collectIdentityOwnedEmails(user),
-      ...readBindings(user).map((b) => normalizeEmail(b.email)),
-      ...collectAccountVerifiedEmails(user),
-    ].filter((e) => e.length > 0),
-    hasRealIdentity: (user.identities ?? []).some(
-      (id) => id.provider !== "email" && id.provider !== "sms",
-    ),
-  }))
+  const { candidates, ok } = await enumerateAddEmailCandidates()
 
   return planAddEmailOwnership({ email: normalized, currentUserId, candidates, lookupOk: ok })
 }
 
+/** Per-page size and page budget for the add-email ownership enumeration. */
+const ADD_EMAIL_ENUM_PER_PAGE = 100
+// 100 * 20 = 2000 covers a small demo tenant with margin. Auth0 caps this
+// endpoint's deep pagination near 1000 records; a directory larger than the
+// budget cannot be fully read, so enumeration reports ok=false and the guard
+// fails CLOSED (reject) rather than risk missing a foreign owner.
+const ADD_EMAIL_ENUM_MAX_PAGES = 20
+
 /**
- * Candidate gather for the add-another-email OWNERSHIP guard. Superset of
- * {@link gatherCandidates}: in addition to the root-email lookup and the
- * app_metadata (login alias + binding) search, it queries the v3 index by
- * `identities.profileData.email` so an address owned ONLY via a linked SOCIAL
- * identity (e.g. a Google account linked onto a different canonical customer)
- * is discovered. `/users-by-email` matches only a record's NORMALIZED root
- * email, so a linked-Gmail owner whose root email differs would otherwise never
- * surface — that gap let such a Gmail be linked into a second account.
+ * Candidate gather for the add-another-email OWNERSHIP guard via DETERMINISTIC
+ * paginated Management-API enumeration of the whole directory — NOT the v3
+ * indexed search, which on this tenant does not surface a linked SOCIAL
+ * identity's `profileData.email` (the exact gap that let a foreign account's
+ * linked Gmail be added to a second account). Every account is read and reduced
+ * to its OWNERSHIP set:
+ *   • every identity's email — a database identity's email AND a social
+ *     identity's `profileData.email` (linked Google), via collectIdentityOwnedEmails,
+ *   • credential-binding emails,
+ *   • persisted verified aliases,
+ * all normalized. A bare passwordless (`email`/`sms`) OTP stub is flagged so it
+ * never counts as an owner.
  *
- * `ok` is false when ANY of the three lookups failed: an incomplete candidate
- * set cannot prove a foreign owner is absent, so the ownership guard fails
- * CLOSED (reject) rather than risk linking a second person's mailbox. Uses the
- * STRICT search (throws on error) so a failed lookup is never mistaken for
- * "no owner". Never throws.
+ * `ok` is false when the enumeration could not read the whole directory (a page
+ * error, an inconsistent empty page, or truncation past the page budget) so the
+ * ownership guard fails CLOSED. Never throws.
  */
-async function gatherAddEmailCandidates(
-  email: string,
-): Promise<{ candidates: Auth0User[]; ok: boolean }> {
-  const typed = email.toLowerCase()
-  const q = luceneEscapePhrase(typed)
-  const aliasQuery = `app_metadata.login_alias_emails:"${q}" OR app_metadata.credential_bindings.email:"${q}" OR email:"${q}"`
-  const identityQuery = `identities.profileData.email:"${q}"`
-  const results = await Promise.allSettled([
-    getUsersByEmail(typed),
-    searchUsersStrict(aliasQuery),
-    searchUsersStrict(identityQuery),
-  ])
-  return aggregateCandidateLookups(results)
+async function enumerateAddEmailCandidates(): Promise<{
+  candidates: AddEmailCandidate[]
+  ok: boolean
+}> {
+  return enumerateOwnershipCandidates<Auth0User>({
+    fetchPage: async (page, perPage) => {
+      const res = await listUsersPage(page, perPage)
+      return { users: res.users ?? [], total: res.total ?? 0 }
+    },
+    perPage: ADD_EMAIL_ENUM_PER_PAGE,
+    maxPages: ADD_EMAIL_ENUM_MAX_PAGES,
+    identify: (user) => user.user_id ?? "",
+    toCandidate: (user) => ({
+      userId: user.user_id!,
+      ownedEmails: [
+        ...collectIdentityOwnedEmails(user),
+        ...readBindings(user).map((b) => normalizeEmail(b.email)),
+        ...collectAccountVerifiedEmails(user),
+      ].filter((e) => e.length > 0),
+      hasRealIdentity: (user.identities ?? []).some(
+        (id) => id.provider !== "email" && id.provider !== "sms",
+      ),
+    }),
+  })
 }
 
 /**
