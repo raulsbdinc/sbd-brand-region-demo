@@ -57,12 +57,14 @@ import type { OtherSite } from "@/lib/claims"
 import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
 import {
   planEmailPasswordAction,
+  emailPasswordActionAriaLabel,
   shouldOfferPostVerificationPassword,
 } from "@/lib/email-password-actions"
 import {
   planBrandPasswordRows,
   accountCredentialFactsFromMethods,
   resolveProfilePasswordSections,
+  planSignInPasswordRows,
   type ProfileBrand,
 } from "@/lib/brand-password-actions"
 import type { BrandId } from "@/lib/types"
@@ -355,6 +357,7 @@ export function CustomerProfile({
                 live={live}
                 primaryEmail={email}
                 hideBrandPasswordControls={showBrandSection}
+                perEmailManaged={showPerEmailActions}
               />
 
         <DeleteSection live={live} onClosed={() => logout()} />
@@ -925,7 +928,12 @@ function EmailPasswordActionRow({
         <span className="min-w-0 text-xs text-muted-foreground">
           This email has its own password.
         </span>
-        <ChangePasswordDialog target={target} live={live} onChanged={onDone} />
+        <ChangePasswordDialog
+          target={target}
+          live={live}
+          onChanged={onDone}
+          triggerAriaLabel={emailPasswordActionAriaLabel("change", email)}
+        />
       </div>
     )
   }
@@ -940,6 +948,7 @@ function EmailPasswordActionRow({
         secondaryEmail={email}
         primaryEmail={primaryEmail}
         triggerLabel="Set separate password"
+        triggerAriaLabel={emailPasswordActionAriaLabel("set-separate", email)}
         onActivated={onDone}
       />
     </div>
@@ -3215,12 +3224,20 @@ function ChangePasswordDialog({
   live,
   onChanged,
   triggerLabel = "Change password",
+  triggerAriaLabel,
 }: {
   target: ChangeTarget
   live: boolean
   onChanged?: () => void
   /** Visible trigger label; the Brand section passes "Change {Brand} password". */
   triggerLabel?: string
+  /**
+   * Accessible name for the trigger when the visible label is ambiguous. The
+   * per-email rows keep the compact "Change password" text but pass
+   * "Change password for {email}" here so screen readers get the exact target
+   * (GLSCM-4834).
+   */
+  triggerAriaLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const [current, setCurrent] = useState("")
@@ -3298,7 +3315,7 @@ function ChangePasswordDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger
         render={
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" aria-label={triggerAriaLabel}>
             {triggerLabel}
           </Button>
         }
@@ -3465,11 +3482,14 @@ function ActivatePerEmailDialog({
   secondaryEmail,
   primaryEmail,
   triggerLabel = "Set separate password",
+  triggerAriaLabel,
   onActivated,
 }: {
   secondaryEmail: string
   primaryEmail: string | null
   triggerLabel?: string
+  /** Accessible name naming the exact email (GLSCM-4834). */
+  triggerAriaLabel?: string
   onActivated?: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -3654,16 +3674,38 @@ function ActivatePerEmailDialog({
 function PasswordCredentials({
   live,
   hideBrandPasswordControls = false,
+  perEmailManaged = false,
 }: {
   live: boolean
   hideBrandPasswordControls?: boolean
+  /**
+   * Model 3 (per-email): password management is single-source beside each email
+   * in the Email addresses section. When true, the sign-in list shows ONE
+   * non-action summary row instead of repeating each credential (which would
+   * otherwise duplicate the change actions and surface a confusing brand-DB
+   * "DeWalt password" row inside a per-email model) — GLSCM-4834.
+   */
+  perEmailManaged?: boolean
 }) {
+  const rows = planSignInPasswordRows({ perEmailManaged })
+
   const { data: methodsData, error: methodsError } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
-  }>(live ? "/api/account/login-methods" : null, fetcher, {
+  }>(live && rows.mode === "credentials" ? "/api/account/login-methods" : null, fetcher, {
     onError: (err) => warnUnavailable("Passwords", (err as { status?: number })?.status),
   })
+
+  // Model 3: point up to the Email addresses section — no per-credential rows.
+  if (rows.mode === "summary") {
+    return (
+      <MethodRow
+        icon={<KeyRound className="size-4" />}
+        name={rows.name}
+        line={rows.line}
+      />
+    )
+  }
 
   // Still loading: no data and no error yet. Restrained placeholder — never a
   // fabricated "Account password".
@@ -3717,6 +3759,7 @@ function SignInSection({
   live,
   primaryEmail,
   hideBrandPasswordControls = false,
+  perEmailManaged = false,
 }: {
   live: boolean
   primaryEmail: string | null
@@ -3728,6 +3771,12 @@ function SignInSection({
    * a pointer to the Brand passwords section (GLSCM-4834).
    */
   hideBrandPasswordControls?: boolean
+  /**
+   * When the Email addresses section owns per-email password actions (Model 3),
+   * the sign-in list collapses the individual password credential rows into one
+   * non-action "Email passwords" summary row (GLSCM-4834).
+   */
+  perEmailManaged?: boolean
 }) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section

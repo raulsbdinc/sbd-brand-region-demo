@@ -8,7 +8,12 @@ import assert from "node:assert/strict"
 import {
   accountCredentialFactsFromMethods,
   resolveProfilePasswordSections,
+  planSignInPasswordRows,
 } from "./brand-password-actions.ts"
+import {
+  planPerEmailPasswordControls,
+  emailPasswordActionAriaLabel,
+} from "./email-password-actions.ts"
 
 // Host-gate shorthands for the two UK storefronts and EU.
 const DEWALT_UK = { hostPerEmailModel: true, hostPerBrandModel: false }
@@ -163,4 +168,85 @@ test("EU shows neither section regardless of account facts", () => {
     assert.equal(s.showPerEmailActions, false)
     assert.equal(s.showBrandSection, false)
   }
+})
+
+// --- Model 3 single-source: exactly one control per email, no duplicates ----
+// Real regression (giledos375@bowlfuel.com on DeWalt UK): the DOM had FIVE
+// "Change password" buttons — one beside each of the two emails PLUS three more
+// in "How you sign in" (a spurious "DeWalt password" row and a Password row per
+// email). Model 3 password management must be single-source: the actionable
+// controls live ONLY beside each email, and the sign-in list collapses to one
+// non-action summary row.
+
+// Mirrors the real giledos account: primary + verified secondary, both with
+// their own per-email password.
+const GILEDOS = {
+  primaryEmail: "giledos375@bowlfuel.com",
+  perEmailActivationAvailable: true,
+  verifiedEmails: ["giledos375@bowlfuel.com", "fatrazigna@necub.com"],
+  backedPerEmailEmails: ["giledos375@bowlfuel.com", "fatrazigna@necub.com"],
+}
+
+test("giledos Model 3 yields exactly two actionable password controls", () => {
+  const controls = planPerEmailPasswordControls(GILEDOS)
+  assert.equal(controls.length, 2)
+  for (const c of controls) {
+    assert.equal(c.kind, "change")
+    assert.equal(c.label, "Change password") // compact visible label
+  }
+})
+
+test("giledos per-email controls carry exact per-email accessible names", () => {
+  const controls = planPerEmailPasswordControls(GILEDOS)
+  const byEmail = new Map(controls.map((c) => [c.email, c.ariaLabel]))
+  assert.equal(
+    byEmail.get("giledos375@bowlfuel.com"),
+    "Change password for giledos375@bowlfuel.com",
+  )
+  assert.equal(
+    byEmail.get("fatrazigna@necub.com"),
+    "Change password for fatrazigna@necub.com",
+  )
+})
+
+test("a not-yet-activated alternate offers Set separate password with exact name", () => {
+  const controls = planPerEmailPasswordControls({
+    ...GILEDOS,
+    backedPerEmailEmails: ["giledos375@bowlfuel.com"], // secondary not activated
+  })
+  const secondary = controls.find((c) => c.email === "fatrazigna@necub.com")
+  assert.ok(secondary)
+  assert.equal(secondary?.kind, "set-separate")
+  assert.equal(secondary?.label, "Set separate password")
+  assert.equal(
+    secondary?.ariaLabel,
+    "Set separate password for fatrazigna@necub.com",
+  )
+})
+
+test("aria-label helper always names the exact email; none => empty", () => {
+  assert.equal(
+    emailPasswordActionAriaLabel("change", "a@x.com"),
+    "Change password for a@x.com",
+  )
+  assert.equal(
+    emailPasswordActionAriaLabel("set-separate", "b@y.com"),
+    "Set separate password for b@y.com",
+  )
+  assert.equal(emailPasswordActionAriaLabel("none", "c@z.com"), "")
+})
+
+test("sign-in list collapses to one non-action Email passwords summary row (Model 3)", () => {
+  const rows = planSignInPasswordRows({ perEmailManaged: true })
+  assert.equal(rows.mode, "summary")
+  assert.equal(rows.name, "Email passwords")
+  assert.equal(rows.line, "Managed beside each email address above.")
+  // The summary shape carries no per-credential rows and thus no brand label:
+  // there is no way to render a "DeWalt password" change action from it.
+  assert.equal(JSON.stringify(rows).includes("password for"), false)
+})
+
+test("sign-in list keeps per-credential rows when per-email is NOT managed", () => {
+  const rows = planSignInPasswordRows({ perEmailManaged: false })
+  assert.equal(rows.mode, "credentials")
 })

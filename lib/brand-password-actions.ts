@@ -27,6 +27,35 @@ export function profileBrandName(brand: ProfileBrand): string {
   return BRAND_DISPLAY[brand]
 }
 
+// --- How the "How you sign in" list presents password credentials -----------
+//
+// GLSCM-4834 (follow-up 4): a Model 3 account is provisioned against a brand DB
+// connection, so its login-methods legitimately include BOTH per-email and a
+// brand credential. If the sign-in list rendered each of those as its own
+// "Change password" row while the Email addresses section ALSO showed a change
+// action beside each email, the customer saw the same action up to five times —
+// including a confusing "DeWalt password" row inside a per-email model. When the
+// per-email actions own password management (Model 3), the sign-in list must
+// NOT repeat the individual credential rows; it shows one non-action summary
+// row that points up to the Email addresses section instead.
+export type SignInPasswordRows =
+  | { mode: "summary"; name: string; line: string }
+  | { mode: "credentials" }
+
+export function planSignInPasswordRows(input: {
+  /** True when the Email addresses section owns per-email password actions. */
+  perEmailManaged: boolean
+}): SignInPasswordRows {
+  if (input.perEmailManaged) {
+    return {
+      mode: "summary",
+      name: "Email passwords",
+      line: "Managed beside each email address above.",
+    }
+  }
+  return { mode: "credentials" }
+}
+
 /** Whether a value is one of the two per-brand ids. */
 export function isProfileBrand(value: unknown): value is ProfileBrand {
   return value === "dewalt" || value === "stanley"

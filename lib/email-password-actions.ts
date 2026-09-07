@@ -87,6 +87,65 @@ export function emailPasswordActionLabel(kind: EmailPasswordActionKind): string 
 }
 
 /**
+ * The exact accessible name for a beside-email action, always naming the exact
+ * email. The compact VISIBLE label may stay "Change password" because the email
+ * is directly adjacent, but the aria-label must disambiguate for screen readers
+ * (GLSCM-4834): e.g. "Change password for fatrazigna@necub.com".
+ */
+export function emailPasswordActionAriaLabel(
+  kind: EmailPasswordActionKind,
+  email: string,
+): string {
+  const label = emailPasswordActionLabel(kind)
+  if (!label) return ""
+  return `${label} for ${email}`
+}
+
+export interface PerEmailPasswordControl {
+  /** The exact email the control targets (as displayed, not normalized). */
+  email: string
+  /** The single actionable kind for this row (never "none"). */
+  kind: Exclude<EmailPasswordActionKind, "none">
+  /** Compact visible label ("Change password" / "Set separate password"). */
+  label: string
+  /** Accessible name, always naming the exact email. */
+  ariaLabel: string
+}
+
+/**
+ * Aggregate the beside-email password controls across every verified email —
+ * exactly the actionable rows the "Email addresses" section renders. Model 3
+ * (UK) is single-source: this is the ONLY place a per-email password action is
+ * offered, so the "How you sign in" list must not repeat them. Off Model 3 (EU)
+ * every row is "none" and this returns [].
+ */
+export function planPerEmailPasswordControls(input: {
+  primaryEmail: string | null
+  perEmailActivationAvailable: boolean
+  verifiedEmails: string[]
+  backedPerEmailEmails: string[]
+}): PerEmailPasswordControl[] {
+  const controls: PerEmailPasswordControl[] = []
+  for (const email of input.verifiedEmails) {
+    const kind = planEmailPasswordAction({
+      email,
+      primaryEmail: input.primaryEmail,
+      perEmailActivationAvailable: input.perEmailActivationAvailable,
+      verifiedEmails: input.verifiedEmails,
+      backedPerEmailEmails: input.backedPerEmailEmails,
+    })
+    if (kind === "none") continue
+    controls.push({
+      email,
+      kind,
+      label: emailPasswordActionLabel(kind),
+      ariaLabel: emailPasswordActionAriaLabel(kind, email),
+    })
+  }
+  return controls
+}
+
+/**
  * After a NEW alternate email is verified in /profile, decide whether to show
  * the immediate "give this email its own password" next step for that exact
  * address. True only on the UK Model-3 experience for a genuine alternate (a
