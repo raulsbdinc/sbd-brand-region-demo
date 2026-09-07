@@ -55,7 +55,10 @@ import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
 import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
-import { eligibleActivationEmails } from "@/lib/per-email-activation"
+import {
+  planEmailPasswordAction,
+  shouldOfferPostVerificationPassword,
+} from "@/lib/email-password-actions"
 import {
   passwordCredentialLabel,
   passwordCredentialLine,
@@ -294,7 +297,11 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
           onPictureChange={setDisplayPicture}
         />
 
-        <EmailSection live={live} primaryEmail={email} />
+              <EmailSection
+                live={live}
+                primaryEmail={email}
+                modelSelectionAvailable={modelSelectionAvailable}
+              />
 
         <PhoneSection live={live} />
 
@@ -302,7 +309,7 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
 
         <CommunicationSection live={live} />
 
-        <SignInSection live={live} primaryEmail={email} modelSelectionAvailable={modelSelectionAvailable} />
+              <SignInSection live={live} primaryEmail={email} />
 
         <DeleteSection live={live} onClosed={() => logout()} />
       </div>
@@ -530,7 +537,15 @@ interface AlternateEmail {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
+function EmailSection({
+  live,
+  primaryEmail,
+  modelSelectionAvailable,
+}: {
+  live: boolean
+  primaryEmail: string | null
+  modelSelectionAvailable: boolean
+}) {
   const { data, error, mutate } = useSWR<{
     configured: boolean
     user: {
@@ -539,6 +554,16 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
       app_metadata?: { primary_email?: string }
     }
   }>(live ? "/api/account/profile" : null, fetcher)
+
+  // UK Model 3 only: read the REAL password credentials so each verified email
+  // row can offer the right beside-email action — "Change password" when the
+  // address already has its own per-email password, or "Set separate password"
+  // when it doesn't yet. EU Models 1/2 never fetch this (single Account
+  // password), so the extra call is UK-scoped.
+  const { data: methodsData, mutate: mutateMethods } = useSWR<{
+    configured: boolean
+    methods: PasswordMethodView[]
+  }>(live && modelSelectionAvailable ? "/api/account/login-methods" : null, fetcher)
 
   if (error) warnUnavailable("Email addresses", (error as { status?: number }).status)
 
@@ -594,6 +619,31 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
     ...googleEmails.map((g) => g.email.toLowerCase()),
   ]
 
+  // Per-email password credentials keyed by address (UK Model 3). Used both to
+  // decide each row's action and to build the exact change target for an email
+  // that already has its own password.
+  const perEmailByEmail = new Map<string, PasswordMethodView>(
+    (methodsData?.methods ?? [])
+      .filter((m) => m.kind === "password" && m.connectionKey === "per-email" && m.email)
+      .map((m) => [(m.email as string).toLowerCase(), m]),
+  )
+  const backedPerEmailEmails = [...perEmailByEmail.keys()]
+
+  // Every verified, owned email on the account — the set the pure planner uses
+  // to confirm a row is genuinely part of this account before offering actions.
+  const allVerifiedEmails = [
+    ...(accountEmail ? [accountEmail] : []),
+    ...alternates.map((a) => a.email),
+    ...googleEmails.map((g) => g.email),
+  ]
+
+  // Refresh both the profile and the credential list after a password action so
+  // a row flips from "Set separate password" to "Change password" in place.
+  function refreshEmailsAndMethods() {
+    void mutate()
+    void mutateMethods()
+  }
+
   return (
     <ProfileCard
       icon={<Mail className="size-5" />}
@@ -605,32 +655,44 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
       ) : (
         <ul className="space-y-2">
           {accountEmail ? (
-            <li className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3">
-              <span
-                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(accountEmail) ? "font-medium" : ""}`}
-              >
-                {accountEmail}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isPrimary(accountEmail) ? (
-                  <Badge tone="brand">
-                    <Star className="size-3" />
-                    Primary
-                  </Badge>
-                ) : (
-                  <>
-                    <Badge>Signs you in too</Badge>
-                    <MakePrimaryButton
-                      email={accountEmail}
-                      onDone={() => {
-                        setPrimaryError(null)
-                        mutate()
-                      }}
-                      onError={(m) => setPrimaryError(m || null)}
-                    />
-                  </>
-                )}
+            <li className="rounded-xl border border-border bg-background px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={`min-w-0 truncate text-sm text-foreground ${isPrimary(accountEmail) ? "font-medium" : ""}`}
+                >
+                  {accountEmail}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isPrimary(accountEmail) ? (
+                    <Badge tone="brand">
+                      <Star className="size-3" />
+                      Primary
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge>Signs you in too</Badge>
+                      <MakePrimaryButton
+                        email={accountEmail}
+                        onDone={() => {
+                          setPrimaryError(null)
+                          mutate()
+                        }}
+                        onError={(m) => setPrimaryError(m || null)}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
+              <EmailPasswordActionRow
+                email={accountEmail}
+                primaryEmail={accountEmail}
+                live={live}
+                perEmailActivationAvailable={modelSelectionAvailable}
+                verifiedEmails={allVerifiedEmails}
+                backedPerEmailEmails={backedPerEmailEmails}
+                method={perEmailByEmail.get(accountEmail.toLowerCase())}
+                onDone={refreshEmailsAndMethods}
+              />
             </li>
           ) : (
             <li>
@@ -640,66 +702,90 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
           {alternates.map((a) => (
             <li
               key={a.user_id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
+              className="rounded-xl border border-border bg-background px-4 py-3"
             >
-              <span
-                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(a.email) ? "font-medium" : ""}`}
-              >
-                {a.email}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isPrimary(a.email) ? (
-                  <Badge tone="brand">
-                    <Star className="size-3" />
-                    Primary
-                  </Badge>
-                ) : (
-                  <>
-                    <Badge>Signs you in too</Badge>
-                    <MakePrimaryButton
-                      email={a.email}
-                      onDone={() => {
-                        setPrimaryError(null)
-                        mutate()
-                      }}
-                      onError={(m) => setPrimaryError(m || null)}
-                    />
-                  </>
-                )}
-                <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={`min-w-0 truncate text-sm text-foreground ${isPrimary(a.email) ? "font-medium" : ""}`}
+                >
+                  {a.email}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isPrimary(a.email) ? (
+                    <Badge tone="brand">
+                      <Star className="size-3" />
+                      Primary
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge>Signs you in too</Badge>
+                      <MakePrimaryButton
+                        email={a.email}
+                        onDone={() => {
+                          setPrimaryError(null)
+                          mutate()
+                        }}
+                        onError={(m) => setPrimaryError(m || null)}
+                      />
+                    </>
+                  )}
+                  <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
+                </div>
               </div>
+              <EmailPasswordActionRow
+                email={a.email}
+                primaryEmail={accountEmail}
+                live={live}
+                perEmailActivationAvailable={modelSelectionAvailable}
+                verifiedEmails={allVerifiedEmails}
+                backedPerEmailEmails={backedPerEmailEmails}
+                method={perEmailByEmail.get(a.email.toLowerCase())}
+                onDone={refreshEmailsAndMethods}
+              />
             </li>
           ))}
           {googleEmails.map((g) => (
             <li
               key={g.user_id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
+              className="rounded-xl border border-border bg-background px-4 py-3"
             >
-              <span
-                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(g.email) ? "font-medium" : ""}`}
-              >
-                {g.email}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isPrimary(g.email) ? (
-                  <Badge tone="brand">
-                    <Star className="size-3" />
-                    Primary
-                  </Badge>
-                ) : (
-                  <>
-                    <Badge>Signs you in too</Badge>
-                    <MakePrimaryButton
-                      email={g.email}
-                      onDone={() => {
-                        setPrimaryError(null)
-                        mutate()
-                      }}
-                      onError={(m) => setPrimaryError(m || null)}
-                    />
-                  </>
-                )}
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={`min-w-0 truncate text-sm text-foreground ${isPrimary(g.email) ? "font-medium" : ""}`}
+                >
+                  {g.email}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isPrimary(g.email) ? (
+                    <Badge tone="brand">
+                      <Star className="size-3" />
+                      Primary
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge>Signs you in too</Badge>
+                      <MakePrimaryButton
+                        email={g.email}
+                        onDone={() => {
+                          setPrimaryError(null)
+                          mutate()
+                        }}
+                        onError={(m) => setPrimaryError(m || null)}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
+              <EmailPasswordActionRow
+                email={g.email}
+                primaryEmail={accountEmail}
+                live={live}
+                perEmailActivationAvailable={modelSelectionAvailable}
+                verifiedEmails={allVerifiedEmails}
+                backedPerEmailEmails={backedPerEmailEmails}
+                method={perEmailByEmail.get(g.email.toLowerCase())}
+                onDone={refreshEmailsAndMethods}
+              />
             </li>
           ))}
         </ul>
@@ -715,10 +801,12 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
         adding ? (
           <AddEmailFlow
             knownEmails={knownEmails}
+            primaryEmail={accountEmail}
+            perEmailActivationAvailable={modelSelectionAvailable}
             onCancel={() => setAdding(false)}
             onLinked={() => {
               setAdding(false)
-              mutate()
+              refreshEmailsAndMethods()
             }}
           />
         ) : (
@@ -741,13 +829,88 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
   )
 }
 
+// The address-specific password action shown directly beneath each verified
+// email in the Email addresses section (GLSCM-4834). It renders inside the
+// existing email <li> as a divided sub-row — NOT a nested card — so the control
+// sits right where the customer is looking. The pure planner decides the single
+// action; the label + dialog follow from it:
+//   • "set-separate" → "Set separate password" (existing per-email activation)
+//   • "change"       → "Change password" (existing inline change dialog)
+//   • "none"         → nothing (EU Models 1/2, or the primary before activation)
+// Both dialogs reuse the existing endpoints/forms — no redirect, no standalone
+// sign-in/recover experience.
+function EmailPasswordActionRow({
+  email,
+  primaryEmail,
+  live,
+  perEmailActivationAvailable,
+  verifiedEmails,
+  backedPerEmailEmails,
+  method,
+  onDone,
+}: {
+  email: string
+  primaryEmail: string | null
+  live: boolean
+  perEmailActivationAvailable: boolean
+  verifiedEmails: string[]
+  backedPerEmailEmails: string[]
+  method?: PasswordMethodView
+  onDone: () => void
+}) {
+  const kind = planEmailPasswordAction({
+    email,
+    primaryEmail,
+    perEmailActivationAvailable,
+    verifiedEmails,
+    backedPerEmailEmails,
+  })
+
+  if (kind === "none") return null
+
+  if (kind === "change") {
+    // Only offer an inline change when we can safely target the credential from
+    // the browser (a per-email binding id). Otherwise show nothing here — the
+    // credential is still changeable from the "How you sign in" list.
+    const target = method ? changeTargetForMethod(method) : null
+    if (!target) return null
+    return (
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        <span className="min-w-0 text-xs text-muted-foreground">
+          This email has its own password.
+        </span>
+        <ChangePasswordDialog target={target} live={live} onChanged={onDone} />
+      </div>
+    )
+  }
+
+  // set-separate
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+      <span className="min-w-0 text-xs text-muted-foreground">
+        Give this email its own password so it signs in independently.
+      </span>
+      <ActivatePerEmailDialog
+        secondaryEmail={email}
+        primaryEmail={primaryEmail}
+        triggerLabel="Set separate password"
+        onActivated={onDone}
+      />
+    </div>
+  )
+}
+
 /** The inline enter-address → enter-passcode → done flow. */
 function AddEmailFlow({
   knownEmails,
+  primaryEmail,
+  perEmailActivationAvailable,
   onCancel,
   onLinked,
 }: {
   knownEmails: string[]
+  primaryEmail: string | null
+  perEmailActivationAvailable: boolean
   onCancel: () => void
   onLinked: () => void
 }) {
@@ -832,7 +995,12 @@ function AddEmailFlow({
       }
       setBusy(false)
       setStep("done")
-      setTimeout(() => onLinked(), 1800)
+      // On the UK Model-3 experience we keep the person in /profile on the done
+      // step so they can act on the immediate "set a separate password" next
+      // step for this exact address. Everywhere else, auto-close as before.
+      if (!perEmailActivationAvailable) {
+        setTimeout(() => onLinked(), 1800)
+      }
     } catch {
       setError("Something went wrong. Please try again.")
       setBusy(false)
@@ -922,17 +1090,41 @@ function AddEmailFlow({
           </Button>
         </div>
       ) : (
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-            <ShieldCheck className="size-5" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold text-foreground">Address confirmed</p>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{normalizedEmail}</span> is now on your
-              account. You can use it to sign in from now on.
-            </p>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+              <ShieldCheck className="size-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-foreground">Address confirmed</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{normalizedEmail}</span> is now on your
+                account. You can use it to sign in from now on.
+              </p>
+            </div>
           </div>
+          {shouldOfferPostVerificationPassword({
+            perEmailActivationAvailable,
+            verifiedEmail: normalizedEmail,
+            primaryEmail,
+          }) ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2">
+              <span className="min-w-0 text-xs text-muted-foreground">
+                Next: give this email its own password so it signs in independently.
+              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                <ActivatePerEmailDialog
+                  secondaryEmail={normalizedEmail}
+                  primaryEmail={primaryEmail}
+                  triggerLabel="Set separate password"
+                  onActivated={onLinked}
+                />
+                <Button type="button" variant="ghost" size="sm" onClick={onLinked}>
+                  Not now
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -2905,10 +3097,12 @@ function PasswordCredentialRow({
 function ActivatePerEmailDialog({
   secondaryEmail,
   primaryEmail,
+  triggerLabel = "Set separate password",
   onActivated,
 }: {
   secondaryEmail: string
   primaryEmail: string | null
+  triggerLabel?: string
   onActivated?: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -2978,7 +3172,7 @@ function ActivatePerEmailDialog({
         render={
           <Button variant="outline" size="sm">
             <Plus className="size-4" />
-            Add password
+            {triggerLabel}
           </Button>
         }
       />
@@ -3081,32 +3275,22 @@ function ActivatePerEmailDialog({
 }
 
 // The password-credentials block inside "How you sign in". Reads the REAL
-// credentials from login-methods (one reset per credential) and offers a
-// restrained "Add password" command driven by server-computed availability.
+// credentials from login-methods (one reset per credential).
 //
-// It returns its rows as DIRECT <li> children (via MethodRow, which is an <li>,
-// and an <li> Add-password action) so the surrounding <ul> stays valid — no
-// <li> nested in <li>, no wrapping <div>. Loading and failure never fabricate a
-// credential: they render honest neutral <li> states, and a genuinely
-// password-less account shows an honest empty row.
-function PasswordCredentials({ live, perEmailActivationAvailable }: { live: boolean; perEmailActivationAvailable: boolean }) {
-  const {
-    data: methodsData,
-    error: methodsError,
-    mutate: mutateMethods,
-  } = useSWR<{
+// The per-email "set separate password" activation now lives directly beside
+// each verified email in the Email addresses section (GLSCM-4834), where it is
+// discoverable — so this block no longer renders activation rows. It returns
+// its rows as DIRECT <li> children (via MethodRow, which is an <li>) so the
+// surrounding <ul> stays valid — no <li> nested in <li>, no wrapping <div>.
+// Loading and failure never fabricate a credential: they render honest neutral
+// <li> states, and a genuinely password-less account shows an honest empty row.
+function PasswordCredentials({ live }: { live: boolean }) {
+  const { data: methodsData, error: methodsError } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
   }>(live ? "/api/account/login-methods" : null, fetcher, {
     onError: (err) => warnUnavailable("Passwords", (err as { status?: number })?.status),
   })
-
-  // Profile gives us the account's verified emails so we know which alternate
-  // addresses are eligible to be given their OWN password (Model 3 activation).
-  const { data: profileData, mutate: mutateProfile } = useSWR<{
-    configured: boolean
-    user: { email?: string; identities?: Identity[] }
-  }>(live ? "/api/account/profile" : null, fetcher)
 
   // Still loading: no data and no error yet. Restrained placeholder — never a
   // fabricated "Account password".
@@ -3134,44 +3318,6 @@ function PasswordCredentials({ live, perEmailActivationAvailable }: { live: bool
 
   const passwords = (methodsData?.methods ?? []).filter((m) => m.kind === "password")
 
-  // Emails that ALREADY have their own per-email password (so they must not be
-  // offered activation again). Derived from the real credential rows.
-  const backedPerEmailEmails = passwords
-    .filter((m) => m.connectionKey === "per-email" && m.email)
-    .map((m) => (m.email as string).toLowerCase())
-
-  // Verified alternate emails on the account (the "email" OTP identities).
-  const accountEmail = profileData?.user?.email ?? null
-  const verifiedEmails = [
-    ...(accountEmail ? [accountEmail] : []),
-    ...(profileData?.user?.identities ?? [])
-      .filter((id) => id.provider === "email")
-      .map((id) => ((id.profileData?.email as string | undefined) ?? id.user_id) || "")
-      .filter(Boolean),
-  ]
-
-  // Alternate emails eligible for an "Add password" activation: verified, not
-  // the primary, and not already backed by a per-email password.
-  //
-  // Model 3 (per-email passwords) is a UK-only experience. On EU Models 1/2 the
-  // account has ONE shared password and its linked alternates sign in with that
-  // same shared password + passcodes — offering per-email activation there would
-  // blur the shared-password model, so we suppress activation entirely unless the
-  // Model-3 experience is enabled for this storefront.
-  const eligible =
-    perEmailActivationAvailable && accountEmail
-      ? eligibleActivationEmails({
-          primaryEmail: accountEmail,
-          verifiedEmails,
-          backedPerEmailEmails,
-        })
-      : []
-
-  function refreshAfterActivation() {
-    void mutateMethods()
-    void mutateProfile()
-  }
-
   return (
     <>
       {passwords.length === 0 ? (
@@ -3185,24 +3331,6 @@ function PasswordCredentials({ live, perEmailActivationAvailable }: { live: bool
           <PasswordCredentialRow key={m.key} method={m} live={live} />
         ))
       )}
-
-      {/* Email-specific "Add password" activation rows: one per verified
-          alternate email that doesn't yet have its own password. */}
-      {eligible.map((addr) => (
-        <MethodRow
-          key={`activate-${addr}`}
-          icon={<KeyRound className="size-4" />}
-          name={`Add a password for ${addr}`}
-          line={`${addr} signs in with an email passcode today. Give it its own password so it signs in independently from your other emails.`}
-          right={
-            <ActivatePerEmailDialog
-              secondaryEmail={addr}
-              primaryEmail={accountEmail}
-              onActivated={refreshAfterActivation}
-            />
-          }
-        />
-      ))}
     </>
   )
 }
@@ -3210,11 +3338,9 @@ function PasswordCredentials({ live, perEmailActivationAvailable }: { live: bool
 function SignInSection({
   live,
   primaryEmail,
-  modelSelectionAvailable,
 }: {
   live: boolean
   primaryEmail: string | null
-  modelSelectionAvailable: boolean
 }) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section
@@ -3245,7 +3371,7 @@ function SignInSection({
         <ul className="space-y-2">
           {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).
                   Renders its own <li> rows directly into this <ul>. */}
-          <PasswordCredentials live={live} perEmailActivationAvailable={modelSelectionAvailable} />
+          <PasswordCredentials live={live} />
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow
