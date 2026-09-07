@@ -61,6 +61,8 @@ import {
 } from "@/lib/email-password-actions"
 import {
   planBrandPasswordRows,
+  accountCredentialFactsFromMethods,
+  resolveProfilePasswordSections,
   type ProfileBrand,
 } from "@/lib/brand-password-actions"
 import type { BrandId } from "@/lib/types"
@@ -264,7 +266,7 @@ export function CustomerProfile({
   // legitimately exposes each password credential's connection key/brand to the
   // browser. A pure shared-password account (cases 1 & 2) yields the unchanged
   // wording; while loading (or if it can't load) we default to that too.
-  const { data: methodsData } = useSWR<{
+  const { data: methodsData, error: methodsError } = useSWR<{
     methods?: { kind?: string; connectionKey?: string | null; brand?: string | null }[]
   }>(live ? "/api/account/login-methods" : null, fetcher)
   const passwordModel = summarizePasswordModelFromMethods(
@@ -272,6 +274,23 @@ export function CustomerProfile({
       typeof summarizePasswordModelFromMethods
     >[0],
   )
+
+  // Which discoverable password sections to render is ACCOUNT-aware, not
+  // host-only (GLSCM-4834): a Model 4 account (separate DeWalt + Stanley
+  // passwords) must show the Brand passwords section on EITHER UK storefront,
+  // while a true Model 3 account keeps its per-email actions on DeWalt UK. The
+  // host gates only pick the default for an account with no scoped credentials
+  // yet. We wait for the login-methods result before trusting the model when a
+  // real session exists, so a Model 4 account never flashes the wrong controls;
+  // in demo mode (no management) we fall back to the host default immediately.
+  const credsResolved = !live || Boolean(methodsData) || Boolean(methodsError)
+  const { showPerEmailActions, showBrandSection } = credsResolved
+    ? resolveProfilePasswordSections({
+        hostPerEmailModel: perEmailModelAvailable,
+        hostPerBrandModel: perBrandModelAvailable,
+        facts: accountCredentialFactsFromMethods(methodsData?.methods ?? []),
+      })
+    : { showPerEmailActions: false, showBrandSection: false }
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
@@ -319,10 +338,10 @@ export function CustomerProfile({
               <EmailSection
                 live={live}
                 primaryEmail={email}
-                modelSelectionAvailable={perEmailModelAvailable}
+                modelSelectionAvailable={showPerEmailActions}
               />
 
-        {perBrandModelAvailable && deploymentBrand ? (
+        {showBrandSection && deploymentBrand ? (
           <BrandPasswordSection live={live} deploymentBrand={deploymentBrand} />
         ) : null}
 
@@ -332,7 +351,11 @@ export function CustomerProfile({
 
         <CommunicationSection live={live} />
 
-              <SignInSection live={live} primaryEmail={email} />
+              <SignInSection
+                live={live}
+                primaryEmail={email}
+                hideBrandPasswordControls={showBrandSection}
+              />
 
         <DeleteSection live={live} onClosed={() => logout()} />
       </div>
@@ -1020,6 +1043,7 @@ function BrandPasswordSection({
                           target={changeTarget}
                           live={live}
                           onChanged={refresh}
+                          triggerLabel={`Change ${row.brandName} password`}
                         />
                       ) : (
                         <span className="text-xs text-muted-foreground">
@@ -3077,6 +3101,12 @@ interface ChangeTarget {
   selector: PasswordChangeSelector
   /** Credential name, e.g. "Account password" / "DeWalt password for a@x.com". */
   label: string
+  /**
+   * Properly-cased dialog title + accessible name, e.g. "Change DeWalt password
+   * for a@x.com". Kept separate from `label` so the brand stays capitalized —
+   * lower-casing the label produced the wrong "Change dewalt password…".
+   */
+  title: string
   /** Plain-English scope line shown under the title. */
   line: string
   /** Optional brand chip. */
@@ -3101,6 +3131,7 @@ function changeTargetForMethod(method: PasswordMethodView): ChangeTarget | null 
     return {
       selector: { bindingId: method.resetBindingId },
       label: `Password for ${email ?? "this email"}`,
+      title: `Change password for ${email ?? "this email"}`,
       line: `${email ?? "This email"} has its own password. Changing it will not affect your other sign-in emails.`,
     }
   }
@@ -3111,6 +3142,8 @@ function changeTargetForMethod(method: PasswordMethodView): ChangeTarget | null 
     return {
       selector: { bindingId: method.resetBindingId },
       label: `${brandName} password${email ? ` for ${email}` : ""}`,
+      // Capitalized brand + exact email — never lower-cased.
+      title: `Change ${brandName} password${email ? ` for ${email}` : ""}`,
       line: `This is your ${brandName} sign-in password${email ? ` for ${email}` : ""}. Changing it will not affect your other brand password.`,
       brand: key,
     }
@@ -3120,6 +3153,7 @@ function changeTargetForMethod(method: PasswordMethodView): ChangeTarget | null 
   return {
     selector: { scope: "shared" },
     label: "Account password",
+    title: "Change account password",
     line: "Works with all your verified account emails across DeWalt and Stanley sites.",
   }
 }
@@ -3180,10 +3214,13 @@ function ChangePasswordDialog({
   target,
   live,
   onChanged,
+  triggerLabel = "Change password",
 }: {
   target: ChangeTarget
   live: boolean
   onChanged?: () => void
+  /** Visible trigger label; the Brand section passes "Change {Brand} password". */
+  triggerLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const [current, setCurrent] = useState("")
@@ -3262,14 +3299,14 @@ function ChangePasswordDialog({
       <DialogTrigger
         render={
           <Button variant="outline" size="sm">
-            Change password
+            {triggerLabel}
           </Button>
         }
       />
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
-            <span>Change {target.label.toLowerCase()}</span>
+            <span>{target.title}</span>
             {target.brand ? (
               <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
                 {target.brand === "dewalt" ? "DeWalt" : "Stanley"}
@@ -3379,11 +3416,19 @@ function ChangePasswordDialog({
 function PasswordCredentialRow({
   method,
   live,
+  hideBrandPasswordControls = false,
 }: {
   method: PasswordMethodView
   live: boolean
+  hideBrandPasswordControls?: boolean
 }) {
   const target = method.canReset !== false ? changeTargetForMethod(method) : null
+  const isBrandCredential =
+    method.connectionKey === "dewalt" || method.connectionKey === "stanley"
+  // When the prominent Brand passwords section owns this action, don't render a
+  // second Change control here — point up to it instead so the action isn't
+  // offered twice (GLSCM-4834).
+  const suppressChange = hideBrandPasswordControls && isBrandCredential
 
   return (
     <MethodRow
@@ -3391,7 +3436,11 @@ function PasswordCredentialRow({
       name={passwordCredentialLabel(method)}
       line={passwordCredentialLine(method)}
       right={
-        target ? (
+        suppressChange ? (
+          <span className="text-xs text-muted-foreground">
+            Managed in Brand passwords above
+          </span>
+        ) : target ? (
           <ChangePasswordDialog target={target} live={live} />
         ) : (
           <span
@@ -3602,7 +3651,13 @@ function ActivatePerEmailDialog({
 // surrounding <ul> stays valid — no <li> nested in <li>, no wrapping <div>.
 // Loading and failure never fabricate a credential: they render honest neutral
 // <li> states, and a genuinely password-less account shows an honest empty row.
-function PasswordCredentials({ live }: { live: boolean }) {
+function PasswordCredentials({
+  live,
+  hideBrandPasswordControls = false,
+}: {
+  live: boolean
+  hideBrandPasswordControls?: boolean
+}) {
   const { data: methodsData, error: methodsError } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
@@ -3646,7 +3701,12 @@ function PasswordCredentials({ live }: { live: boolean }) {
         />
       ) : (
         passwords.map((m) => (
-          <PasswordCredentialRow key={m.key} method={m} live={live} />
+          <PasswordCredentialRow
+            key={m.key}
+            method={m}
+            live={live}
+            hideBrandPasswordControls={hideBrandPasswordControls}
+          />
         ))
       )}
     </>
@@ -3656,9 +3716,18 @@ function PasswordCredentials({ live }: { live: boolean }) {
 function SignInSection({
   live,
   primaryEmail,
+  hideBrandPasswordControls = false,
 }: {
   live: boolean
   primaryEmail: string | null
+  /**
+   * When the prominent Brand passwords section is rendered above (Model 4), the
+   * sign-in list must not ALSO show a Change control for each brand password —
+   * that would surface the same action twice. The brand rows still appear here
+   * as informational sign-in methods, but their Change control is replaced with
+   * a pointer to the Brand passwords section (GLSCM-4834).
+   */
+  hideBrandPasswordControls?: boolean
 }) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section
@@ -3689,7 +3758,10 @@ function SignInSection({
         <ul className="space-y-2">
           {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).
                   Renders its own <li> rows directly into this <ul>. */}
-          <PasswordCredentials live={live} />
+          <PasswordCredentials
+            live={live}
+            hideBrandPasswordControls={hideBrandPasswordControls}
+          />
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow

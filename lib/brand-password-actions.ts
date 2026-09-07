@@ -67,6 +67,87 @@ export function profilePasswordModelVisibility(input: {
   }
 }
 
+// --- Account-AWARE section resolution (GLSCM-4834 follow-up) -----------------
+//
+// The host gates above pick which model a UK storefront DEFAULTS to for a fresh
+// account (DeWalt UK → Model 3, Stanley UK → Model 4). But a single canonical
+// account can be a Model 4 account (separate DeWalt + Stanley passwords) and be
+// viewed from EITHER UK storefront. Inferring presentation from the host alone
+// meant a Model 4 account opened on DeWalt UK saw NO brand-password section and
+// the wrong "one password" welcome copy. Presentation must instead follow the
+// account's REAL credentials (from login-methods), with the host only deciding
+// the default for an account that has no scoped credentials yet.
+
+/** What the loaded account actually has, derived from its login-methods. */
+export interface AccountCredentialFacts {
+  /** The account holds at least one per-email (Model 3) password credential. */
+  hasPerEmailCredentials: boolean
+  /** The account holds at least one per-brand (Model 4) password credential. */
+  hasBrandCredentials: boolean
+}
+
+/**
+ * Derive the account credential facts from a login-methods list. Only
+ * password-kind rows with a scoped connection key count; a shared/base password
+ * is neither per-email nor per-brand. Framework-free and structural so the
+ * detection is unit-testable without Auth0 or SWR.
+ */
+export function accountCredentialFactsFromMethods(
+  methods: { kind?: string | null; connectionKey?: string | null }[],
+): AccountCredentialFacts {
+  let hasPerEmailCredentials = false
+  let hasBrandCredentials = false
+  for (const m of methods) {
+    if (m.kind && m.kind !== "password") continue
+    if (m.connectionKey === "per-email") hasPerEmailCredentials = true
+    else if (m.connectionKey === "dewalt" || m.connectionKey === "stanley") {
+      hasBrandCredentials = true
+    }
+  }
+  return { hasPerEmailCredentials, hasBrandCredentials }
+}
+
+/** Which discoverable password sections the customer profile should render. */
+export interface ProfilePasswordSections {
+  /** Model 3 per-email actions beside each verified email (Email addresses). */
+  showPerEmailActions: boolean
+  /** Model 4 prominent Brand passwords section. */
+  showBrandSection: boolean
+}
+
+/**
+ * Resolve which password-management sections the profile shows, account-aware.
+ *
+ * Rules (fail CLOSED — an unknown model shows no special section):
+ *   • Off the UK experience entirely (EU Models 1/2) → neither section, so the
+ *     single Account password stays the only control.
+ *   • Model 4 (has brand credentials) → the Brand passwords section on EITHER
+ *     UK storefront, and NEVER the per-email actions. Also shown on the
+ *     per-brand host storefront for a fresh account that has no per-email
+ *     credentials yet (so it can set its first brand password).
+ *   • Model 3 stays host-gated to the per-email storefront (never leaks onto
+ *     Stanley UK) and is suppressed once the account is actually Model 4.
+ */
+export function resolveProfilePasswordSections(input: {
+  /** Host default: this storefront is the per-email (DeWalt UK) storefront. */
+  hostPerEmailModel: boolean
+  /** Host default: this storefront is the per-brand (Stanley UK) storefront. */
+  hostPerBrandModel: boolean
+  facts: AccountCredentialFacts
+}): ProfilePasswordSections {
+  const isUk = input.hostPerEmailModel || input.hostPerBrandModel
+  const { hasPerEmailCredentials, hasBrandCredentials } = input.facts
+
+  const showBrandSection =
+    isUk &&
+    (hasBrandCredentials ||
+      (input.hostPerBrandModel && !hasPerEmailCredentials))
+
+  const showPerEmailActions = input.hostPerEmailModel && !hasBrandCredentials
+
+  return { showPerEmailActions, showBrandSection }
+}
+
 // --- Model 4 brand rows -----------------------------------------------------
 
 export type BrandPasswordActionKind = "set" | "change"
