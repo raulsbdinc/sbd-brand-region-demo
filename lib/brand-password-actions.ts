@@ -121,12 +121,16 @@ export interface ProfilePasswordSections {
  * Rules (fail CLOSED — an unknown model shows no special section):
  *   • Off the UK experience entirely (EU Models 1/2) → neither section, so the
  *     single Account password stays the only control.
- *   • Model 4 (has brand credentials) → the Brand passwords section on EITHER
- *     UK storefront, and NEVER the per-email actions. Also shown on the
- *     per-brand host storefront for a fresh account that has no per-email
- *     credentials yet (so it can set its first brand password).
- *   • Model 3 stays host-gated to the per-email storefront (never leaks onto
- *     Stanley UK) and is suppressed once the account is actually Model 4.
+ *   • PER-EMAIL WINS THE OVERLAP. A canonical Model 3 account naturally also
+ *     holds a brand DB credential, so its facts can be {perEmail:true,
+ *     brand:true}. Whenever verified per-email password credentials exist the
+ *     account IS Model 3: show only the per-email actions (host-gated to the
+ *     per-email storefront) and NEVER the Brand passwords section.
+ *   • Model 4 (brand credentials AND no per-email credentials) → the Brand
+ *     passwords section on EITHER UK storefront, and never the per-email
+ *     actions. Also shown on the per-brand host storefront for a fresh account
+ *     with no scoped credentials yet (so it can set its first brand password).
+ *   • Model 3 host-gating: per-email actions never leak onto Stanley UK.
  */
 export function resolveProfilePasswordSections(input: {
   /** Host default: this storefront is the per-email (DeWalt UK) storefront. */
@@ -138,12 +142,16 @@ export function resolveProfilePasswordSections(input: {
   const isUk = input.hostPerEmailModel || input.hostPerBrandModel
   const { hasPerEmailCredentials, hasBrandCredentials } = input.facts
 
+  // Per-email credentials define a Model 3 account even when a brand DB
+  // credential co-exists. Model 4 is brand credentials WITHOUT per-email.
+  const isModel4Account = hasBrandCredentials && !hasPerEmailCredentials
+
   const showBrandSection =
     isUk &&
-    (hasBrandCredentials ||
-      (input.hostPerBrandModel && !hasPerEmailCredentials))
+    !hasPerEmailCredentials &&
+    (hasBrandCredentials || input.hostPerBrandModel)
 
-  const showPerEmailActions = input.hostPerEmailModel && !hasBrandCredentials
+  const showPerEmailActions = input.hostPerEmailModel && !isModel4Account
 
   return { showPerEmailActions, showBrandSection }
 }

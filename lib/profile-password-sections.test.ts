@@ -18,6 +18,12 @@ const EU = { hostPerEmailModel: false, hostPerBrandModel: false }
 const NO_CREDS = { hasPerEmailCredentials: false, hasBrandCredentials: false }
 const BRAND_CREDS = { hasPerEmailCredentials: false, hasBrandCredentials: true }
 const PER_EMAIL_CREDS = { hasPerEmailCredentials: true, hasBrandCredentials: false }
+// A canonical Model 3 account: its per-email credential co-exists with the
+// brand DB credential it was provisioned against, so BOTH facts are true.
+const PER_EMAIL_AND_BRAND_CREDS = {
+  hasPerEmailCredentials: true,
+  hasBrandCredentials: true,
+}
 
 // --- accountCredentialFactsFromMethods --------------------------------------
 
@@ -74,6 +80,49 @@ test("Model 4 account on Stanley UK shows the Brand section", () => {
   const s = resolveProfilePasswordSections({ ...STANLEY_UK, facts: BRAND_CREDS })
   assert.equal(s.showBrandSection, true)
   assert.equal(s.showPerEmailActions, false)
+})
+
+// --- Overlap: canonical Model 3 that ALSO holds a brand DB credential -------
+// Real regression (giledos375@bowlfuel.com on DeWalt UK): a per-email account
+// naturally carries a DeWalt DB credential too, so facts were {true,true} and
+// the resolver wrongly rendered BOTH per-email actions AND a Brand section with
+// "Change DeWalt password". Per-email must win the overlap.
+
+test("overlap {perEmail:true, brand:true} on DeWalt UK is Model 3 only", () => {
+  const s = resolveProfilePasswordSections({
+    ...DEWALT_UK,
+    facts: PER_EMAIL_AND_BRAND_CREDS,
+  })
+  assert.equal(s.showPerEmailActions, true)
+  assert.equal(s.showBrandSection, false) // the fix: no Brand section
+})
+
+test("overlap {perEmail:true, brand:true} on Stanley UK exposes neither", () => {
+  // Per-email never leaks onto Stanley UK; and per-email winning means the
+  // brand section stays hidden for this Model 3 account there too.
+  const s = resolveProfilePasswordSections({
+    ...STANLEY_UK,
+    facts: PER_EMAIL_AND_BRAND_CREDS,
+  })
+  assert.equal(s.showPerEmailActions, false)
+  assert.equal(s.showBrandSection, false)
+})
+
+test("giledos login-method shape resolves to Model 3 on DeWalt UK", () => {
+  // Mirrors the real account: primary + secondary per-email credentials plus
+  // the DeWalt DB credential they were provisioned against.
+  const facts = accountCredentialFactsFromMethods([
+    { kind: "password", connectionKey: "per-email" }, // giledos375@bowlfuel.com
+    { kind: "password", connectionKey: "per-email" }, // fatrazigna@necub.com
+    { kind: "password", connectionKey: "dewalt" }, // canonical brand DB credential
+  ])
+  assert.deepEqual(facts, {
+    hasPerEmailCredentials: true,
+    hasBrandCredentials: true,
+  })
+  const s = resolveProfilePasswordSections({ ...DEWALT_UK, facts })
+  assert.equal(s.showPerEmailActions, true)
+  assert.equal(s.showBrandSection, false)
 })
 
 // --- Model 3 account: per-email preserved on DeWalt UK ----------------------
