@@ -56,6 +56,42 @@ export function planSignInPasswordRows(input: {
   return { mode: "credentials" }
 }
 
+// What the "How you sign in" password area should render, resolved from BOTH
+// the parent's per-email flag AND the account's real login-methods. This is the
+// SINGLE source of truth for the summary-vs-credentials decision so the sign-in
+// list can never disagree with the Email addresses section.
+//
+// GLSCM-4834 (follow-up 5): the live regression was a parent that computed the
+// per-email flag correctly but forgot to FORWARD it to the sign-in credential
+// list, so a Model 3 account rendered raw per-credential rows (including a
+// confusing brand-DB "DeWalt password" row) AND the beside-email actions. By
+// also detecting per-email ownership from the very methods the list would
+// render, the list refuses to show duplicate per-credential rows for a Model 3
+// account regardless of whether the flag was forwarded. Per-email WINS the
+// overlap: a canonical Model 3 account whose methods also include a brand DB
+// credential is still summarized, never expanded into brand rows.
+export type SignInPasswordDisplay = "summary" | "credentials" | "pending"
+
+export function resolveSignInPasswordDisplay(input: {
+  /** The parent's per-email ownership flag (may be unforwarded/false). */
+  perEmailManaged: boolean
+  /** Whether the login-methods fetch has produced data yet. */
+  methodsLoaded: boolean
+  /** The account's password login-methods (used to DETECT per-email ownership). */
+  methods: { kind?: string | null; connectionKey?: string | null }[]
+}): SignInPasswordDisplay {
+  // Known from the parent — render the summary without waiting on a fetch.
+  if (input.perEmailManaged) return "summary"
+  // Can't decide credentials-vs-summary until we can inspect the real methods.
+  if (!input.methodsLoaded) return "pending"
+  // Defensive: the account genuinely manages passwords per-email → summarize,
+  // even if the parent flag was not forwarded.
+  if (accountCredentialFactsFromMethods(input.methods).hasPerEmailCredentials) {
+    return "summary"
+  }
+  return "credentials"
+}
+
 /** Whether a value is one of the two per-brand ids. */
 export function isProfileBrand(value: unknown): value is ProfileBrand {
   return value === "dewalt" || value === "stanley"

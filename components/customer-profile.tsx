@@ -65,6 +65,7 @@ import {
   accountCredentialFactsFromMethods,
   resolveProfilePasswordSections,
   planSignInPasswordRows,
+  resolveSignInPasswordDisplay,
   type ProfileBrand,
 } from "@/lib/brand-password-actions"
 import type { BrandId } from "@/lib/types"
@@ -3687,29 +3688,50 @@ function PasswordCredentials({
    */
   perEmailManaged?: boolean
 }) {
-  const rows = planSignInPasswordRows({ perEmailManaged })
-
+  // Fetch the real login-methods UNLESS the parent already told us per-email
+  // owns password management (then we render the summary without a fetch). When
+  // the flag is not forwarded we still fetch and DETECT per-email ownership from
+  // the methods themselves, so a Model 3 account can never fall through to the
+  // per-credential rows (GLSCM-4834 follow-up 5).
   const { data: methodsData, error: methodsError } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
-  }>(live && rows.mode === "credentials" ? "/api/account/login-methods" : null, fetcher, {
+  }>(live && !perEmailManaged ? "/api/account/login-methods" : null, fetcher, {
     onError: (err) => warnUnavailable("Passwords", (err as { status?: number })?.status),
   })
 
+  const display = resolveSignInPasswordDisplay({
+    perEmailManaged,
+    methodsLoaded: Boolean(methodsData),
+    methods: methodsData?.methods ?? [],
+  })
+
   // Model 3: point up to the Email addresses section — no per-credential rows.
-  if (rows.mode === "summary") {
-    return (
+  if (display === "summary") {
+    const summary = planSignInPasswordRows({ perEmailManaged: true })
+    return summary.mode === "summary" ? (
       <MethodRow
         icon={<KeyRound className="size-4" />}
-        name={rows.name}
-        line={rows.line}
+        name={summary.name}
+        line={summary.line}
       />
+    ) : null
+  }
+
+  // Failure takes precedence over the pending placeholder.
+  if (methodsError) {
+    return (
+      <li className="rounded-xl border border-border bg-background px-4 py-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          We couldn&apos;t load your sign-in passwords right now. Please refresh to try again.
+        </p>
+      </li>
     )
   }
 
   // Still loading: no data and no error yet. Restrained placeholder — never a
   // fabricated "Account password".
-  if (!methodsData && !methodsError) {
+  if (display === "pending") {
     return (
       <li className="rounded-xl border border-border bg-background px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -3810,6 +3832,7 @@ function SignInSection({
           <PasswordCredentials
             live={live}
             hideBrandPasswordControls={hideBrandPasswordControls}
+            perEmailManaged={perEmailManaged}
           />
 
           {/* 2 — Email passcode (already on every account) */}

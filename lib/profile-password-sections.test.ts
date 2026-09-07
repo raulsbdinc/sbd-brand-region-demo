@@ -9,6 +9,7 @@ import {
   accountCredentialFactsFromMethods,
   resolveProfilePasswordSections,
   planSignInPasswordRows,
+  resolveSignInPasswordDisplay,
 } from "./brand-password-actions.ts"
 import {
   planPerEmailPasswordControls,
@@ -249,4 +250,87 @@ test("sign-in list collapses to one non-action Email passwords summary row (Mode
 test("sign-in list keeps per-credential rows when per-email is NOT managed", () => {
   const rows = planSignInPasswordRows({ perEmailManaged: false })
   assert.equal(rows.mode, "credentials")
+})
+
+// --- Sign-in password DISPLAY: the actual render-path decision --------------
+// Real regression (giledos375 on the latest DeWalt UK preview): the profile
+// computed showPerEmailActions correctly, but the sign-in section did NOT
+// forward the flag to the password-credential list, so a Model 3 account still
+// rendered raw per-credential rows (including a "DeWalt password" row). The
+// render path now derives the summary-vs-credentials decision from BOTH the
+// (possibly-unforwarded) flag AND the account's own login-methods, so the list
+// can never expand a Model 3 account into per-credential rows. These tests
+// exercise that exact decision function with the live method shapes.
+
+// The real giledos login-methods payload the sign-in list renders from.
+const GILEDOS_METHODS = [
+  { kind: "password", connectionKey: "per-email" }, // giledos375@bowlfuel.com
+  { kind: "password", connectionKey: "per-email" }, // fatrazigna@necub.com
+  { kind: "password", connectionKey: "dewalt" }, // canonical brand DB credential
+]
+
+test("display: forwarded per-email flag summarizes without needing methods", () => {
+  const d = resolveSignInPasswordDisplay({
+    perEmailManaged: true,
+    methodsLoaded: false,
+    methods: [],
+  })
+  assert.equal(d, "summary")
+})
+
+test("display: giledos methods summarize even when the flag is NOT forwarded", () => {
+  // This is the exact live failure: perEmailManaged reaches the list as false
+  // (wiring omission), yet the account genuinely manages passwords per-email.
+  // The list must still collapse to the summary — never per-credential rows.
+  const d = resolveSignInPasswordDisplay({
+    perEmailManaged: false,
+    methodsLoaded: true,
+    methods: GILEDOS_METHODS,
+  })
+  assert.equal(d, "summary")
+})
+
+test("display: no 'DeWalt password' row is reachable for a Model 3 account", () => {
+  // With the flag dropped, the ONLY thing standing between the account and a
+  // spurious brand-DB "DeWalt password" row is this decision. Prove it collapses
+  // to the summary, whose content carries no brand credential label.
+  const d = resolveSignInPasswordDisplay({
+    perEmailManaged: false,
+    methodsLoaded: true,
+    methods: GILEDOS_METHODS,
+  })
+  assert.equal(d, "summary")
+  const summary = planSignInPasswordRows({ perEmailManaged: true })
+  assert.equal(summary.mode, "summary")
+  assert.equal(JSON.stringify(summary).toLowerCase().includes("dewalt"), false)
+})
+
+test("display: Model 4 (brand-only) methods keep per-credential rows", () => {
+  const d = resolveSignInPasswordDisplay({
+    perEmailManaged: false,
+    methodsLoaded: true,
+    methods: [
+      { kind: "password", connectionKey: "dewalt" },
+      { kind: "password", connectionKey: "stanley" },
+    ],
+  })
+  assert.equal(d, "credentials")
+})
+
+test("display: EU shared-password methods keep per-credential rows", () => {
+  const d = resolveSignInPasswordDisplay({
+    perEmailManaged: false,
+    methodsLoaded: true,
+    methods: [{ kind: "password", connectionKey: "shared" }],
+  })
+  assert.equal(d, "credentials")
+})
+
+test("display: pending until methods load when the flag is not forwarded", () => {
+  const d = resolveSignInPasswordDisplay({
+    perEmailManaged: false,
+    methodsLoaded: false,
+    methods: [],
+  })
+  assert.equal(d, "pending")
 })
