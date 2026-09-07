@@ -60,6 +60,11 @@ import {
   shouldOfferPostVerificationPassword,
 } from "@/lib/email-password-actions"
 import {
+  planBrandPasswordRows,
+  type ProfileBrand,
+} from "@/lib/brand-password-actions"
+import type { BrandId } from "@/lib/types"
+import {
   passwordCredentialLabel,
   passwordCredentialLine,
 } from "@/lib/password-credential-labels"
@@ -106,13 +111,21 @@ interface CustomerProfileProps {
    */
   sites: OtherSite[]
   /**
-   * Whether THIS storefront runs the Model 3-enabled (UK) experience, resolved
-   * server-side from SITE_MARKET. Gates the per-email "Add a password for
-   * <alternate>" activation UI: EU Models 1/2 must show ONE shared Account
-   * password only, so their linked alternates keep signing in with the same
-   * shared password and passcodes — never a per-email password row.
+   * Whether THIS storefront runs Model 3 (per-email) — DeWalt UK only, resolved
+   * server-side from the effective market + brand. Gates the per-email "Set
+   * separate password" actions shown beside each verified email. EU Models 1/2
+   * must show ONE shared Account password only, so their linked alternates keep
+   * signing in with the same shared password — never a per-email password row.
    */
-  modelSelectionAvailable?: boolean
+  perEmailModelAvailable?: boolean
+  /**
+   * Whether THIS storefront runs Model 4 (per-brand) — Stanley UK only. Gates
+   * the dedicated brand-password section (separate DeWalt/Stanley passwords on
+   * one canonical account). Never shown on DeWalt UK or EU storefronts.
+   */
+  perBrandModelAvailable?: boolean
+  /** The storefront's own brand (SITE_BRAND), for the Model 4 section. */
+  deploymentBrand?: BrandId
 }
 
 /** Throw on non-OK so SWR populates `error` (not `data`) on failure. */
@@ -218,7 +231,13 @@ function Badge({
 // ===========================================================================
 // Root
 // ===========================================================================
-export function CustomerProfile({ user, sites, modelSelectionAvailable = false }: CustomerProfileProps) {
+export function CustomerProfile({
+  user,
+  sites,
+  perEmailModelAvailable = false,
+  perBrandModelAvailable = false,
+  deploymentBrand,
+}: CustomerProfileProps) {
   const { logout } = useApp()
 
   const name =
@@ -300,8 +319,12 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
               <EmailSection
                 live={live}
                 primaryEmail={email}
-                modelSelectionAvailable={modelSelectionAvailable}
+                modelSelectionAvailable={perEmailModelAvailable}
               />
+
+        {perBrandModelAvailable && deploymentBrand ? (
+          <BrandPasswordSection live={live} deploymentBrand={deploymentBrand} />
+        ) : null}
 
         <PhoneSection live={live} />
 
@@ -897,6 +920,301 @@ function EmailPasswordActionRow({
         onActivated={onDone}
       />
     </div>
+  )
+}
+
+// ===========================================================================
+// Brand passwords (Model 4 — Stanley UK only)
+// ===========================================================================
+// GLSCM-4834 (follow-up): password management must be equally discoverable on
+// the per-brand UK storefront. Where DeWalt UK (Model 3) shows a separate
+// password per EMAIL beside each address, Stanley UK (Model 4) keeps ONE
+// canonical account with a separate password per BRAND. This dedicated section
+// surfaces those brand passwords directly in /profile — the deployment brand
+// first — so the customer never hunts through a generic credentials list. The
+// pure planner decides which rows appear (set vs change); each row states the
+// exact brand and scope BEFORE the customer opens a dialog. Both dialogs reuse
+// the existing endpoints (this-brand provisioning + password-change) with no
+// redirect and no standalone route. Rendered only when perBrandModelAvailable,
+// so DeWalt UK and EU storefronts never see it.
+function BrandPasswordSection({
+  live,
+  deploymentBrand,
+}: {
+  live: boolean
+  deploymentBrand: BrandId
+}) {
+  // The REAL brand credentials — one reset binding per credential — decide the
+  // change targets and which brands already have a password.
+  const { data: methodsData, error: methodsError, mutate: mutateMethods } = useSWR<{
+    configured: boolean
+    methods: PasswordMethodView[]
+  }>(live ? "/api/account/login-methods" : null, fetcher, {
+    onError: (err) => warnUnavailable("Brand passwords", (err as { status?: number })?.status),
+  })
+
+  // Whether THIS storefront's brand password can be provisioned right now.
+  const { data: availData, mutate: mutateAvail } = useSWR<{
+    configured: boolean
+    availability?: { thisBrand?: { available?: boolean } }
+  }>(live ? "/api/account/passwords" : null, fetcher)
+
+  const brandMethods = new Map<ProfileBrand, PasswordMethodView>()
+  for (const m of methodsData?.methods ?? []) {
+    if (m.kind === "password" && (m.connectionKey === "dewalt" || m.connectionKey === "stanley")) {
+      brandMethods.set(m.connectionKey, m)
+    }
+  }
+
+  const rows = planBrandPasswordRows({
+    perBrandModelAvailable: true,
+    deploymentBrand,
+    existingBrandCredentials: [...brandMethods.keys()],
+    thisBrandProvisionable: Boolean(availData?.availability?.thisBrand?.available),
+  })
+
+  function refresh() {
+    void mutateMethods()
+    void mutateAvail()
+  }
+
+  return (
+    <ProfileCard
+      icon={<KeyRound className="size-5" />}
+      title="Brand passwords"
+      description="Your account uses a separate password for each brand. Set or change the one you need — the other brand's password is never affected."
+    >
+      {methodsError ? (
+        <Note>{UNAVAILABLE_COPY}</Note>
+      ) : !live ? (
+        <Note>Sign in to manage your brand passwords.</Note>
+      ) : rows.length === 0 ? (
+        <Note>No brand password is available to manage on this account yet.</Note>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((row) => {
+            const method = brandMethods.get(row.brand)
+            const changeTarget =
+              row.kind === "change" && method ? changeTargetForMethod(method) : null
+            return (
+              <li
+                key={row.brand}
+                className="rounded-xl border border-border bg-background px-4 py-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-foreground">
+                        {row.brandName} password
+                      </span>
+                      <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        {row.brandName}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{row.scopeLine}</p>
+                  </div>
+                  <div className="shrink-0">
+                    {row.kind === "change" ? (
+                      changeTarget ? (
+                        <ChangePasswordDialog
+                          target={changeTarget}
+                          live={live}
+                          onChanged={refresh}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          Managed with your account
+                        </span>
+                      )
+                    ) : (
+                      <SetBrandPasswordDialog
+                        brand={row.brand}
+                        brandName={row.brandName}
+                        live={live}
+                        onDone={refresh}
+                      />
+                    )}
+                  </div>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </ProfileCard>
+  )
+}
+
+// In-site dialog that PROVISIONS this storefront's brand password (Model 4).
+// It names the exact brand and scope up front, collects a new password, and
+// posts to the existing this-brand provisioning endpoint — no current password
+// (the session authenticates the customer), no redirect. Sensitive fields are
+// cleared on close and success.
+function SetBrandPasswordDialog({
+  brand,
+  brandName,
+  live,
+  onDone,
+}: {
+  brand: ProfileBrand
+  brandName: string
+  live: boolean
+  onDone?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [next, setNext] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  const policy = validateNewPassword(next)
+  const confirmMismatch = confirm.length > 0 && confirm !== next
+  const canSubmit = !busy && policy.ok && confirm === next && confirm.length > 0
+
+  function wipe() {
+    setNext("")
+    setConfirm("")
+  }
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (!v) {
+      wipe()
+      setError(null)
+      setDone(null)
+      setBusy(false)
+    }
+  }
+
+  async function submit() {
+    setError(null)
+    if (!canSubmit) return
+    if (!live) {
+      setDone(
+        `In production this securely sets your ${brandName} password. This demo doesn't change real credentials.`,
+      )
+      wipe()
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/passwords", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ intent: "this-brand", password: next }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string
+        credential?: { label?: string }
+      }
+      if (!res.ok || !json.credential) {
+        setError(json.error ?? "We couldn't set that password. Please try again.")
+        return
+      }
+      wipe()
+      setDone(`${json.credential?.label ?? `${brandName} password`} is set.`)
+      onDone?.()
+    } catch {
+      setError("Network error. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="sm">
+            <Plus className="size-4" />
+            Set {brandName} password
+          </Button>
+        }
+      />
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            <span>Set {brandName} password</span>
+            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+              {brandName}
+            </span>
+          </DialogTitle>
+          <DialogDescription>
+            {`Choose a password for signing in to ${brandName} sites. It applies only to your ${brandName} sign-in — your other brand password is not affected.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        {done ? (
+          <div className="space-y-4">
+            <Note>
+              <span className="inline-flex items-center gap-2">
+                <BadgeCheck className="size-4 text-primary" />
+                {done}
+              </span>
+            </Note>
+            <DialogFooter>
+              <DialogClose render={<Button>Done</Button>} />
+            </DialogFooter>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+            className="space-y-4"
+          >
+            <PasswordField
+              id={`set-brand-new-${brand}`}
+              label={`New ${brandName} password`}
+              value={next}
+              onChange={setNext}
+              autoComplete="new-password"
+              invalid={next.length > 0 && !policy.ok}
+              describedBy={`set-brand-policy-${brand}`}
+            />
+            <ul id={`set-brand-policy-${brand}`} className="space-y-1 text-xs text-muted-foreground">
+              {[
+                { ok: next.length >= 8, text: "At least 8 characters" },
+                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
+                { ok: /[0-9]/.test(next), text: "At least one number" },
+              ].map((r) => (
+                <li key={r.text} className="flex items-center gap-1.5">
+                  <Check
+                    className={cn("size-3.5 shrink-0", r.ok ? "text-primary" : "text-muted-foreground/40")}
+                  />
+                  <span className={cn(r.ok && "text-foreground")}>{r.text}</span>
+                </li>
+              ))}
+            </ul>
+            <PasswordField
+              id={`set-brand-confirm-${brand}`}
+              label={`Confirm ${brandName} password`}
+              value={confirm}
+              onChange={setConfirm}
+              autoComplete="new-password"
+              invalid={confirmMismatch}
+            />
+            {confirmMismatch ? (
+              <p className="text-xs text-destructive">Both passwords must match.</p>
+            ) : null}
+            {error ? (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <DialogFooter className="gap-2 sm:gap-2">
+              <DialogClose render={<Button variant="ghost" type="button">Cancel</Button>} />
+              <Button type="submit" disabled={!canSubmit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                Set password
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
