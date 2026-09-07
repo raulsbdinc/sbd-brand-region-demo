@@ -55,7 +55,24 @@ import { CrossBrandRecognition } from "@/components/cross-brand-recognition"
 import { GoogleMark } from "@/components/google-mark"
 import type { OtherSite } from "@/lib/claims"
 import { summarizePasswordModelFromMethods } from "@/lib/credential-model"
-import { eligibleActivationEmails } from "@/lib/per-email-activation"
+import {
+  planEmailPasswordAction,
+  emailPasswordActionAriaLabel,
+  shouldOfferPostVerificationPassword,
+} from "@/lib/email-password-actions"
+import {
+  planBrandPasswordRows,
+  accountCredentialFactsFromMethods,
+  resolveProfilePasswordSections,
+  planSignInPasswordRows,
+  resolveSignInPasswordDisplay,
+  type ProfileBrand,
+} from "@/lib/brand-password-actions"
+import {
+  methodRowRightSlotClass,
+  passwordRowRightIsWrappingStatus,
+} from "@/lib/method-row-layout"
+import type { BrandId } from "@/lib/types"
 import {
   passwordCredentialLabel,
   passwordCredentialLine,
@@ -103,13 +120,21 @@ interface CustomerProfileProps {
    */
   sites: OtherSite[]
   /**
-   * Whether THIS storefront runs the Model 3-enabled (UK) experience, resolved
-   * server-side from SITE_MARKET. Gates the per-email "Add a password for
-   * <alternate>" activation UI: EU Models 1/2 must show ONE shared Account
-   * password only, so their linked alternates keep signing in with the same
-   * shared password and passcodes — never a per-email password row.
+   * Whether THIS storefront runs Model 3 (per-email) — DeWalt UK only, resolved
+   * server-side from the effective market + brand. Gates the per-email "Set
+   * separate password" actions shown beside each verified email. EU Models 1/2
+   * must show ONE shared Account password only, so their linked alternates keep
+   * signing in with the same shared password — never a per-email password row.
    */
-  modelSelectionAvailable?: boolean
+  perEmailModelAvailable?: boolean
+  /**
+   * Whether THIS storefront runs Model 4 (per-brand) — Stanley UK only. Gates
+   * the dedicated brand-password section (separate DeWalt/Stanley passwords on
+   * one canonical account). Never shown on DeWalt UK or EU storefronts.
+   */
+  perBrandModelAvailable?: boolean
+  /** The storefront's own brand (SITE_BRAND), for the Model 4 section. */
+  deploymentBrand?: BrandId
 }
 
 /** Throw on non-OK so SWR populates `error` (not `data`) on failure. */
@@ -215,7 +240,13 @@ function Badge({
 // ===========================================================================
 // Root
 // ===========================================================================
-export function CustomerProfile({ user, sites, modelSelectionAvailable = false }: CustomerProfileProps) {
+export function CustomerProfile({
+  user,
+  sites,
+  perEmailModelAvailable = false,
+  perBrandModelAvailable = false,
+  deploymentBrand,
+}: CustomerProfileProps) {
   const { logout } = useApp()
 
   const name =
@@ -242,7 +273,7 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
   // legitimately exposes each password credential's connection key/brand to the
   // browser. A pure shared-password account (cases 1 & 2) yields the unchanged
   // wording; while loading (or if it can't load) we default to that too.
-  const { data: methodsData } = useSWR<{
+  const { data: methodsData, error: methodsError } = useSWR<{
     methods?: { kind?: string; connectionKey?: string | null; brand?: string | null }[]
   }>(live ? "/api/account/login-methods" : null, fetcher)
   const passwordModel = summarizePasswordModelFromMethods(
@@ -250,6 +281,23 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
       typeof summarizePasswordModelFromMethods
     >[0],
   )
+
+  // Which discoverable password sections to render is ACCOUNT-aware, not
+  // host-only (GLSCM-4834): a Model 4 account (separate DeWalt + Stanley
+  // passwords) must show the Brand passwords section on EITHER UK storefront,
+  // while a true Model 3 account keeps its per-email actions on DeWalt UK. The
+  // host gates only pick the default for an account with no scoped credentials
+  // yet. We wait for the login-methods result before trusting the model when a
+  // real session exists, so a Model 4 account never flashes the wrong controls;
+  // in demo mode (no management) we fall back to the host default immediately.
+  const credsResolved = !live || Boolean(methodsData) || Boolean(methodsError)
+  const { showPerEmailActions, showBrandSection } = credsResolved
+    ? resolveProfilePasswordSections({
+        hostPerEmailModel: perEmailModelAvailable,
+        hostPerBrandModel: perBrandModelAvailable,
+        facts: accountCredentialFactsFromMethods(methodsData?.methods ?? []),
+      })
+    : { showPerEmailActions: false, showBrandSection: false }
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
@@ -294,7 +342,15 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
           onPictureChange={setDisplayPicture}
         />
 
-        <EmailSection live={live} primaryEmail={email} />
+              <EmailSection
+                live={live}
+                primaryEmail={email}
+                modelSelectionAvailable={showPerEmailActions}
+              />
+
+        {showBrandSection && deploymentBrand ? (
+          <BrandPasswordSection live={live} deploymentBrand={deploymentBrand} />
+        ) : null}
 
         <PhoneSection live={live} />
 
@@ -302,7 +358,12 @@ export function CustomerProfile({ user, sites, modelSelectionAvailable = false }
 
         <CommunicationSection live={live} />
 
-        <SignInSection live={live} primaryEmail={email} modelSelectionAvailable={modelSelectionAvailable} />
+              <SignInSection
+                live={live}
+                primaryEmail={email}
+                hideBrandPasswordControls={showBrandSection}
+                perEmailManaged={showPerEmailActions}
+              />
 
         <DeleteSection live={live} onClosed={() => logout()} />
       </div>
@@ -530,7 +591,15 @@ interface AlternateEmail {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: string | null }) {
+function EmailSection({
+  live,
+  primaryEmail,
+  modelSelectionAvailable,
+}: {
+  live: boolean
+  primaryEmail: string | null
+  modelSelectionAvailable: boolean
+}) {
   const { data, error, mutate } = useSWR<{
     configured: boolean
     user: {
@@ -539,6 +608,16 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
       app_metadata?: { primary_email?: string }
     }
   }>(live ? "/api/account/profile" : null, fetcher)
+
+  // UK Model 3 only: read the REAL password credentials so each verified email
+  // row can offer the right beside-email action — "Change password" when the
+  // address already has its own per-email password, or "Set separate password"
+  // when it doesn't yet. EU Models 1/2 never fetch this (single Account
+  // password), so the extra call is UK-scoped.
+  const { data: methodsData, mutate: mutateMethods } = useSWR<{
+    configured: boolean
+    methods: PasswordMethodView[]
+  }>(live && modelSelectionAvailable ? "/api/account/login-methods" : null, fetcher)
 
   if (error) warnUnavailable("Email addresses", (error as { status?: number }).status)
 
@@ -594,6 +673,31 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
     ...googleEmails.map((g) => g.email.toLowerCase()),
   ]
 
+  // Per-email password credentials keyed by address (UK Model 3). Used both to
+  // decide each row's action and to build the exact change target for an email
+  // that already has its own password.
+  const perEmailByEmail = new Map<string, PasswordMethodView>(
+    (methodsData?.methods ?? [])
+      .filter((m) => m.kind === "password" && m.connectionKey === "per-email" && m.email)
+      .map((m) => [(m.email as string).toLowerCase(), m]),
+  )
+  const backedPerEmailEmails = [...perEmailByEmail.keys()]
+
+  // Every verified, owned email on the account — the set the pure planner uses
+  // to confirm a row is genuinely part of this account before offering actions.
+  const allVerifiedEmails = [
+    ...(accountEmail ? [accountEmail] : []),
+    ...alternates.map((a) => a.email),
+    ...googleEmails.map((g) => g.email),
+  ]
+
+  // Refresh both the profile and the credential list after a password action so
+  // a row flips from "Set separate password" to "Change password" in place.
+  function refreshEmailsAndMethods() {
+    void mutate()
+    void mutateMethods()
+  }
+
   return (
     <ProfileCard
       icon={<Mail className="size-5" />}
@@ -605,32 +709,44 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
       ) : (
         <ul className="space-y-2">
           {accountEmail ? (
-            <li className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3">
-              <span
-                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(accountEmail) ? "font-medium" : ""}`}
-              >
-                {accountEmail}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isPrimary(accountEmail) ? (
-                  <Badge tone="brand">
-                    <Star className="size-3" />
-                    Primary
-                  </Badge>
-                ) : (
-                  <>
-                    <Badge>Signs you in too</Badge>
-                    <MakePrimaryButton
-                      email={accountEmail}
-                      onDone={() => {
-                        setPrimaryError(null)
-                        mutate()
-                      }}
-                      onError={(m) => setPrimaryError(m || null)}
-                    />
-                  </>
-                )}
+            <li className="rounded-xl border border-border bg-background px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={`min-w-0 truncate text-sm text-foreground ${isPrimary(accountEmail) ? "font-medium" : ""}`}
+                >
+                  {accountEmail}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isPrimary(accountEmail) ? (
+                    <Badge tone="brand">
+                      <Star className="size-3" />
+                      Primary
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge>Signs you in too</Badge>
+                      <MakePrimaryButton
+                        email={accountEmail}
+                        onDone={() => {
+                          setPrimaryError(null)
+                          mutate()
+                        }}
+                        onError={(m) => setPrimaryError(m || null)}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
+              <EmailPasswordActionRow
+                email={accountEmail}
+                primaryEmail={accountEmail}
+                live={live}
+                perEmailActivationAvailable={modelSelectionAvailable}
+                verifiedEmails={allVerifiedEmails}
+                backedPerEmailEmails={backedPerEmailEmails}
+                method={perEmailByEmail.get(accountEmail.toLowerCase())}
+                onDone={refreshEmailsAndMethods}
+              />
             </li>
           ) : (
             <li>
@@ -640,66 +756,90 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
           {alternates.map((a) => (
             <li
               key={a.user_id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
+              className="rounded-xl border border-border bg-background px-4 py-3"
             >
-              <span
-                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(a.email) ? "font-medium" : ""}`}
-              >
-                {a.email}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isPrimary(a.email) ? (
-                  <Badge tone="brand">
-                    <Star className="size-3" />
-                    Primary
-                  </Badge>
-                ) : (
-                  <>
-                    <Badge>Signs you in too</Badge>
-                    <MakePrimaryButton
-                      email={a.email}
-                      onDone={() => {
-                        setPrimaryError(null)
-                        mutate()
-                      }}
-                      onError={(m) => setPrimaryError(m || null)}
-                    />
-                  </>
-                )}
-                <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={`min-w-0 truncate text-sm text-foreground ${isPrimary(a.email) ? "font-medium" : ""}`}
+                >
+                  {a.email}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isPrimary(a.email) ? (
+                    <Badge tone="brand">
+                      <Star className="size-3" />
+                      Primary
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge>Signs you in too</Badge>
+                      <MakePrimaryButton
+                        email={a.email}
+                        onDone={() => {
+                          setPrimaryError(null)
+                          mutate()
+                        }}
+                        onError={(m) => setPrimaryError(m || null)}
+                      />
+                    </>
+                  )}
+                  <RemoveAlternateButton alternate={a} onRemoved={() => mutate()} />
+                </div>
               </div>
+              <EmailPasswordActionRow
+                email={a.email}
+                primaryEmail={accountEmail}
+                live={live}
+                perEmailActivationAvailable={modelSelectionAvailable}
+                verifiedEmails={allVerifiedEmails}
+                backedPerEmailEmails={backedPerEmailEmails}
+                method={perEmailByEmail.get(a.email.toLowerCase())}
+                onDone={refreshEmailsAndMethods}
+              />
             </li>
           ))}
           {googleEmails.map((g) => (
             <li
               key={g.user_id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
+              className="rounded-xl border border-border bg-background px-4 py-3"
             >
-              <span
-                className={`min-w-0 truncate text-sm text-foreground ${isPrimary(g.email) ? "font-medium" : ""}`}
-              >
-                {g.email}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isPrimary(g.email) ? (
-                  <Badge tone="brand">
-                    <Star className="size-3" />
-                    Primary
-                  </Badge>
-                ) : (
-                  <>
-                    <Badge>Signs you in too</Badge>
-                    <MakePrimaryButton
-                      email={g.email}
-                      onDone={() => {
-                        setPrimaryError(null)
-                        mutate()
-                      }}
-                      onError={(m) => setPrimaryError(m || null)}
-                    />
-                  </>
-                )}
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={`min-w-0 truncate text-sm text-foreground ${isPrimary(g.email) ? "font-medium" : ""}`}
+                >
+                  {g.email}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isPrimary(g.email) ? (
+                    <Badge tone="brand">
+                      <Star className="size-3" />
+                      Primary
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge>Signs you in too</Badge>
+                      <MakePrimaryButton
+                        email={g.email}
+                        onDone={() => {
+                          setPrimaryError(null)
+                          mutate()
+                        }}
+                        onError={(m) => setPrimaryError(m || null)}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
+              <EmailPasswordActionRow
+                email={g.email}
+                primaryEmail={accountEmail}
+                live={live}
+                perEmailActivationAvailable={modelSelectionAvailable}
+                verifiedEmails={allVerifiedEmails}
+                backedPerEmailEmails={backedPerEmailEmails}
+                method={perEmailByEmail.get(g.email.toLowerCase())}
+                onDone={refreshEmailsAndMethods}
+              />
             </li>
           ))}
         </ul>
@@ -715,10 +855,12 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
         adding ? (
           <AddEmailFlow
             knownEmails={knownEmails}
+            primaryEmail={accountEmail}
+            perEmailActivationAvailable={modelSelectionAvailable}
             onCancel={() => setAdding(false)}
             onLinked={() => {
               setAdding(false)
-              mutate()
+              refreshEmailsAndMethods()
             }}
           />
         ) : (
@@ -741,13 +883,390 @@ function EmailSection({ live, primaryEmail }: { live: boolean; primaryEmail: str
   )
 }
 
+// The address-specific password action shown directly beneath each verified
+// email in the Email addresses section (GLSCM-4834). It renders inside the
+// existing email <li> as a divided sub-row — NOT a nested card — so the control
+// sits right where the customer is looking. The pure planner decides the single
+// action; the label + dialog follow from it:
+//   • "set-separate" → "Set separate password" (existing per-email activation)
+//   • "change"       → "Change password" (existing inline change dialog)
+//   • "none"         → nothing (EU Models 1/2, or the primary before activation)
+// Both dialogs reuse the existing endpoints/forms — no redirect, no standalone
+// sign-in/recover experience.
+function EmailPasswordActionRow({
+  email,
+  primaryEmail,
+  live,
+  perEmailActivationAvailable,
+  verifiedEmails,
+  backedPerEmailEmails,
+  method,
+  onDone,
+}: {
+  email: string
+  primaryEmail: string | null
+  live: boolean
+  perEmailActivationAvailable: boolean
+  verifiedEmails: string[]
+  backedPerEmailEmails: string[]
+  method?: PasswordMethodView
+  onDone: () => void
+}) {
+  const kind = planEmailPasswordAction({
+    email,
+    primaryEmail,
+    perEmailActivationAvailable,
+    verifiedEmails,
+    backedPerEmailEmails,
+  })
+
+  if (kind === "none") return null
+
+  if (kind === "change") {
+    // Only offer an inline change when we can safely target the credential from
+    // the browser (a per-email binding id). Otherwise show nothing here — the
+    // credential is still changeable from the "How you sign in" list.
+    const target = method ? changeTargetForMethod(method) : null
+    if (!target) return null
+    return (
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        <span className="min-w-0 text-xs text-muted-foreground">
+          This email has its own password.
+        </span>
+        <ChangePasswordDialog
+          target={target}
+          live={live}
+          onChanged={onDone}
+          triggerAriaLabel={emailPasswordActionAriaLabel("change", email)}
+        />
+      </div>
+    )
+  }
+
+  // set-separate
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+      <span className="min-w-0 text-xs text-muted-foreground">
+        Give this email its own password so it signs in independently.
+      </span>
+      <ActivatePerEmailDialog
+        secondaryEmail={email}
+        primaryEmail={primaryEmail}
+        triggerLabel="Set separate password"
+        triggerAriaLabel={emailPasswordActionAriaLabel("set-separate", email)}
+        onActivated={onDone}
+      />
+    </div>
+  )
+}
+
+// ===========================================================================
+// Brand passwords (Model 4 — Stanley UK only)
+// ===========================================================================
+// GLSCM-4834 (follow-up): password management must be equally discoverable on
+// the per-brand UK storefront. Where DeWalt UK (Model 3) shows a separate
+// password per EMAIL beside each address, Stanley UK (Model 4) keeps ONE
+// canonical account with a separate password per BRAND. This dedicated section
+// surfaces those brand passwords directly in /profile — the deployment brand
+// first — so the customer never hunts through a generic credentials list. The
+// pure planner decides which rows appear (set vs change); each row states the
+// exact brand and scope BEFORE the customer opens a dialog. Both dialogs reuse
+// the existing endpoints (this-brand provisioning + password-change) with no
+// redirect and no standalone route. Rendered only when perBrandModelAvailable,
+// so DeWalt UK and EU storefronts never see it.
+function BrandPasswordSection({
+  live,
+  deploymentBrand,
+}: {
+  live: boolean
+  deploymentBrand: BrandId
+}) {
+  // The REAL brand credentials — one reset binding per credential — decide the
+  // change targets and which brands already have a password.
+  const { data: methodsData, error: methodsError, mutate: mutateMethods } = useSWR<{
+    configured: boolean
+    methods: PasswordMethodView[]
+  }>(live ? "/api/account/login-methods" : null, fetcher, {
+    onError: (err) => warnUnavailable("Brand passwords", (err as { status?: number })?.status),
+  })
+
+  // Whether THIS storefront's brand password can be provisioned right now.
+  const { data: availData, mutate: mutateAvail } = useSWR<{
+    configured: boolean
+    availability?: { thisBrand?: { available?: boolean } }
+  }>(live ? "/api/account/passwords" : null, fetcher)
+
+  const brandMethods = new Map<ProfileBrand, PasswordMethodView>()
+  for (const m of methodsData?.methods ?? []) {
+    if (m.kind === "password" && (m.connectionKey === "dewalt" || m.connectionKey === "stanley")) {
+      brandMethods.set(m.connectionKey, m)
+    }
+  }
+
+  const rows = planBrandPasswordRows({
+    perBrandModelAvailable: true,
+    deploymentBrand,
+    existingBrandCredentials: [...brandMethods.keys()],
+    thisBrandProvisionable: Boolean(availData?.availability?.thisBrand?.available),
+  })
+
+  function refresh() {
+    void mutateMethods()
+    void mutateAvail()
+  }
+
+  return (
+    <ProfileCard
+      icon={<KeyRound className="size-5" />}
+      title="Brand passwords"
+      description="Your account uses a separate password for each brand. Set or change the one you need — the other brand's password is never affected."
+    >
+      {methodsError ? (
+        <Note>{UNAVAILABLE_COPY}</Note>
+      ) : !live ? (
+        <Note>Sign in to manage your brand passwords.</Note>
+      ) : rows.length === 0 ? (
+        <Note>No brand password is available to manage on this account yet.</Note>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((row) => {
+            const method = brandMethods.get(row.brand)
+            const changeTarget =
+              row.kind === "change" && method ? changeTargetForMethod(method) : null
+            return (
+              <li
+                key={row.brand}
+                className="rounded-xl border border-border bg-background px-4 py-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-foreground">
+                        {row.brandName} password
+                      </span>
+                      <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        {row.brandName}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{row.scopeLine}</p>
+                  </div>
+                  <div className="shrink-0">
+                    {row.kind === "change" ? (
+                      changeTarget ? (
+                        <ChangePasswordDialog
+                          target={changeTarget}
+                          live={live}
+                          onChanged={refresh}
+                          triggerLabel={`Change ${row.brandName} password`}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          Managed with your account
+                        </span>
+                      )
+                    ) : (
+                      <SetBrandPasswordDialog
+                        brand={row.brand}
+                        brandName={row.brandName}
+                        live={live}
+                        onDone={refresh}
+                      />
+                    )}
+                  </div>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </ProfileCard>
+  )
+}
+
+// In-site dialog that PROVISIONS this storefront's brand password (Model 4).
+// It names the exact brand and scope up front, collects a new password, and
+// posts to the existing this-brand provisioning endpoint — no current password
+// (the session authenticates the customer), no redirect. Sensitive fields are
+// cleared on close and success.
+function SetBrandPasswordDialog({
+  brand,
+  brandName,
+  live,
+  onDone,
+}: {
+  brand: ProfileBrand
+  brandName: string
+  live: boolean
+  onDone?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [next, setNext] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  const policy = validateNewPassword(next)
+  const confirmMismatch = confirm.length > 0 && confirm !== next
+  const canSubmit = !busy && policy.ok && confirm === next && confirm.length > 0
+
+  function wipe() {
+    setNext("")
+    setConfirm("")
+  }
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (!v) {
+      wipe()
+      setError(null)
+      setDone(null)
+      setBusy(false)
+    }
+  }
+
+  async function submit() {
+    setError(null)
+    if (!canSubmit) return
+    if (!live) {
+      setDone(
+        `In production this securely sets your ${brandName} password. This demo doesn't change real credentials.`,
+      )
+      wipe()
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch("/api/account/passwords", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ intent: "this-brand", password: next }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string
+        credential?: { label?: string }
+      }
+      if (!res.ok || !json.credential) {
+        setError(json.error ?? "We couldn't set that password. Please try again.")
+        return
+      }
+      wipe()
+      setDone(`${json.credential?.label ?? `${brandName} password`} is set.`)
+      onDone?.()
+    } catch {
+      setError("Network error. Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="sm">
+            <Plus className="size-4" />
+            Set {brandName} password
+          </Button>
+        }
+      />
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            <span>Set {brandName} password</span>
+            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+              {brandName}
+            </span>
+          </DialogTitle>
+          <DialogDescription>
+            {`Choose a password for signing in to ${brandName} sites. It applies only to your ${brandName} sign-in — your other brand password is not affected.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        {done ? (
+          <div className="space-y-4">
+            <Note>
+              <span className="inline-flex items-center gap-2">
+                <BadgeCheck className="size-4 text-primary" />
+                {done}
+              </span>
+            </Note>
+            <DialogFooter>
+              <DialogClose render={<Button>Done</Button>} />
+            </DialogFooter>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+            className="space-y-4"
+          >
+            <PasswordField
+              id={`set-brand-new-${brand}`}
+              label={`New ${brandName} password`}
+              value={next}
+              onChange={setNext}
+              autoComplete="new-password"
+              invalid={next.length > 0 && !policy.ok}
+              describedBy={`set-brand-policy-${brand}`}
+            />
+            <ul id={`set-brand-policy-${brand}`} className="space-y-1 text-xs text-muted-foreground">
+              {[
+                { ok: next.length >= 8, text: "At least 8 characters" },
+                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
+                { ok: /[0-9]/.test(next), text: "At least one number" },
+              ].map((r) => (
+                <li key={r.text} className="flex items-center gap-1.5">
+                  <Check
+                    className={cn("size-3.5 shrink-0", r.ok ? "text-primary" : "text-muted-foreground/40")}
+                  />
+                  <span className={cn(r.ok && "text-foreground")}>{r.text}</span>
+                </li>
+              ))}
+            </ul>
+            <PasswordField
+              id={`set-brand-confirm-${brand}`}
+              label={`Confirm ${brandName} password`}
+              value={confirm}
+              onChange={setConfirm}
+              autoComplete="new-password"
+              invalid={confirmMismatch}
+            />
+            {confirmMismatch ? (
+              <p className="text-xs text-destructive">Both passwords must match.</p>
+            ) : null}
+            {error ? (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <DialogFooter className="gap-2 sm:gap-2">
+              <DialogClose render={<Button variant="ghost" type="button">Cancel</Button>} />
+              <Button type="submit" disabled={!canSubmit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                Set password
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** The inline enter-address → enter-passcode → done flow. */
 function AddEmailFlow({
   knownEmails,
+  primaryEmail,
+  perEmailActivationAvailable,
   onCancel,
   onLinked,
 }: {
   knownEmails: string[]
+  primaryEmail: string | null
+  perEmailActivationAvailable: boolean
   onCancel: () => void
   onLinked: () => void
 }) {
@@ -832,7 +1351,12 @@ function AddEmailFlow({
       }
       setBusy(false)
       setStep("done")
-      setTimeout(() => onLinked(), 1800)
+      // On the UK Model-3 experience we keep the person in /profile on the done
+      // step so they can act on the immediate "set a separate password" next
+      // step for this exact address. Everywhere else, auto-close as before.
+      if (!perEmailActivationAvailable) {
+        setTimeout(() => onLinked(), 1800)
+      }
     } catch {
       setError("Something went wrong. Please try again.")
       setBusy(false)
@@ -922,17 +1446,41 @@ function AddEmailFlow({
           </Button>
         </div>
       ) : (
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-            <ShieldCheck className="size-5" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold text-foreground">Address confirmed</p>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{normalizedEmail}</span> is now on your
-              account. You can use it to sign in from now on.
-            </p>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+              <ShieldCheck className="size-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-foreground">Address confirmed</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{normalizedEmail}</span> is now on your
+                account. You can use it to sign in from now on.
+              </p>
+            </div>
           </div>
+          {shouldOfferPostVerificationPassword({
+            perEmailActivationAvailable,
+            verifiedEmail: normalizedEmail,
+            primaryEmail,
+          }) ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2">
+              <span className="min-w-0 text-xs text-muted-foreground">
+                Next: give this email its own password so it signs in independently.
+              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                <ActivatePerEmailDialog
+                  secondaryEmail={normalizedEmail}
+                  primaryEmail={primaryEmail}
+                  triggerLabel="Set separate password"
+                  onActivated={onLinked}
+                />
+                <Button type="button" variant="ghost" size="sm" onClick={onLinked}>
+                  Not now
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -1888,12 +2436,21 @@ function MethodRow({
   name,
   line,
   right,
+  rightWrap = false,
   children,
 }: {
   icon: React.ReactNode
   name: string
   line: React.ReactNode
   right?: React.ReactNode
+  /**
+   * When the right slot is a non-action text status (not a button), set this so
+   * it may shrink and wrap instead of forcing the row to its max-content width.
+   * A fixed-width `shrink-0` status like "Managed in Brand passwords above"
+   * otherwise creates horizontal overflow on narrow screens (GLSCM-4834).
+   * Action buttons keep the default `shrink-0` so they never wrap.
+   */
+  rightWrap?: boolean
   children?: React.ReactNode
 }) {
   return (
@@ -1904,8 +2461,10 @@ function MethodRow({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <h3 className="text-sm font-bold text-foreground">{name}</h3>
-            {right ? <div className="shrink-0">{right}</div> : null}
+            <h3 className="min-w-0 text-sm font-bold text-foreground">{name}</h3>
+            {right ? (
+              <div className={methodRowRightSlotClass(rightWrap)}>{right}</div>
+            ) : null}
           </div>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             {line}
@@ -2567,6 +3126,12 @@ interface ChangeTarget {
   selector: PasswordChangeSelector
   /** Credential name, e.g. "Account password" / "DeWalt password for a@x.com". */
   label: string
+  /**
+   * Properly-cased dialog title + accessible name, e.g. "Change DeWalt password
+   * for a@x.com". Kept separate from `label` so the brand stays capitalized —
+   * lower-casing the label produced the wrong "Change dewalt password…".
+   */
+  title: string
   /** Plain-English scope line shown under the title. */
   line: string
   /** Optional brand chip. */
@@ -2591,6 +3156,7 @@ function changeTargetForMethod(method: PasswordMethodView): ChangeTarget | null 
     return {
       selector: { bindingId: method.resetBindingId },
       label: `Password for ${email ?? "this email"}`,
+      title: `Change password for ${email ?? "this email"}`,
       line: `${email ?? "This email"} has its own password. Changing it will not affect your other sign-in emails.`,
     }
   }
@@ -2601,6 +3167,8 @@ function changeTargetForMethod(method: PasswordMethodView): ChangeTarget | null 
     return {
       selector: { bindingId: method.resetBindingId },
       label: `${brandName} password${email ? ` for ${email}` : ""}`,
+      // Capitalized brand + exact email — never lower-cased.
+      title: `Change ${brandName} password${email ? ` for ${email}` : ""}`,
       line: `This is your ${brandName} sign-in password${email ? ` for ${email}` : ""}. Changing it will not affect your other brand password.`,
       brand: key,
     }
@@ -2610,6 +3178,7 @@ function changeTargetForMethod(method: PasswordMethodView): ChangeTarget | null 
   return {
     selector: { scope: "shared" },
     label: "Account password",
+    title: "Change account password",
     line: "Works with all your verified account emails across DeWalt and Stanley sites.",
   }
 }
@@ -2670,10 +3239,21 @@ function ChangePasswordDialog({
   target,
   live,
   onChanged,
+  triggerLabel = "Change password",
+  triggerAriaLabel,
 }: {
   target: ChangeTarget
   live: boolean
   onChanged?: () => void
+  /** Visible trigger label; the Brand section passes "Change {Brand} password". */
+  triggerLabel?: string
+  /**
+   * Accessible name for the trigger when the visible label is ambiguous. The
+   * per-email rows keep the compact "Change password" text but pass
+   * "Change password for {email}" here so screen readers get the exact target
+   * (GLSCM-4834).
+   */
+  triggerAriaLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const [current, setCurrent] = useState("")
@@ -2751,15 +3331,15 @@ function ChangePasswordDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger
         render={
-          <Button variant="outline" size="sm">
-            Change password
+          <Button variant="outline" size="sm" aria-label={triggerAriaLabel}>
+            {triggerLabel}
           </Button>
         }
       />
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
-            <span>Change {target.label.toLowerCase()}</span>
+            <span>{target.title}</span>
             {target.brand ? (
               <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
                 {target.brand === "dewalt" ? "DeWalt" : "Stanley"}
@@ -2869,23 +3449,39 @@ function ChangePasswordDialog({
 function PasswordCredentialRow({
   method,
   live,
+  hideBrandPasswordControls = false,
 }: {
   method: PasswordMethodView
   live: boolean
+  hideBrandPasswordControls?: boolean
 }) {
   const target = method.canReset !== false ? changeTargetForMethod(method) : null
+  const isBrandCredential =
+    method.connectionKey === "dewalt" || method.connectionKey === "stanley"
+  // When the prominent Brand passwords section owns this action, don't render a
+  // second Change control here — point up to it instead so the action isn't
+  // offered twice (GLSCM-4834).
+  const suppressChange = hideBrandPasswordControls && isBrandCredential
 
   return (
     <MethodRow
       icon={<KeyRound className="size-4" />}
       name={passwordCredentialLabel(method)}
       line={passwordCredentialLine(method)}
+      rightWrap={passwordRowRightIsWrappingStatus({
+        suppressChange,
+        hasChangeTarget: Boolean(target),
+      })}
       right={
-        target ? (
+        suppressChange ? (
+          <span className="text-xs leading-relaxed text-muted-foreground text-balance">
+            Managed in Brand passwords above
+          </span>
+        ) : target ? (
           <ChangePasswordDialog target={target} live={live} />
         ) : (
           <span
-            className="text-xs text-muted-foreground"
+            className="text-xs leading-relaxed text-muted-foreground text-balance"
             title="This password is managed with your main account sign-in"
           >
             Managed with your account
@@ -2905,10 +3501,15 @@ function PasswordCredentialRow({
 function ActivatePerEmailDialog({
   secondaryEmail,
   primaryEmail,
+  triggerLabel = "Set separate password",
+  triggerAriaLabel,
   onActivated,
 }: {
   secondaryEmail: string
   primaryEmail: string | null
+  triggerLabel?: string
+  /** Accessible name naming the exact email (GLSCM-4834). */
+  triggerAriaLabel?: string
   onActivated?: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -2978,7 +3579,7 @@ function ActivatePerEmailDialog({
         render={
           <Button variant="outline" size="sm">
             <Plus className="size-4" />
-            Add password
+            {triggerLabel}
           </Button>
         }
       />
@@ -3081,36 +3682,75 @@ function ActivatePerEmailDialog({
 }
 
 // The password-credentials block inside "How you sign in". Reads the REAL
-// credentials from login-methods (one reset per credential) and offers a
-// restrained "Add password" command driven by server-computed availability.
+// credentials from login-methods (one reset per credential).
 //
-// It returns its rows as DIRECT <li> children (via MethodRow, which is an <li>,
-// and an <li> Add-password action) so the surrounding <ul> stays valid — no
-// <li> nested in <li>, no wrapping <div>. Loading and failure never fabricate a
-// credential: they render honest neutral <li> states, and a genuinely
-// password-less account shows an honest empty row.
-function PasswordCredentials({ live, perEmailActivationAvailable }: { live: boolean; perEmailActivationAvailable: boolean }) {
-  const {
-    data: methodsData,
-    error: methodsError,
-    mutate: mutateMethods,
-  } = useSWR<{
+// The per-email "set separate password" activation now lives directly beside
+// each verified email in the Email addresses section (GLSCM-4834), where it is
+// discoverable — so this block no longer renders activation rows. It returns
+// its rows as DIRECT <li> children (via MethodRow, which is an <li>) so the
+// surrounding <ul> stays valid — no <li> nested in <li>, no wrapping <div>.
+// Loading and failure never fabricate a credential: they render honest neutral
+// <li> states, and a genuinely password-less account shows an honest empty row.
+function PasswordCredentials({
+  live,
+  hideBrandPasswordControls = false,
+  perEmailManaged = false,
+}: {
+  live: boolean
+  hideBrandPasswordControls?: boolean
+  /**
+   * Model 3 (per-email): password management is single-source beside each email
+   * in the Email addresses section. When true, the sign-in list shows ONE
+   * non-action summary row instead of repeating each credential (which would
+   * otherwise duplicate the change actions and surface a confusing brand-DB
+   * "DeWalt password" row inside a per-email model) — GLSCM-4834.
+   */
+  perEmailManaged?: boolean
+}) {
+  // Fetch the real login-methods UNLESS the parent already told us per-email
+  // owns password management (then we render the summary without a fetch). When
+  // the flag is not forwarded we still fetch and DETECT per-email ownership from
+  // the methods themselves, so a Model 3 account can never fall through to the
+  // per-credential rows (GLSCM-4834 follow-up 5).
+  const { data: methodsData, error: methodsError } = useSWR<{
     configured: boolean
     methods: PasswordMethodView[]
-  }>(live ? "/api/account/login-methods" : null, fetcher, {
+  }>(live && !perEmailManaged ? "/api/account/login-methods" : null, fetcher, {
     onError: (err) => warnUnavailable("Passwords", (err as { status?: number })?.status),
   })
 
-  // Profile gives us the account's verified emails so we know which alternate
-  // addresses are eligible to be given their OWN password (Model 3 activation).
-  const { data: profileData, mutate: mutateProfile } = useSWR<{
-    configured: boolean
-    user: { email?: string; identities?: Identity[] }
-  }>(live ? "/api/account/profile" : null, fetcher)
+  const display = resolveSignInPasswordDisplay({
+    perEmailManaged,
+    methodsLoaded: Boolean(methodsData),
+    methods: methodsData?.methods ?? [],
+  })
+
+  // Model 3: point up to the Email addresses section — no per-credential rows.
+  if (display === "summary") {
+    const summary = planSignInPasswordRows({ perEmailManaged: true })
+    return summary.mode === "summary" ? (
+      <MethodRow
+        icon={<KeyRound className="size-4" />}
+        name={summary.name}
+        line={summary.line}
+      />
+    ) : null
+  }
+
+  // Failure takes precedence over the pending placeholder.
+  if (methodsError) {
+    return (
+      <li className="rounded-xl border border-border bg-background px-4 py-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          We couldn&apos;t load your sign-in passwords right now. Please refresh to try again.
+        </p>
+      </li>
+    )
+  }
 
   // Still loading: no data and no error yet. Restrained placeholder — never a
   // fabricated "Account password".
-  if (!methodsData && !methodsError) {
+  if (display === "pending") {
     return (
       <li className="rounded-xl border border-border bg-background px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -3134,44 +3774,6 @@ function PasswordCredentials({ live, perEmailActivationAvailable }: { live: bool
 
   const passwords = (methodsData?.methods ?? []).filter((m) => m.kind === "password")
 
-  // Emails that ALREADY have their own per-email password (so they must not be
-  // offered activation again). Derived from the real credential rows.
-  const backedPerEmailEmails = passwords
-    .filter((m) => m.connectionKey === "per-email" && m.email)
-    .map((m) => (m.email as string).toLowerCase())
-
-  // Verified alternate emails on the account (the "email" OTP identities).
-  const accountEmail = profileData?.user?.email ?? null
-  const verifiedEmails = [
-    ...(accountEmail ? [accountEmail] : []),
-    ...(profileData?.user?.identities ?? [])
-      .filter((id) => id.provider === "email")
-      .map((id) => ((id.profileData?.email as string | undefined) ?? id.user_id) || "")
-      .filter(Boolean),
-  ]
-
-  // Alternate emails eligible for an "Add password" activation: verified, not
-  // the primary, and not already backed by a per-email password.
-  //
-  // Model 3 (per-email passwords) is a UK-only experience. On EU Models 1/2 the
-  // account has ONE shared password and its linked alternates sign in with that
-  // same shared password + passcodes — offering per-email activation there would
-  // blur the shared-password model, so we suppress activation entirely unless the
-  // Model-3 experience is enabled for this storefront.
-  const eligible =
-    perEmailActivationAvailable && accountEmail
-      ? eligibleActivationEmails({
-          primaryEmail: accountEmail,
-          verifiedEmails,
-          backedPerEmailEmails,
-        })
-      : []
-
-  function refreshAfterActivation() {
-    void mutateMethods()
-    void mutateProfile()
-  }
-
   return (
     <>
       {passwords.length === 0 ? (
@@ -3182,27 +3784,14 @@ function PasswordCredentials({ live, perEmailActivationAvailable }: { live: bool
         />
       ) : (
         passwords.map((m) => (
-          <PasswordCredentialRow key={m.key} method={m} live={live} />
+          <PasswordCredentialRow
+            key={m.key}
+            method={m}
+            live={live}
+            hideBrandPasswordControls={hideBrandPasswordControls}
+          />
         ))
       )}
-
-      {/* Email-specific "Add password" activation rows: one per verified
-          alternate email that doesn't yet have its own password. */}
-      {eligible.map((addr) => (
-        <MethodRow
-          key={`activate-${addr}`}
-          icon={<KeyRound className="size-4" />}
-          name={`Add a password for ${addr}`}
-          line={`${addr} signs in with an email passcode today. Give it its own password so it signs in independently from your other emails.`}
-          right={
-            <ActivatePerEmailDialog
-              secondaryEmail={addr}
-              primaryEmail={accountEmail}
-              onActivated={refreshAfterActivation}
-            />
-          }
-        />
-      ))}
     </>
   )
 }
@@ -3210,11 +3799,25 @@ function PasswordCredentials({ live, perEmailActivationAvailable }: { live: bool
 function SignInSection({
   live,
   primaryEmail,
-  modelSelectionAvailable,
+  hideBrandPasswordControls = false,
+  perEmailManaged = false,
 }: {
   live: boolean
   primaryEmail: string | null
-  modelSelectionAvailable: boolean
+  /**
+   * When the prominent Brand passwords section is rendered above (Model 4), the
+   * sign-in list must not ALSO show a Change control for each brand password —
+   * that would surface the same action twice. The brand rows still appear here
+   * as informational sign-in methods, but their Change control is replaced with
+   * a pointer to the Brand passwords section (GLSCM-4834).
+   */
+  hideBrandPasswordControls?: boolean
+  /**
+   * When the Email addresses section owns per-email password actions (Model 3),
+   * the sign-in list collapses the individual password credential rows into one
+   * non-action "Email passwords" summary row (GLSCM-4834).
+   */
+  perEmailManaged?: boolean
 }) {
   // We read the profile (not login-methods) for the account email and the
   // count of alternate addresses — the same source the Email addresses section
@@ -3245,7 +3848,11 @@ function SignInSection({
         <ul className="space-y-2">
           {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).
                   Renders its own <li> rows directly into this <ul>. */}
-          <PasswordCredentials live={live} perEmailActivationAvailable={modelSelectionAvailable} />
+          <PasswordCredentials
+            live={live}
+            hideBrandPasswordControls={hideBrandPasswordControls}
+            perEmailManaged={perEmailManaged}
+          />
 
           {/* 2 — Email passcode (already on every account) */}
           <MethodRow
