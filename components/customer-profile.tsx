@@ -68,6 +68,10 @@ import {
   resolveSignInPasswordDisplay,
   type ProfileBrand,
 } from "@/lib/brand-password-actions"
+import {
+  methodRowRightSlotClass,
+  passwordRowRightIsWrappingStatus,
+} from "@/lib/method-row-layout"
 import type { BrandId } from "@/lib/types"
 import {
   passwordCredentialLabel,
@@ -2432,12 +2436,21 @@ function MethodRow({
   name,
   line,
   right,
+  rightWrap = false,
   children,
 }: {
   icon: React.ReactNode
   name: string
   line: React.ReactNode
   right?: React.ReactNode
+  /**
+   * When the right slot is a non-action text status (not a button), set this so
+   * it may shrink and wrap instead of forcing the row to its max-content width.
+   * A fixed-width `shrink-0` status like "Managed in Brand passwords above"
+   * otherwise creates horizontal overflow on narrow screens (GLSCM-4834).
+   * Action buttons keep the default `shrink-0` so they never wrap.
+   */
+  rightWrap?: boolean
   children?: React.ReactNode
 }) {
   return (
@@ -2448,8 +2461,10 @@ function MethodRow({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <h3 className="text-sm font-bold text-foreground">{name}</h3>
-            {right ? <div className="shrink-0">{right}</div> : null}
+            <h3 className="min-w-0 text-sm font-bold text-foreground">{name}</h3>
+            {right ? (
+              <div className={methodRowRightSlotClass(rightWrap)}>{right}</div>
+            ) : null}
           </div>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             {line}
@@ -3453,16 +3468,20 @@ function PasswordCredentialRow({
       icon={<KeyRound className="size-4" />}
       name={passwordCredentialLabel(method)}
       line={passwordCredentialLine(method)}
+      rightWrap={passwordRowRightIsWrappingStatus({
+        suppressChange,
+        hasChangeTarget: Boolean(target),
+      })}
       right={
         suppressChange ? (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs leading-relaxed text-muted-foreground text-balance">
             Managed in Brand passwords above
           </span>
         ) : target ? (
           <ChangePasswordDialog target={target} live={live} />
         ) : (
           <span
-            className="text-xs text-muted-foreground"
+            className="text-xs leading-relaxed text-muted-foreground text-balance"
             title="This password is managed with your main account sign-in"
           >
             Managed with your account
