@@ -20,6 +20,7 @@ import {
   type Model3RegisterBinding,
 } from "@/lib/account-model"
 import { startEmailPasscode, resolvePasswordlessCreds } from "@/lib/auth0-passwordless"
+import { resolvePerEmailRegistrationGuard } from "@/lib/credential-resolver"
 import {
   mintJourneyToken,
   journeyCookieName,
@@ -77,6 +78,42 @@ export async function POST(request: NextRequest) {
   if (!planEmails.includes(norm(target))) {
     return NextResponse.json({ error: "Please start again." }, { status: 400 })
   }
+
+  // CROSS-BRAND / DUPLICATE GUARD — before we email a code for a doomed journey.
+  // If the target email already owns an account here, don't send a passcode:
+  //   • the PRIMARY email owns the OTHER UK brand  → tell the client to switch
+  //     to the cross-brand proof flow (a second brand password on that account);
+  //   • it already owns an account here            → guide them to sign in;
+  //   • ambiguous / incoherent                     → refuse neutrally.
+  // Management-not-configured degrades to the ordinary send so the Demo journey
+  // is preserved (the create route is the real gate and returns configured:false
+  // itself). Diverting is only offered for the PRIMARY email — a secondary that
+  // collides can't become this brand's password, so it fails closed.
+  const isPrimaryTarget = norm(target) === primary
+  const guard = await resolvePerEmailRegistrationGuard(norm(target))
+  if (guard.kind === "divert-cross-brand" && isPrimaryTarget) {
+    return NextResponse.json(
+      { status: "cross-brand-required", proofOptions: guard.proofOptions },
+      { status: 200 },
+    )
+  }
+  if (guard.kind === "already-registered") {
+    return NextResponse.json(
+      {
+        error: "An account already exists for this email. Try signing in instead.",
+        reason: "already-account",
+      },
+      { status: 409 },
+    )
+  }
+  if (guard.kind === "fail-closed" || guard.kind === "divert-cross-brand") {
+    // fail-closed, or a secondary email that collides with another brand.
+    return NextResponse.json(
+      { error: "We couldn't complete that right now. Please try again." },
+      { status: 409 },
+    )
+  }
+  // "proceed" and "not-configured" fall through to the ordinary send.
 
   // Passwordless must be configured to send a code; otherwise this storefront
   // runs the Demo behaviour the client already knows how to show.

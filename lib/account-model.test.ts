@@ -17,6 +17,8 @@ import {
   planModel3Registration,
   planModel4CrossBrandLink,
   planModel4Registration,
+  planPerEmailRegistrationGuard,
+  type PerEmailExistingFacts,
   type RegistrationContext,
 } from "./account-model.ts"
 
@@ -475,4 +477,103 @@ test("planModel3Completion: market + email + config guards", () => {
     ),
     { ok: false, reason: "not-configured" },
   )
+})
+
+// --- per-email registration guard: one email must never become two people ---
+//
+// The live regression: an email that already owns a UK brand (e.g. a Stanley
+// brand credential created on the Stanley storefront) later runs the DeWalt UK
+// per-email signup. The per-email create route must NOT mint a second Auth0
+// user for that email — it must divert into the cross-brand proof flow so the
+// email gains a DeWalt brand password on its EXISTING account.
+
+function existingSingle(
+  bindings: PerEmailExistingFacts extends { kind: "single" } ? never : CredentialBinding[],
+  sameMailboxVerified = true,
+): PerEmailExistingFacts {
+  return { kind: "single", bindings, sameMailboxVerified }
+}
+
+test("per-email guard: email already owns the OTHER UK brand → divert, never a second user", () => {
+  // A Stanley brand credential exists; the DeWalt UK storefront runs per-email.
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("stanley")]),
+    thisBrandKey: "dewalt",
+  })
+  assert.equal(decision.kind, "divert-cross-brand")
+  if (decision.kind === "divert-cross-brand") {
+    // Same mailbox is verified → both proof options are offered.
+    assert.deepEqual(decision.proofOptions, ["password", "email-code"])
+  }
+})
+
+test("per-email guard: reverse — DeWalt owner on the Stanley storefront also diverts", () => {
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("dewalt")], false),
+    thisBrandKey: "stanley",
+  })
+  assert.equal(decision.kind, "divert-cross-brand")
+  if (decision.kind === "divert-cross-brand") {
+    // Mailbox not verified for a code → password proof only.
+    assert.deepEqual(decision.proofOptions, ["password"])
+  }
+})
+
+test("per-email guard: THIS brand already owned → already-registered (no divert, no mint)", () => {
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("dewalt")]),
+    thisBrandKey: "dewalt",
+  })
+  assert.deepEqual(decision, { kind: "already-registered" })
+})
+
+test("per-email guard: an existing per-email account for the email is not re-minted", () => {
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("per-email")]),
+    thisBrandKey: "dewalt",
+  })
+  assert.deepEqual(decision, { kind: "already-registered" })
+})
+
+test("per-email guard: a shared (EU) account owning the email fails closed, never mints", () => {
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("shared")]),
+    thisBrandKey: "dewalt",
+  })
+  assert.deepEqual(decision, { kind: "fail-closed" })
+})
+
+test("per-email guard: an already-mixed existing set fails closed", () => {
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("per-email"), binding("stanley")]),
+    thisBrandKey: "dewalt",
+  })
+  assert.deepEqual(decision, { kind: "fail-closed" })
+})
+
+test("per-email guard: no owner → proceed; ambiguous/unavailable → fail closed; off → not-configured", () => {
+  assert.deepEqual(
+    planPerEmailRegistrationGuard({ existing: { kind: "none" }, thisBrandKey: "dewalt" }),
+    { kind: "proceed" },
+  )
+  assert.deepEqual(
+    planPerEmailRegistrationGuard({ existing: { kind: "ambiguous" }, thisBrandKey: "dewalt" }),
+    { kind: "fail-closed" },
+  )
+  assert.deepEqual(
+    planPerEmailRegistrationGuard({ existing: { kind: "unavailable" }, thisBrandKey: "dewalt" }),
+    { kind: "fail-closed" },
+  )
+  assert.deepEqual(
+    planPerEmailRegistrationGuard({ existing: { kind: "configured-off" }, thisBrandKey: "dewalt" }),
+    { kind: "not-configured" },
+  )
+})
+
+test("per-email guard: a brand owner on a non-brand storefront cannot divert → fail closed", () => {
+  const decision = planPerEmailRegistrationGuard({
+    existing: existingSingle([binding("stanley")]),
+    thisBrandKey: null,
+  })
+  assert.deepEqual(decision, { kind: "fail-closed" })
 })
