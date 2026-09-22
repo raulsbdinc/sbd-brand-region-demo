@@ -492,9 +492,11 @@ const ADD_EMAIL_ENUM_PER_PAGE = 100
 // budget cannot be fully read, so enumeration reports ok=false and the guard
 // fails CLOSED (reject) rather than risk missing a foreign owner.
 const ADD_EMAIL_ENUM_MAX_PAGES = 20
-// Bounded parallelism for the per-user hydration re-fetch — small enough to stay
-// well under Auth0 Management rate limits on a small demo tenant.
-const ADD_EMAIL_HYDRATION_CONCURRENCY = 5
+// One user at a time. Five at once exceeds the UK tenant's Management API burst
+// and the 429s fail the whole ownership guard closed, so a proven mailbox cannot
+// be added. mgmtFetch retries a 429, and a single in-flight read stays inside
+// the burst that previously succeeded.
+const ADD_EMAIL_HYDRATION_CONCURRENCY = 1
 
 /**
  * Candidate gather for the add-another-email OWNERSHIP guard. Two deterministic
