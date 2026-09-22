@@ -112,6 +112,8 @@ export async function POST(request: Request) {
       { status: 400 },
     )
   }
+  // Nested helpers do not keep the narrowed type of `perEmailConnection`.
+  const perEmailConnectionName: string = perEmailConnection
 
   try {
     // Re-read the primary account so ownership/verification is proven live.
@@ -125,7 +127,7 @@ export async function POST(request: Request) {
         .map((id) =>
           emailOnPerEmailIdentity({
             connection: id.connection,
-            perEmailConnection,
+            perEmailConnection: perEmailConnectionName,
             provider: id.provider,
             identityUserId: id.user_id,
             profileEmail: (id.profileData as { email?: string } | undefined)?.email,
@@ -248,7 +250,7 @@ export async function POST(request: Request) {
         (id) =>
           emailOnPerEmailIdentity({
             connection: id.connection,
-            perEmailConnection,
+            perEmailConnection: perEmailConnectionName,
             provider: id.provider,
             identityUserId: id.user_id,
             profileEmail: (id.profileData as { email?: string } | undefined)?.email,
