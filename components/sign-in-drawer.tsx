@@ -552,6 +552,16 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         setCreating(false)
         return
       }
+      if (action.kind === "proof-required") {
+        // The SAME email already owns the OTHER UK brand. Do NOT mint a per-email
+        // user — hand off to the EXACT cross-brand proof flow the per-brand
+        // (Stanley) drawer uses: post to the brand endpoint, which sets the signed
+        // proof handoff and returns proof-required, then collect the emailed
+        // ownership code and add THIS brand's password to the existing account.
+        // One person, two brand passwords — never a second account.
+        await handleBrandCreate()
+        return
+      }
       setCreateError(
         action.kind === "not-configured"
           ? "Account creation isn\u2019t available on this storefront right now."

@@ -147,6 +147,40 @@ test("interpretPerEmailCodeStart: code-sent / not-configured / error", () => {
   )
 })
 
+// Regression (live bug): a DeWalt UK signup for an email that ALREADY owns the
+// other UK brand (Stanley) must NOT fall through to a generic error and must NOT
+// mint a second per-email user. The verify/start route returns a 200
+// { status: "cross-brand-required" }; the interpreter maps it to the SAME
+// proof-required action the per-brand (Stanley) drawer already handles, so the
+// drawer diverts into the cross-brand proof step and this becomes a second brand
+// password on the one existing account.
+test("interpretPerEmailCodeStart: cross-brand-required maps to the proof step (no second user)", () => {
+  // Mailbox is a known owned address → email-code proof is offered too.
+  assert.deepEqual(
+    interpretPerEmailCodeStart({
+      httpStatus: 200,
+      body: { status: "cross-brand-required", proofOptions: ["password", "email-code"] },
+    }),
+    { kind: "proof-required", canEmailCode: true },
+  )
+  // Only password proof offered → still proof-required, just no email-code.
+  assert.deepEqual(
+    interpretPerEmailCodeStart({
+      httpStatus: 200,
+      body: { status: "cross-brand-required", proofOptions: ["password"] },
+    }),
+    { kind: "proof-required", canEmailCode: false },
+  )
+  // Missing/absent proofOptions is treated as no email-code, never an error.
+  assert.deepEqual(
+    interpretPerEmailCodeStart({
+      httpStatus: 200,
+      body: { status: "cross-brand-required" },
+    }),
+    { kind: "proof-required", canEmailCode: false },
+  )
+})
+
 test("interpretPerEmailCreateResponse: created only after the code is consumed", () => {
   assert.deepEqual(
     interpretPerEmailCreateResponse({ httpStatus: 201, body: { status: "created" } }),

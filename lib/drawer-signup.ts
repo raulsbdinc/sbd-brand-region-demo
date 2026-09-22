@@ -146,11 +146,20 @@ export function interpretBrandProofResponse(res: HttpResult): BrandProofAction {
 
 /**
  * The drawer's reaction to POST /api/registration/per-email/verify/start.
- * A code is emailed and nothing is created. `not-configured` is the honest
- * refusal when this storefront cannot host Model 3.
+ *   - code-sent      : a one-time code was emailed; nothing is created. The
+ *                      ordinary Model 3 proof step follows.
+ *   - proof-required : the SAME email already owns the OTHER UK brand. We must
+ *                      NOT mint a per-email user — instead the drawer switches to
+ *                      the SAME cross-brand proof step the per-brand (Stanley)
+ *                      drawer uses, so this becomes a second brand password on
+ *                      the existing account. `canEmailCode` mirrors whether the
+ *                      endpoint offered the email-code proof option.
+ *   - not-configured : the honest refusal when this storefront can't host Model 3.
+ *   - error          : anything else, with a neutral message when present.
  */
 export type PerEmailCodeAction =
   | { kind: "code-sent" }
+  | { kind: "proof-required"; canEmailCode: boolean }
   | { kind: "not-configured" }
   | { kind: "error"; message?: string }
 
@@ -158,6 +167,12 @@ export function interpretPerEmailCodeStart(res: HttpResult): PerEmailCodeAction 
   const { httpStatus, body } = res
   if (body.configured === false) return { kind: "not-configured" }
   if (httpStatus === 200 && body.status === "code-sent") return { kind: "code-sent" }
+  // The email already owns the other UK brand: do not create a per-email user —
+  // divert into the cross-brand proof step (identical to the per-brand drawer).
+  if (httpStatus === 200 && body.status === "cross-brand-required") {
+    const options = Array.isArray(body.proofOptions) ? body.proofOptions : []
+    return { kind: "proof-required", canEmailCode: options.includes("email-code") }
+  }
   return { kind: "error", message: messageOf(body) }
 }
 
