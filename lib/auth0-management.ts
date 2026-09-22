@@ -20,6 +20,7 @@
 // a client component.
 
 import "server-only"
+import { managementRetryDelayMs } from "@/lib/management-retry"
 import {
   CONNECTION_KEY_META,
   connectionKeyForName,
@@ -139,32 +140,49 @@ async function safeText(res: Response): Promise<string> {
  * Low-level authenticated request to the Management API. Returns parsed JSON
  * (or `null` for empty 204 responses). Throws `ManagementError` on non-2xx.
  */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function mgmtFetch<T>(
   pathAndQuery: string,
   init?: RequestInit,
 ): Promise<T> {
-  const token = await getMgmtToken()
-  const res = await fetch(`https://${tenantDomain()}/api/v2${pathAndQuery}`, {
-    ...init,
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
-  })
+  for (let attempt = 0; ; attempt++) {
+    const token = await getMgmtToken()
+    const res = await fetch(`https://${tenantDomain()}/api/v2${pathAndQuery}`, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      cache: "no-store",
+    })
 
-  if (!res.ok) {
-    const detail = await safeText(res)
-    throw new ManagementError(
-      `Management API ${init?.method ?? "GET"} ${pathAndQuery} failed (${res.status}). ${detail}`,
-      res.status,
-    )
+    if (!res.ok) {
+      const delay = managementRetryDelayMs({
+        status: res.status,
+        attempt,
+        retryAfterHeader: res.headers.get("retry-after"),
+        rateLimitResetHeader: res.headers.get("x-ratelimit-reset"),
+        nowMs: Date.now(),
+      })
+      const detail = await safeText(res)
+      if (delay !== null) {
+        await sleep(delay)
+        continue
+      }
+      throw new ManagementError(
+        `Management API ${init?.method ?? "GET"} ${pathAndQuery} failed (${res.status}). ${detail}`,
+        res.status,
+      )
+    }
+
+    if (res.status === 204) return null as T
+    const text = await res.text()
+    return (text ? JSON.parse(text) : null) as T
   }
-
-  if (res.status === 204) return null as T
-  const text = await res.text()
-  return (text ? JSON.parse(text) : null) as T
 }
 
 // --- Typed surface used by the account routes ------------------------------
