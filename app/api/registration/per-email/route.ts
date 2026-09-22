@@ -23,7 +23,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { resolveConnectionNames } from "@/lib/credential-model"
-import { connectionIdForKey } from "@/lib/credential-resolver"
+import { connectionIdForKey, resolvePerEmailRegistrationGuard } from "@/lib/credential-resolver"
 import {
   planModel3Registration,
   type Model3RejectReason,
@@ -111,6 +111,53 @@ export async function POST(request: NextRequest) {
   // same "configured: false" the client already knows how to simulate.
   if (!isManagementConfigured()) {
     return NextResponse.json({ configured: false, reason: "management-not-configured" }, { status: 200 })
+  }
+
+  // CROSS-BRAND / DUPLICATE GUARD (the hard invariant) — run BEFORE any create.
+  // A per-email sign-up must never mint a standalone Auth0 user for an email an
+  // existing account already owns. If the email already owns the OTHER UK brand
+  // we steer the client into the cross-brand proof flow (it becomes a second
+  // brand password on the SAME account); every other non-"proceed" outcome
+  // refuses without minting. Bound emails come from the signed cookie, so the
+  // guard runs on exactly the address(es) this request would provision.
+  const primaryBound = plan.identities.find((i) => i.role === "primary")!.email
+  const primaryGuard = await resolvePerEmailRegistrationGuard(primaryBound)
+  if (primaryGuard.kind === "not-configured") {
+    return NextResponse.json({ configured: false, reason: "management-not-configured" }, { status: 200 })
+  }
+  if (primaryGuard.kind === "divert-cross-brand") {
+    return NextResponse.json(
+      { status: "cross-brand-required", proofOptions: primaryGuard.proofOptions },
+      { status: 200 },
+    )
+  }
+  if (primaryGuard.kind === "already-registered") {
+    return NextResponse.json(
+      {
+        error: "An account already exists for this email. Try signing in instead.",
+        reason: "already-account",
+      },
+      { status: 409 },
+    )
+  }
+  if (primaryGuard.kind === "fail-closed") {
+    return NextResponse.json(
+      { error: "We couldn't complete that right now. Please try again." },
+      { status: 409 },
+    )
+  }
+  // A second email must likewise not already belong to another account — that
+  // would split a person across accounts or mix models. We never divert a
+  // secondary; anything but a clean "proceed" refuses neutrally.
+  const secondaryBound = plan.identities.find((i) => i.role === "secondary")?.email
+  if (secondaryBound) {
+    const secondaryGuard = await resolvePerEmailRegistrationGuard(secondaryBound)
+    if (secondaryGuard.kind !== "proceed") {
+      return NextResponse.json(
+        { error: "We couldn't complete that right now. Please try again." },
+        { status: 409 },
+      )
+    }
   }
 
   // A second email needs its own password.

@@ -322,6 +322,109 @@ export interface Model3RegisterBinding extends Record<string, unknown> {
   secondaryEmail?: string
 }
 
+// --- Model 3: pre-provision collision guard ---------------------------------
+//
+// A per-email (Model 3) sign-up must NEVER mint a standalone Auth0 user for an
+// email that an existing account already owns — that splits one person into two
+// accounts (the live defect: registering per-email on DeWalt UK for an email
+// that already had a Stanley brand account created a SECOND Auth0 user). Worse,
+// when the email already owns the OTHER UK brand (a Model-4 per-brand account),
+// the coherent resolution is NOT a per-email account at all — it is a SECOND
+// brand password on that SAME account, added through the existing cross-brand
+// proof flow. This pure planner decides, from server-resolved facts, whether a
+// per-email create may PROCEED, must DIVERT to the cross-brand flow, must tell
+// the customer they are ALREADY REGISTERED, or must FAIL CLOSED. It never lets a
+// per-email credential and a brand credential land on one account.
+
+/** Server-resolved facts about the account (if any) that owns the sign-up email. */
+export type PerEmailExistingFacts =
+  | { kind: "none" }
+  | { kind: "configured-off" }
+  | { kind: "unavailable" }
+  | { kind: "ambiguous" }
+  | {
+      kind: "single"
+      /** The owning account's coherent bindings. */
+      bindings: CredentialBinding[]
+      /** Whether the sign-up mailbox is a verified/owned email on that account. */
+      sameMailboxVerified: boolean
+    }
+
+export interface PerEmailGuardContext {
+  /** The existing account that OWNS the sign-up email, resolved server-side. */
+  existing: PerEmailExistingFacts
+  /** This storefront's brand connection key (null for a non-brand storefront). */
+  thisBrandKey: "dewalt" | "stanley" | null
+}
+
+export type PerEmailGuardDecision =
+  /** No existing account owns the email → mint the per-email identity. */
+  | { kind: "proceed" }
+  /**
+   * The email already owns the OTHER UK brand → do NOT mint a per-email user;
+   * add THIS brand as a second brand password via the cross-brand proof flow.
+   */
+  | { kind: "divert-cross-brand"; proofOptions: ("password" | "email-code")[] }
+  /** An account already owns this email here (this brand, or a per-email one). */
+  | { kind: "already-registered" }
+  /** Management not configured → the storefront runs its Demo behaviour. */
+  | { kind: "not-configured" }
+  /** Ambiguous / unavailable / incoherent → refuse, neutrally. */
+  | { kind: "fail-closed" }
+
+/**
+ * Decide whether a per-email (Model 3) registration may proceed for an email,
+ * given the account that already owns it. Fails CLOSED on anything but a clear
+ * "no owner" or a clean cross-brand link opportunity — it must be impossible for
+ * this to green-light minting a second Auth0 user for an email an account
+ * already owns, or to mix a per-email and a brand credential on one account.
+ */
+export function planPerEmailRegistrationGuard(
+  ctx: PerEmailGuardContext,
+): PerEmailGuardDecision {
+  const { existing } = ctx
+  switch (existing.kind) {
+    case "none":
+      return { kind: "proceed" }
+    case "configured-off":
+      return { kind: "not-configured" }
+    case "unavailable":
+    case "ambiguous":
+      return { kind: "fail-closed" }
+    case "single": {
+      const b = existing.bindings
+      // An already-incoherent set → never touch it.
+      if (bindingsMixModels(b)) return { kind: "fail-closed" }
+      const family = accountModelForBindings(b)
+
+      // Already a per-email account for this email → don't mint a duplicate.
+      if (family === "per-email") return { kind: "already-registered" }
+
+      // A per-brand (Model 4) account owns the email.
+      if (family === "per-brand") {
+        const thisKey = ctx.thisBrandKey
+        if (!thisKey) return { kind: "fail-closed" } // no brand key → cannot divert
+        // This brand already present → nothing to add; sign in.
+        if (b.some((x) => x.connectionKey === thisKey)) {
+          return { kind: "already-registered" }
+        }
+        // Owns the OTHER brand only → add THIS brand via the cross-brand proof.
+        return {
+          kind: "divert-cross-brand",
+          proofOptions: existing.sameMailboxVerified
+            ? ["password", "email-code"]
+            : ["password"],
+        }
+      }
+
+      // family === null: a shared-only (EU Model 1/2) or scoped-empty account
+      // already owns this email. Minting a per-email user would create a second
+      // account for one person → fail closed (neutral).
+      return { kind: "fail-closed" }
+    }
+  }
+}
+
 // --- Model 4: first-brand registration planning -----------------------------
 
 export type Model4RejectReason =

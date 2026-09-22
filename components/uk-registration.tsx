@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import {
   AtSign,
@@ -87,7 +87,11 @@ export function UkRegistration({ brandName, otherBrandName, overridden }: Props)
           otherBrandName={otherBrandName}
         />
       ) : model === "per-email" ? (
-        <PerEmailJourney onBack={() => setStep("choose")} />
+        <PerEmailJourney
+          onBack={() => setStep("choose")}
+          brandName={brandName}
+          otherBrandName={otherBrandName}
+        />
       ) : (
         <PerBrandJourney
           onBack={() => setStep("choose")}
@@ -270,7 +274,15 @@ function looksLikeEmail(v: string): boolean {
 
 // --- Model 3: different email + password per sign-in ------------------------
 
-function PerEmailJourney({ onBack }: { onBack: () => void }) {
+function PerEmailJourney({
+  onBack,
+  brandName,
+  otherBrandName,
+}: {
+  onBack: () => void
+  brandName: string
+  otherBrandName: string
+}) {
   const [phase, setPhase] = useState<"details" | "verify">("details")
   const [primaryEmail, setPrimaryEmail] = useState("")
   const [primaryPassword, setPrimaryPassword] = useState("")
@@ -279,6 +291,10 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
   const [secondaryPassword, setSecondaryPassword] = useState("")
   const [notReady, setNotReady] = useState<NotReady | null>(null)
   const [done, setDone] = useState<{ completionAvailable: boolean } | null>(null)
+  // The primary email already owns the OTHER UK brand. A per-email account would
+  // split one person in two, so we hand off to the cross-brand proof flow: this
+  // becomes a second brand password on the SAME account, never a new user.
+  const [crossBrand, setCrossBrand] = useState(false)
 
   const emailsClash =
     addSecond &&
@@ -333,6 +349,33 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
     )
   }
 
+  if (crossBrand) {
+    return (
+      <div className="flex flex-col gap-4">
+        <BackButton onBack={onBack} />
+        <Alert>
+          <Info className="size-4" aria-hidden="true" />
+          <AlertTitle>You already have a {otherBrandName} account</AlertTitle>
+          <AlertDescription>
+            This email already signs in to {otherBrandName}, so we can&apos;t set
+            up a separate email-and-password login for it. Instead, confirm
+            it&apos;s you and we&apos;ll add {brandName} as a second brand
+            password on your existing account — no duplicate account, and your{" "}
+            {otherBrandName} password stays the same.
+          </AlertDescription>
+        </Alert>
+        <PerBrandJourney
+          onBack={onBack}
+          brandName={brandName}
+          otherBrandName={otherBrandName}
+          initialEmail={primaryEmail.trim()}
+          initialPassword={primaryPassword}
+          autoStart
+        />
+      </div>
+    )
+  }
+
   if (phase === "verify") {
     return (
       <div className="flex flex-col gap-4">
@@ -344,6 +387,7 @@ function PerEmailJourney({ onBack }: { onBack: () => void }) {
           secondaryPassword={addSecond ? secondaryPassword : undefined}
           onNotReady={setNotReady}
           onDone={setDone}
+          onCrossBrand={() => setCrossBrand(true)}
         />
       </div>
     )
@@ -451,6 +495,7 @@ function PerEmailVerify({
   secondaryPassword,
   onNotReady,
   onDone,
+  onCrossBrand,
 }: {
   primaryEmail: string
   primaryPassword: string
@@ -458,6 +503,7 @@ function PerEmailVerify({
   secondaryPassword?: string
   onNotReady: (n: NotReady) => void
   onDone: (d: { completionAvailable: boolean }) => void
+  onCrossBrand: () => void
 }) {
   const emails = secondaryEmail ? [primaryEmail, secondaryEmail] : [primaryEmail]
   const [states, setStates] = useState<Record<string, EmailCodeState>>(() =>
@@ -496,6 +542,10 @@ function PerEmailVerify({
         handleNotReady(data)
         return
       }
+      if (res.status === 200 && data?.status === "cross-brand-required") {
+        onCrossBrand()
+        return
+      }
       if (res.status === 200 && data?.status === "code-sent") {
         patch(email, { sent: true })
         return
@@ -529,6 +579,10 @@ function PerEmailVerify({
       const data = await res.json()
       if (res.status === 200 && data?.configured === false) {
         handleNotReady(data)
+        return
+      }
+      if (res.status === 200 && data?.status === "cross-brand-required") {
+        onCrossBrand()
         return
       }
       if (res.status === 201 && data?.status === "created") {
@@ -656,21 +710,41 @@ function PerBrandJourney({
   onBack,
   brandName,
   otherBrandName,
+  initialEmail = "",
+  initialPassword = "",
+  autoStart = false,
 }: {
   onBack: () => void
   brandName: string
   otherBrandName: string
+  /** Seed the email when arriving from another journey (e.g. per-email divert). */
+  initialEmail?: string
+  /** Seed the new brand password to carry a customer's choice across the divert. */
+  initialPassword?: string
+  /** Submit once on mount to jump straight to the cross-brand proof step. */
+  autoStart?: boolean
 }) {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
+  const [email, setEmail] = useState(initialEmail)
+  const [password, setPassword] = useState(initialPassword)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notReady, setNotReady] = useState<NotReady | null>(null)
   const [done, setDone] = useState<"created" | "linked" | null>(null)
   // When the email already owns the OTHER brand, we must prove ownership first.
   const [proof, setProof] = useState<{ options: string[] } | null>(null)
+  const [autoStarted, setAutoStarted] = useState(false)
 
   const canSubmit = looksLikeEmail(email) && password.length >= 8
+
+  // When diverted from the per-email journey we already have a valid email and
+  // password, so kick off the create→proof handshake once without a manual step.
+  useEffect(() => {
+    if (autoStart && !autoStarted && canSubmit) {
+      setAutoStarted(true)
+      void submitCreate()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, autoStarted, canSubmit])
 
   async function submitCreate() {
     setBusy(true)

@@ -59,6 +59,12 @@ import {
   type BrandDuplicateCandidate,
 } from "@/lib/brand-duplicate"
 import {
+  brandConnectionKey,
+  planPerEmailRegistrationGuard,
+  type PerEmailExistingFacts,
+  type PerEmailGuardDecision,
+} from "@/lib/account-model"
+import {
   bareUserId,
   resolvePasswordChangeTarget,
   toManagementUserId,
@@ -456,6 +462,62 @@ export async function resolveExistingAccountByEmail(
       verifiedEmails: collectAccountVerifiedEmails(user),
     },
   }
+}
+
+// --- Model 3 pre-provision cross-brand / duplicate guard --------------------
+
+/**
+ * Server bridge that answers "may a per-email (Model 3) sign-up mint a user for
+ * this email, on THIS storefront brand?" It resolves the single existing account
+ * that owns the email (the same trusted signals the sign-in resolver validates
+ * against) and defers the DECISION to the pure planner. It never mints anything
+ * and never reveals which account matched — it only classifies the sign-up:
+ *
+ *   • proceed            → no account owns the email → the create route mints.
+ *   • divert-cross-brand → the email already owns the OTHER UK brand → the create
+ *                          route must NOT mint a per-email user; the client is
+ *                          steered into the existing cross-brand proof flow so
+ *                          this becomes a second brand password on that account.
+ *   • already-registered → an account already owns this email here → sign in.
+ *   • not-configured     → Management absent → Demo behaviour.
+ *   • fail-closed        → ambiguous / unavailable / incoherent → refuse.
+ *
+ * `siteBrand` defaults to this deployment's brand and is overridable for tests.
+ */
+export async function resolvePerEmailRegistrationGuard(
+  email: string,
+  siteBrand: BrandId = SITE_BRAND,
+): Promise<PerEmailGuardDecision> {
+  const existing = await resolveExistingAccountByEmail(email)
+  const thisBrandKey = brandConnectionKey(siteBrand)
+  const normalized = normalizeEmail(email)
+
+  let facts: PerEmailExistingFacts
+  switch (existing.kind) {
+    case "configured-off":
+      facts = { kind: "configured-off" }
+      break
+    case "unavailable":
+      facts = { kind: "unavailable" }
+      break
+    case "ambiguous":
+      facts = { kind: "ambiguous" }
+      break
+    case "none":
+      facts = { kind: "none" }
+      break
+    case "single":
+      facts = {
+        kind: "single",
+        bindings: existing.account.bindings,
+        sameMailboxVerified: existing.account.verifiedEmails.some(
+          (e) => e.toLowerCase() === normalized,
+        ),
+      }
+      break
+  }
+
+  return planPerEmailRegistrationGuard({ existing: facts, thisBrandKey })
 }
 
 // --- Add-another-email canonical ownership guard ---------------------------
