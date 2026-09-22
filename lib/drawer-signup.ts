@@ -6,7 +6,11 @@
 //
 //   • WHERE the drawer posts a sign-up:
 //       - non-UK (FR/DE)  → the shared Model 1/2 signup (/api/signup),
-//       - UK (DeWalt/Stanley) → the per-brand endpoint (/api/registration/brand)
+//       - DeWalt UK       → the per-email endpoint (/api/registration/per-email).
+//         Nothing is created until the emailed one-time code is consumed, so a
+//         new DeWalt account is Model 3 and the profile can offer "Set separate
+//         password" on a later verified address.
+//       - Stanley UK     → the per-brand endpoint (/api/registration/brand),
 //         which transparently does either a first-brand create OR — when the
 //         SAME email already owns the OTHER UK brand — a cross-brand link after
 //         an emailed one-time code, all inside the drawer.
@@ -26,14 +30,22 @@ import {
   crossBrandConfirmMessage,
 } from "./account-model.ts"
 
+/** Which Create Account endpoint this storefront's drawer posts to. */
+export type DrawerSignupFlow = "shared" | "per-email" | "per-brand"
+
 /**
- * Whether this market's Create Account drawer uses the per-brand (Model 4)
- * endpoint instead of the shared signup. Only UK deployments do; every other
- * market keeps the untouched shared (Model 1/2) signup. Delegates to the same
- * predicate the server routes gate on, so the client and server never diverge.
+ * Where Create Account posts, from the deployment's market and brand.
+ *
+ * DeWalt UK is Model 3 (a password per email). Stanley UK is Model 4 (a
+ * password per brand). Every other market keeps the shared Model 1/2 signup.
+ * A UK brand with no brand connection fails closed to the shared signup; the
+ * server routes still re-gate and refuse a model that market cannot host.
  */
-export function signupUsesBrandFlow(market: CountryId): boolean {
-  return accountModelSelectionAvailable(market)
+export function drawerSignupFlow(market: CountryId, brand: BrandId): DrawerSignupFlow {
+  if (!accountModelSelectionAvailable(market)) return "shared"
+  if (brand === "dewalt") return "per-email"
+  if (brand === "stanley") return "per-brand"
+  return "shared"
 }
 
 /**
@@ -128,6 +140,42 @@ export function interpretBrandProofResponse(res: HttpResult): BrandProofAction {
   const { httpStatus, body } = res
   if (body.configured === false) return { kind: "not-configured" }
   if (httpStatus === 201 && body.status === "linked") return { kind: "linked" }
+  if (httpStatus === 401) return { kind: "bad-code" }
+  return { kind: "error", message: messageOf(body) }
+}
+
+/**
+ * The drawer's reaction to POST /api/registration/per-email/verify/start.
+ * A code is emailed and nothing is created. `not-configured` is the honest
+ * refusal when this storefront cannot host Model 3.
+ */
+export type PerEmailCodeAction =
+  | { kind: "code-sent" }
+  | { kind: "not-configured" }
+  | { kind: "error"; message?: string }
+
+export function interpretPerEmailCodeStart(res: HttpResult): PerEmailCodeAction {
+  const { httpStatus, body } = res
+  if (body.configured === false) return { kind: "not-configured" }
+  if (httpStatus === 200 && body.status === "code-sent") return { kind: "code-sent" }
+  return { kind: "error", message: messageOf(body) }
+}
+
+/**
+ * The drawer's reaction to POST /api/registration/per-email. The account
+ * exists only after `created`. A bad or expired code stays on the proof step
+ * so the customer can ask for another.
+ */
+export type PerEmailCreateAction =
+  | { kind: "created" }
+  | { kind: "bad-code" }
+  | { kind: "not-configured" }
+  | { kind: "error"; message?: string }
+
+export function interpretPerEmailCreateResponse(res: HttpResult): PerEmailCreateAction {
+  const { httpStatus, body } = res
+  if (body.configured === false) return { kind: "not-configured" }
+  if (httpStatus === 201 && body.status === "created") return { kind: "created" }
   if (httpStatus === 401) return { kind: "bad-code" }
   return { kind: "error", message: messageOf(body) }
 }

@@ -9,20 +9,25 @@ import assert from "node:assert/strict"
 
 import {
   crossBrandCollisionMessage,
+  drawerSignupFlow,
   interpretBrandProofResponse,
   interpretBrandSignupResponse,
+  interpretPerEmailCodeStart,
+  interpretPerEmailCreateResponse,
   otherUkBrand,
-  signupUsesBrandFlow,
 } from "./drawer-signup.ts"
 
-// --- Which market uses the per-brand flow -----------------------------------
+// --- Which storefront posts where -------------------------------------------
 
-test("signupUsesBrandFlow: only UK routes the drawer to the per-brand endpoint", () => {
-  assert.equal(signupUsesBrandFlow("uk"), true)
-  // France/Germany (Models 1/2) keep the untouched shared signup.
-  assert.equal(signupUsesBrandFlow("fr"), false)
-  assert.equal(signupUsesBrandFlow("de"), false)
-  assert.equal(signupUsesBrandFlow("us"), false)
+test("drawerSignupFlow: DeWalt UK is per-email, Stanley UK is per-brand, EU stays shared", () => {
+  assert.equal(drawerSignupFlow("uk", "dewalt"), "per-email")
+  assert.equal(drawerSignupFlow("uk", "stanley"), "per-brand")
+  // France/Germany (Models 1/2) keep the untouched shared signup, on either brand.
+  assert.equal(drawerSignupFlow("fr", "dewalt"), "shared")
+  assert.equal(drawerSignupFlow("de", "stanley"), "shared")
+  assert.equal(drawerSignupFlow("us", "dewalt"), "shared")
+  // A UK brand with no brand connection fails closed to shared.
+  assert.equal(drawerSignupFlow("uk", "craftsman"), "shared")
 })
 
 // --- Partner brand + collision copy, both directions ------------------------
@@ -122,5 +127,37 @@ test("interpretBrandProofResponse: linked / bad-code / not-configured / error", 
   assert.deepEqual(
     interpretBrandProofResponse({ httpStatus: 502, body: { error: "Please try again." } }),
     { kind: "error", message: "Please try again." },
+  )
+})
+
+// --- /api/registration/per-email response interpretation --------------------
+
+test("interpretPerEmailCodeStart: code-sent / not-configured / error", () => {
+  assert.deepEqual(
+    interpretPerEmailCodeStart({ httpStatus: 200, body: { status: "code-sent" } }),
+    { kind: "code-sent" },
+  )
+  assert.deepEqual(
+    interpretPerEmailCodeStart({ httpStatus: 200, body: { configured: false } }),
+    { kind: "not-configured" },
+  )
+  assert.deepEqual(
+    interpretPerEmailCodeStart({ httpStatus: 400, body: { error: "Enter a valid email address." } }),
+    { kind: "error", message: "Enter a valid email address." },
+  )
+})
+
+test("interpretPerEmailCreateResponse: created only after the code is consumed", () => {
+  assert.deepEqual(
+    interpretPerEmailCreateResponse({ httpStatus: 201, body: { status: "created" } }),
+    { kind: "created" },
+  )
+  assert.deepEqual(
+    interpretPerEmailCreateResponse({ httpStatus: 401, body: { error: "That code isn't right." } }),
+    { kind: "bad-code" },
+  )
+  assert.deepEqual(
+    interpretPerEmailCreateResponse({ httpStatus: 200, body: { configured: false } }),
+    { kind: "not-configured" },
   )
 })

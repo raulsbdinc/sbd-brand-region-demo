@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import {
   planPerEmailActivation,
   eligibleActivationEmails,
+  emailOnPerEmailIdentity,
   type PerEmailActivationContext,
 } from "./per-email-activation.ts"
 import {
@@ -163,6 +164,60 @@ test("eligibleActivationEmails: excludes the primary and already-backed emails",
     backedPerEmailEmails: [B],
   })
   assert.deepEqual(out, ["third@prorises.com"])
+})
+
+test("emailOnPerEmailIdentity: root signup identity uses the account email", () => {
+  assert.equal(
+    emailOnPerEmailIdentity({
+      connection: "sbd-per-email",
+      perEmailConnection: "sbd-per-email",
+      provider: "auth0",
+      identityUserId: "abc",
+      accountUserId: "auth0|abc",
+      accountEmail: "Primary@Example.com",
+    }),
+    "primary@example.com",
+  )
+})
+
+test("emailOnPerEmailIdentity: a linked identity uses profileData, not the account email", () => {
+  assert.equal(
+    emailOnPerEmailIdentity({
+      connection: "sbd-per-email",
+      perEmailConnection: "sbd-per-email",
+      provider: "auth0",
+      identityUserId: "linked",
+      profileEmail: "Second@Example.com",
+      accountUserId: "auth0|abc",
+      accountEmail: "primary@example.com",
+    }),
+    "second@example.com",
+  )
+})
+
+test("emailOnPerEmailIdentity: ignores other connections and a root identity with no email", () => {
+  assert.equal(
+    emailOnPerEmailIdentity({
+      connection: "sbd-dewalt",
+      perEmailConnection: "sbd-per-email",
+      provider: "auth0",
+      identityUserId: "abc",
+      accountUserId: "auth0|abc",
+      accountEmail: "primary@example.com",
+    }),
+    null,
+  )
+  assert.equal(
+    emailOnPerEmailIdentity({
+      connection: "sbd-per-email",
+      perEmailConnection: "sbd-per-email",
+      provider: "auth0",
+      identityUserId: "someone-else",
+      accountUserId: "auth0|abc",
+      accountEmail: "primary@example.com",
+    }),
+    null,
+  )
 })
 
 test("eligibleActivationEmails: dedupes and normalizes casing", () => {

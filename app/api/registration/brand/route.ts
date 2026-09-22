@@ -29,7 +29,7 @@ import {
 } from "@/lib/account-model"
 import { executeBrandRegistration } from "@/lib/model-registration"
 import { realManagementDeps } from "@/lib/model-registration-deps"
-import { isManagementConfigured } from "@/lib/auth0-management"
+import { isManagementConfigured, sendVerificationEmail } from "@/lib/auth0-management"
 import {
   journeyCookieName,
   journeyCookieOptions,
@@ -126,8 +126,16 @@ export async function POST(request: NextRequest) {
     if (!outcome.ok) {
       return NextResponse.json({ error: outcome.error }, { status: outcome.status })
     }
+    // The account exists but is not active until this message is used. A failed
+    // send still returns created: the profile keeps the account pending and
+    // offers resend, rather than pretending the mailbox was confirmed.
+    try {
+      await sendVerificationEmail(outcome.primaryUserId)
+    } catch {
+      // Pending state and the profile resend cover a missed first send.
+    }
     return NextResponse.json(
-      { status: "created", credentialCount: outcome.credentials.length },
+      { status: "created", credentialCount: outcome.credentials.length, pendingVerification: true },
       { status: 201 },
     )
   }
