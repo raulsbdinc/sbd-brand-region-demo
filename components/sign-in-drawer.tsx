@@ -20,9 +20,11 @@ import {
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   crossBrandCollisionMessage,
+  drawerSignupFlow,
   interpretBrandProofResponse,
   interpretBrandSignupResponse,
-  signupUsesBrandFlow,
+  interpretPerEmailCodeStart,
+  interpretPerEmailCreateResponse,
 } from "@/lib/drawer-signup"
 
 interface SignInDrawerProps {
@@ -94,6 +96,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     | "password"
     | "passcode"
     | "create"
+    | "email-proof"
     | "brand-proof"
     | "recover-email"
     | "recover-reset"
@@ -127,6 +130,15 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const [brandProofVerifying, setBrandProofVerifying] = useState(false)
   const [brandProofSending, setBrandProofSending] = useState(false)
 
+  // DeWalt UK (Model 3) proof state. Create Account emails a one-time code and
+  // does not create the account until that code is consumed, so the profile
+  // starts as a per-email account and can later offer a separate password on
+  // another verified address.
+  const [emailProofOtp, setEmailProofOtp] = useState("")
+  const [emailProofError, setEmailProofError] = useState<string | null>(null)
+  const [emailProofVerifying, setEmailProofVerifying] = useState(false)
+  const [emailProofSending, setEmailProofSending] = useState(false)
+
   // In-drawer "forgot password" recovery state. The whole flow — enter email,
   // receive an emailed one-time code, choose a new password, success — lives in
   // THIS drawer; there is no standalone recovery page. The server resolves which
@@ -149,6 +161,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const panelRef = useRef<HTMLDivElement>(null)
   const otpInputRef = useRef<HTMLInputElement>(null)
   const brandOtpInputRef = useRef<HTMLInputElement>(null)
+  const emailProofInputRef = useRef<HTMLInputElement>(null)
   const recoverEmailInputRef = useRef<HTMLInputElement>(null)
   const recoverCodeInputRef = useRef<HTMLInputElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
@@ -194,6 +207,10 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     setBrandOtpError(null)
     setBrandProofVerifying(false)
     setBrandProofSending(false)
+    setEmailProofOtp("")
+    setEmailProofError(null)
+    setEmailProofVerifying(false)
+    setEmailProofSending(false)
     setRecoverEmail("")
     setRecoverError(null)
     setRecoverSending(false)
@@ -220,6 +237,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   useEffect(() => {
     if (step === "passcode") otpInputRef.current?.focus()
     if (step === "brand-proof") brandOtpInputRef.current?.focus()
+    if (step === "email-proof") emailProofInputRef.current?.focus()
     if (step === "recover-email") recoverEmailInputRef.current?.focus()
     if (step === "recover-reset") recoverCodeInputRef.current?.focus()
   }, [step])
@@ -460,8 +478,13 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     setCreateError(null)
     setCreateExists(false)
 
-    if (signupUsesBrandFlow(SITE_MARKET)) {
+    const flow = drawerSignupFlow(SITE_MARKET, SITE_BRAND)
+    if (flow === "per-brand") {
       await handleBrandCreate()
+      return
+    }
+    if (flow === "per-email") {
+      await startPerEmailProof()
       return
     }
 
@@ -506,6 +529,78 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         "Something went wrong creating your account. Please try again.",
       )
       setCreating(false)
+    }
+  }
+
+  // DeWalt UK Create Account. Email a one-time code first. The account is
+  // created only when that code is consumed, so a new DeWalt account is a
+  // per-email account rather than a brand-password account.
+  async function startPerEmailProof() {
+    setEmailProofSending(true)
+    setEmailProofError(null)
+    setEmailProofOtp("")
+    try {
+      const res = await fetch("/api/registration/per-email/verify/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ primaryEmail: email, email }),
+      })
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      const action = interpretPerEmailCodeStart({ httpStatus: res.status, body: data })
+      if (action.kind === "code-sent") {
+        setStep("email-proof")
+        setCreating(false)
+        return
+      }
+      setCreateError(
+        action.kind === "not-configured"
+          ? "Account creation isn\u2019t available on this storefront right now."
+          : action.message ?? "We couldn\u2019t email a code. Please try again.",
+      )
+      setCreating(false)
+    } catch {
+      setCreateError("We couldn\u2019t email a code. Please try again.")
+      setCreating(false)
+    } finally {
+      setEmailProofSending(false)
+    }
+  }
+
+  async function handlePerEmailVerify(e: FormEvent) {
+    e.preventDefault()
+    const code = emailProofOtp.trim()
+    if (code.length === 0 || emailProofVerifying) return
+    setEmailProofVerifying(true)
+    setEmailProofError(null)
+    try {
+      const res = await fetch("/api/registration/per-email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ primaryPassword: password, primaryOtp: code }),
+      })
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      const action = interpretPerEmailCreateResponse({ httpStatus: res.status, body: data })
+      if (action.kind === "created") {
+        if (await finishWithSignIn()) return
+        setStep("password")
+        setPasswordError("That email or password isn't right.")
+        setEmailProofVerifying(false)
+        return
+      }
+      if (action.kind === "bad-code") {
+        setEmailProofError("That code isn\u2019t right, or it\u2019s expired.")
+        setEmailProofVerifying(false)
+        return
+      }
+      setEmailProofError(
+        action.kind === "not-configured"
+          ? "This isn\u2019t available right now."
+          : action.message ?? "We couldn\u2019t verify that. Please try again.",
+      )
+      setEmailProofVerifying(false)
+    } catch {
+      setEmailProofError("We couldn\u2019t verify that. Please try again.")
+      setEmailProofVerifying(false)
     }
   }
 
@@ -1169,6 +1264,75 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         </button>
       </div>
     )
+  } else if (step === "email-proof") {
+    body = (
+      <form onSubmit={handlePerEmailVerify} className="mt-6">
+        <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+          {"We emailed a one-time code to "}
+          <span className="font-[600] [color:var(--brand-label-color)]">
+            {maskEmail(email)}
+          </span>
+          {". Enter it to create your account. Nothing is saved until this code is confirmed."}
+        </p>
+
+        <div className="mt-6 flex flex-col">
+          <label htmlFor="email-proof-otp" className={labelClass}>
+            One-time code
+            <span className={requiredClass}>(Required)</span>
+          </label>
+          <input
+            id="email-proof-otp"
+            ref={emailProofInputRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]*"
+            maxLength={6}
+            placeholder="Enter 6-digit code"
+            value={emailProofOtp}
+            onChange={(e) => {
+              setEmailProofOtp(e.target.value.replace(/\D/g, "").slice(0, 6))
+              if (emailProofError) setEmailProofError(null)
+            }}
+            className={`${INPUT_CLASS} px-0 tracking-[0.5em]`}
+          />
+        </div>
+
+        {emailProofError && (
+          <p role="alert" className={alertClass}>
+            {emailProofError}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={emailProofVerifying || emailProofOtp.trim().length === 0}
+          className={`mt-6 ${PRIMARY_BUTTON_CLASS}`}
+        >
+          {emailProofVerifying ? "Verifying…" : "Verify and create account"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void startPerEmailProof()}
+          disabled={emailProofSending}
+          className="mt-3 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline disabled:opacity-60"
+        >
+          {emailProofSending ? "Sending…" : "Resend code"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setStep("create")
+            setEmailProofError(null)
+          }}
+          className="mt-2 w-full bg-transparent text-center font-sans text-[12px] font-[600] no-underline [color:var(--brand-label-muted)] outline-none hover:underline focus-visible:underline"
+        >
+          Back
+        </button>
+      </form>
+    )
   } else if (step === "brand-proof") {
     // UK cross-brand (Model 4) ownership step. The email already has an account
     // on the other UK brand; we prove ownership with an emailed code, then add
@@ -1385,7 +1549,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
           id="sign-in-drawer-title"
           className="pr-10 font-[900] text-black [font-family:var(--brand-display-font)] [font-size:var(--brand-heading-size)] [font-stretch:var(--brand-display-stretch)] [letter-spacing:var(--brand-display-tracking)] [line-height:var(--brand-heading-line)] [text-transform:var(--brand-display-case)]"
         >
-          {step === "create" || step === "brand-proof"
+          {step === "create" || step === "brand-proof" || step === "email-proof"
             ? "Create an account"
             : step === "recover-email" ||
                 step === "recover-reset" ||
@@ -1395,7 +1559,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         </h2>
 
         <p className="mt-2 font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
-          {step === "create" || step === "brand-proof"
+          {step === "create" || step === "brand-proof" || step === "email-proof"
             ? `Create your ${brand.name} account to manage your profile, register your tools, and track your orders.`
             : step === "recover-email" ||
                 step === "recover-reset" ||
