@@ -155,6 +155,36 @@ export function planPerEmailActivation(
  * on configuration or on the primary — the route's planner is the real gate and
  * fails closed; this only drives which email rows show the action.
  */
+/**
+ * Address a per-email database identity actually signs in as.
+ *
+ * A linked identity carries the address in `profileData.email`. The root
+ * identity — the user created on this connection at signup — does not. Auth0
+ * stores that address on the user, and the identity's `user_id` is the suffix
+ * of `user.user_id` (`auth0|<id>`). Treating the root as having no address
+ * makes a later "add a password" try to create the primary user again and
+ * fail with a collision.
+ */
+export function emailOnPerEmailIdentity(input: {
+  connection: string
+  perEmailConnection: string
+  provider: string
+  identityUserId: string
+  profileEmail?: string
+  accountUserId: string
+  accountEmail?: string
+}): string | null {
+  if (input.provider !== "auth0" || input.connection !== input.perEmailConnection) {
+    return null
+  }
+  const profile = (input.profileEmail ?? "").trim().toLowerCase()
+  if (profile) return profile
+  const rootId = input.accountUserId.replace(/^auth0\|/, "")
+  const accountEmail = (input.accountEmail ?? "").trim().toLowerCase()
+  if (input.identityUserId === rootId && accountEmail) return accountEmail
+  return null
+}
+
 export function eligibleActivationEmails(input: {
   primaryEmail: string
   verifiedEmails: string[]

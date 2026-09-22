@@ -27,6 +27,7 @@ import {
   buildCredentialBinding,
 } from "@/lib/credential-provisioning"
 import {
+  emailOnPerEmailIdentity,
   planPerEmailActivation,
   type PerEmailActivationRejectReason,
 } from "@/lib/per-email-activation"
@@ -121,10 +122,18 @@ export async function POST(request: Request) {
     // AND a real linked identity on the per-email connection (partial-retry reuse).
     const perEmailIdentityEmails = new Set(
       (primary.identities ?? [])
-        .filter((id) => id.provider === "auth0" && id.connection === perEmailConnection)
-        .map((id) => (id.profileData as { email?: string } | undefined)?.email ?? "")
-        .filter(Boolean)
-        .map((e) => e.toLowerCase()),
+        .map((id) =>
+          emailOnPerEmailIdentity({
+            connection: id.connection,
+            perEmailConnection,
+            provider: id.provider,
+            identityUserId: id.user_id,
+            profileEmail: (id.profileData as { email?: string } | undefined)?.email,
+            accountUserId: primary.user_id,
+            accountEmail: primary.email,
+          }),
+        )
+        .filter((email): email is string => Boolean(email)),
     )
     const backedPerEmailEmails = bindings
       .filter((b) => b.connectionKey === "per-email")
@@ -237,10 +246,15 @@ export async function POST(request: Request) {
       const normalized = email.toLowerCase()
       const match = (primary.identities ?? []).find(
         (id) =>
-          id.provider === "auth0" &&
-          id.connection === perEmailConnection &&
-          ((id.profileData as { email?: string } | undefined)?.email ?? "").toLowerCase() ===
-            normalized,
+          emailOnPerEmailIdentity({
+            connection: id.connection,
+            perEmailConnection,
+            provider: id.provider,
+            identityUserId: id.user_id,
+            profileEmail: (id.profileData as { email?: string } | undefined)?.email,
+            accountUserId: primary.user_id,
+            accountEmail: primary.email,
+          }) === normalized,
       )
       return match?.user_id ?? null
     }
