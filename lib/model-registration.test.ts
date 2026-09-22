@@ -325,6 +325,7 @@ test("brand registration: creates a fresh primary with one per-brand binding", a
     assert.equal(out.credentials.length, 1)
     assert.equal(out.credentials[0].brand, "dewalt")
     assert.equal(state.created.length, 1)
+    assert.equal(state.createdVerified[0]?.emailVerified, false)
     assert.equal(state.linked.length, 0) // primary account, nothing to link
     assert.equal(state.deleted.length, 0)
     assert.equal((state.updated[0].bindings as unknown[]).length, 1)

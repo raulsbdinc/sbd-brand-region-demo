@@ -1,7 +1,9 @@
 import { auth0, isAuthConfigured } from "@/lib/auth0"
+import { getUser } from "@/lib/auth0-management"
 import { extractOtherSites } from "@/lib/claims"
 import { AccountClient } from "@/components/account-client"
 import { CustomerProfile } from "@/components/customer-profile"
+import { PendingEmailVerification } from "@/components/pending-email-verification"
 import { ProfileResolver } from "@/components/profile-resolver"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { profilePasswordModelVisibility } from "@/lib/brand-password-actions"
@@ -38,6 +40,25 @@ export default async function ProfilePage({
     // hand it to the customer profile, which renders the recognition panel at
     // the top. Empty on a first-ever site — the panel renders nothing then.
     const otherSites = extractOtherSites(session.user)
+
+    // The session claim is whatever was true at sign-in. The directory is the
+    // record that flips when the verification link is used, so a pending
+    // account stays limited until that record says the address is confirmed.
+    const sub = typeof session.user.sub === "string" ? session.user.sub : ""
+    let emailVerified = session.user.email_verified === true
+    if (sub) {
+      try {
+        const directory = await getUser(sub)
+        emailVerified = directory.email_verified === true
+      } catch {
+        // A lookup failure must not lock out someone the session already
+        // reports as verified.
+      }
+    }
+    if (!emailVerified) {
+      const email = typeof session.user.email === "string" ? session.user.email : null
+      return <PendingEmailVerification email={email} />
+    }
 
     // Discoverable password management differs by UK storefront (GLSCM-4834):
     // DeWalt UK runs Model 3 (a separate password per EMAIL, shown beside each

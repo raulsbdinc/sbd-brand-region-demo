@@ -22,10 +22,13 @@ export function EmailVerificationStatus({
   live,
   email,
   initialVerified,
+  onVerified,
 }: {
   live: boolean
   email: string | null
   initialVerified: boolean
+  /** Called once the directory reports the address as verified. */
+  onVerified?: () => void
 }) {
   const { data, mutate, isLoading } = useSWR<VerificationData>(
     live ? "/api/account/verification" : null,
@@ -42,6 +45,10 @@ export function EmailVerificationStatus({
     const timer = window.setTimeout(() => setCooldown(false), 60_000)
     return () => window.clearTimeout(timer)
   }, [cooldown])
+
+  useEffect(() => {
+    if (data?.verified) onVerified?.()
+  }, [data?.verified, onVerified])
 
   const configured = live && data?.configured !== false
   const verified = configured ? Boolean(data?.verified) : demoVerified
@@ -99,7 +106,7 @@ export function EmailVerificationStatus({
                 ? "Checking your directory record…"
                 : verified
                   ? "Your sign-in email has been confirmed."
-                  : `Confirm ${destination || "your email"} to strengthen account assurance. Verification does not control access.`}
+                  : `Confirm ${destination || "your email"} before this account is active. The link expires; resend it if it never arrived or has expired.`}
             </p>
           </div>
         </div>

@@ -448,9 +448,10 @@ export async function executeBrandRegistration(
 
   let primary: Auth0User
   try {
-    // First-brand registration: ownership is established out-of-band by the
-    // brand route (email + brand password on the brand connection). Mint proven.
-    primary = await deps.createUser({ connection: connectionName, email, password, emailVerified: true })
+    // First brand has not proved the mailbox yet. Leave email_verified false so
+    // the account stays pending until the verification message is used. The
+    // route sends that message; a later proof-gated brand link still mints verified.
+    primary = await deps.createUser({ connection: connectionName, email, password, emailVerified: false })
   } catch (err) {
     return { ok: false, ...neutralCreateError(err) }
   }
