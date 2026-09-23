@@ -74,7 +74,7 @@ async function getUser(domain, token, id) {
   // is a legitimate "nothing to delete" outcome we classify, not a crash — so
   // swallow ONLY the 404 and re-throw everything else.
   try {
-    return await mgmtFetch(domain, token, `/api/v2/users/${encodeURIComponent(id)}`, {
+    return await mgmtFetch(domain, token, `/users/${encodeURIComponent(id)}`, {
       method: "GET",
     })
   } catch (err) {
@@ -123,7 +123,7 @@ async function main() {
   const deleted = []
   for (const r of eligible) {
     // DELETE returns 204; mgmtFetch returns null on 204 and throws on any error.
-    await mgmtFetch(domain, token, `/api/v2/users/${encodeURIComponent(r.id)}`, {
+    await mgmtFetch(domain, token, `/users/${encodeURIComponent(r.id)}`, {
       method: "DELETE",
     })
     console.error(`[DELETED] ${r.id} (${r.email})`)
