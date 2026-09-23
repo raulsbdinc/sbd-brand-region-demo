@@ -26,6 +26,10 @@ import {
   interpretPerEmailCodeStart,
   interpretPerEmailCreateResponse,
 } from "@/lib/drawer-signup"
+import {
+  PASSWORD_REQUIREMENTS_TEXT,
+  validateRegistrationPassword,
+} from "@/lib/password-policy"
 
 interface SignInDrawerProps {
   open: boolean
@@ -57,10 +61,10 @@ const INPUT_CLASS =
   "h-[50px] w-full rounded-none border-b bg-transparent py-[15.5px] text-[16px] outline-none [border-bottom-color:var(--brand-input-border)] [color:var(--brand-label-color)] focus:[border-bottom-color:var(--brand-label-color)]"
 
 // The connection's password policy, shown as static helper text on the create
-// step and reused verbatim as the weak-password error, so nobody fails this
-// live. Mirrors the tenant policy exactly (>=8 chars, >=3 of the 4 char types).
-const PASSWORD_REQUIREMENTS =
-  "At least 8 characters, including at least 3 of: lower case, upper case, numbers, and special characters."
+// step. Sourced from the shared policy module so the hint, the client-side
+// submit gate, and the server's pre-consumption gate are always identical
+// (>=8 chars, >=3 of the 4 char types, and no part of the email address).
+const PASSWORD_REQUIREMENTS = PASSWORD_REQUIREMENTS_TEXT
 
 /** Mask a local part for display: `jane@x.com` -> `j•••@x.com`. */
 function maskEmail(value: string): string {
@@ -470,7 +474,13 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       setCreateError("Enter a valid email address first.")
       return
     }
-    if (!password) {
+    // Validate against the SAME shared policy the server enforces, BEFORE any
+    // flow branch emails a one-time code. For the UK per-email (Model 3) and
+    // per-brand (Model 4) journeys this is what prevents a predictably-weak
+    // password (too short, too few character classes, or containing part of the
+    // email) from consuming an OTP and being rejected only after the fact.
+    const policy = validateRegistrationPassword(password, [email])
+    if (!policy.ok) {
       setCreateError(PASSWORD_REQUIREMENTS)
       return
     }
