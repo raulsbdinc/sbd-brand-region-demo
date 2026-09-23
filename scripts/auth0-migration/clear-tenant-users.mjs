@@ -22,7 +22,7 @@
 // Obvious test records (see the hints below) still delete without an allowlist.
 
 import { readFile } from "node:fs/promises"
-import { parseArgs, resolveDomain, resolveToken, paginate, mgmtFetch } from "./mgmt.mjs"
+import { parseArgs, resolveDomain, resolveToken, assertMutableTarget, paginate, mgmtFetch } from "./mgmt.mjs"
 
 const TEST_EMAIL_DOMAINS = new Set([
   "bowlfuel.com", "mailinator.com", "example.com", "example.org", "test.com",
@@ -61,7 +61,7 @@ async function buildAllowlist(args) {
 
 async function main() {
   const args = parseArgs()
-  const domain = resolveDomain(args)
+  const domain = assertMutableTarget(resolveDomain(args))
   const token = resolveToken()
   const apply = Boolean(args.apply)
   const onlyConnection = args.connection ? String(args.connection) : null

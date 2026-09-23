@@ -11,19 +11,34 @@
 //   export AUTH0_MGMT_TOKEN='...'         # required, never committed
 //   node inventory-users.mjs --tenant uk  # domain resolved from --tenant
 //
-// Confirmed issuers (verified from OIDC discovery in the browser, NOT inferred
-// from tenant names):
-//   UK      sbd-uk-temp.uk.auth0.com   (region EU/UK — stable target)
-//   Europe  provided at run time via --domain or AUTH0_EUROPE_DOMAIN.
-//           The verified EU-region tenant (e.g. sbd-emea-eu-temp.eu.auth0.com)
-//           REPLACES the rejected US-5 sbd-emea-temp.us.auth0.com, which must
-//           NOT be mutated (wrong residency for CIAM-14 / CIAM-15). The Europe
-//           domain is deliberately not hard-coded so no script can default to
-//           the US-5 tenant.
+// Confirmed issuers (verified from OIDC discovery in the browser + Auth0 Teams,
+// NOT inferred from tenant names). These two NEW tenants are the ONLY migration
+// targets:
+//   UK      sbd-uk-temp1.uk.auth0.com   (region UK-1, owner +tmp5)
+//   Europe  sbd-emea-temp1.eu.auth0.com (region EU-2, owner +tmp4)
+//
+// Old lookalike tenants are REFUSED as mutation targets by assertMutableTarget()
+// (they may still be READ read-only as a config reference — e.g. exporting the
+// old UK connection settings — but never provisioned into or cleared):
+//   sbd-emea-temp.us.auth0.com  — US-5, CIAM-14 residency conflict
+//   sbd-eu-temp.eu.auth0.com    — stray (+tmp2), never in scope
+//   sbd-uk-temp.uk.auth0.com    — old UK, reference source only (do not mutate)
+//
+// Both targets can still be overridden at run time with --domain, or
+// AUTH0_UK_DOMAIN / AUTH0_EUROPE_DOMAIN, but default to the verified tenants.
 
 const TENANT_DOMAINS = {
-  uk: "sbd-uk-temp.uk.auth0.com",
+  uk: "sbd-uk-temp1.uk.auth0.com",
+  europe: "sbd-emea-temp1.eu.auth0.com",
+  emea: "sbd-emea-temp1.eu.auth0.com",
 }
+
+// Old/rejected tenants that must never be provisioned into or cleared.
+const FORBIDDEN_MUTATION_DOMAINS = new Set([
+  "sbd-emea-temp.us.auth0.com",
+  "sbd-eu-temp.eu.auth0.com",
+  "sbd-uk-temp.uk.auth0.com",
+])
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const args = { _: [] }
@@ -49,19 +64,29 @@ export function resolveDomain(args) {
   if (args.domain) return String(args.domain)
   const tenant = String(args.tenant || "").toLowerCase()
   if (tenant === "emea" || tenant === "europe") {
-    const fromEnv = process.env.AUTH0_EUROPE_DOMAIN
-    if (fromEnv) return String(fromEnv)
+    return String(process.env.AUTH0_EUROPE_DOMAIN || TENANT_DOMAINS.europe)
+  }
+  if (tenant === "uk") {
+    return String(process.env.AUTH0_UK_DOMAIN || TENANT_DOMAINS.uk)
+  }
+  throw new Error(
+    "Specify the target tenant: --tenant uk | --tenant europe (or an explicit --domain <host>). " +
+      "Defaults resolve to the verified new tenants sbd-uk-temp1.uk.auth0.com / " +
+      "sbd-emea-temp1.eu.auth0.com; override with AUTH0_UK_DOMAIN / AUTH0_EUROPE_DOMAIN.",
+  )
+}
+
+// Guard for MUTATING scripts (setup/clear). Read-only inventory may target the
+// old UK tenant as a config reference and deliberately does NOT call this.
+export function assertMutableTarget(domain) {
+  if (FORBIDDEN_MUTATION_DOMAINS.has(domain)) {
     throw new Error(
-      "The Europe tenant domain is not hard-coded (the US-5 sbd-emea-temp is rejected for " +
-        "CIAM-14 residency). Pass --domain <eu-host> or set AUTH0_EUROPE_DOMAIN to the verified " +
-        "EU-region tenant (e.g. sbd-emea-eu-temp.eu.auth0.com).",
+      `Refusing to mutate ${domain} — it is an old/rejected tenant (US-5 sbd-emea-temp, ` +
+        `stray sbd-eu-temp, or reference-only old sbd-uk-temp). The only mutation targets are ` +
+        `sbd-emea-temp1.eu.auth0.com and sbd-uk-temp1.uk.auth0.com.`,
     )
   }
-  if (TENANT_DOMAINS[tenant]) return TENANT_DOMAINS[tenant]
-  throw new Error(
-    "Specify the target tenant: --tenant uk, or --tenant europe with --domain/AUTH0_EUROPE_DOMAIN " +
-      "(or an explicit --domain <host>).",
-  )
+  return domain
 }
 
 export function resolveToken() {

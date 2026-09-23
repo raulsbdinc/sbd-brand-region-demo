@@ -33,7 +33,7 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { parseArgs, resolveDomain, resolveToken, mgmtFetch, paginate } from "./mgmt.mjs"
+import { parseArgs, resolveDomain, resolveToken, assertMutableTarget, mgmtFetch, paginate } from "./mgmt.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -113,15 +113,9 @@ async function findClientGrant(domain, token, clientId, audience) {
 
 async function main() {
   const args = parseArgs()
-  const domain = resolveDomain({ ...args, tenant: args.tenant || "europe" })
-
-  // Hard refusal: never mutate the rejected US-5 tenant, even if named explicitly.
-  if (domain === "sbd-emea-temp.us.auth0.com") {
-    throw new Error(
-      "Refusing to target sbd-emea-temp.us.auth0.com — its US-5 residency conflicts with the " +
-        "CIAM-14 map and it must not be mutated. Provision the verified EU-region Europe tenant instead.",
-    )
-  }
+  // Default to the verified EU-region Europe tenant; refuse old/rejected
+  // tenants (US-5 sbd-emea-temp, stray sbd-eu-temp, reference-only old UK).
+  const domain = assertMutableTarget(resolveDomain({ ...args, tenant: args.tenant || "europe" }))
 
   const token = resolveToken()
   const apply = Boolean(args.apply)
