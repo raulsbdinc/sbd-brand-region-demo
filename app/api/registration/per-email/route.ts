@@ -203,10 +203,12 @@ export async function POST(request: NextRequest) {
     {
       ...realManagementDeps,
       // Consume the code at the IdP; resolves on success, throws on a wrong /
-      // expired / already-used code. We discard the returned identity — we only
-      // care that consumption succeeded.
+      // expired / already-used code. Return the minted passwordless stub's sub
+      // so the orchestrator can delete that transient "email|…" user afterwards
+      // (the code is proof only — it must never linger as an orphan account).
       verifyPasscode: async (email, otp) => {
-        await verifyEmailPasscode(creds, email, otp)
+        const identity = await verifyEmailPasscode(creds, email, otp)
+        return { sub: identity.sub }
       },
     },
   )

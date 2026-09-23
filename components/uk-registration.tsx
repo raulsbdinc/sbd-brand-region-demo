@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ACCOUNT_MODEL_META, type AccountModel, crossBrandConfirmMessage } from "@/lib/account-model"
+import { validateRegistrationPassword, PASSWORD_REQUIREMENTS_TEXT } from "@/lib/password-policy"
 
 interface Props {
   /** Concrete deployment brand name, e.g. "DeWalt". */
@@ -301,11 +302,23 @@ function PerEmailJourney({
     primaryEmail.length > 0 &&
     secondaryEmail.trim().toLowerCase() === primaryEmail.trim().toLowerCase()
 
+  // Validate each password against the SAME shared policy the server enforces
+  // (length, 3-of-4 classes, and no email user-info) so the form never enables
+  // submit for a password Auth0 will reject — and, critically, never lets us
+  // consume the customer's one-time code only to fail the create afterwards.
+  const primaryPwCheck = validateRegistrationPassword(primaryPassword, [primaryEmail])
+  const primaryPwError =
+    primaryPassword.length > 0 && !primaryPwCheck.ok ? primaryPwCheck.failures.join("; ") : undefined
+  const secondaryPwCheck = validateRegistrationPassword(secondaryPassword, [secondaryEmail])
+  const secondaryPwError =
+    addSecond && secondaryPassword.length > 0 && !secondaryPwCheck.ok
+      ? secondaryPwCheck.failures.join("; ")
+      : undefined
+
   const canContinue =
     looksLikeEmail(primaryEmail) &&
-    primaryPassword.length >= 8 &&
-    (!addSecond ||
-      (looksLikeEmail(secondaryEmail) && secondaryPassword.length >= 8 && !emailsClash))
+    primaryPwCheck.ok &&
+    (!addSecond || (looksLikeEmail(secondaryEmail) && secondaryPwCheck.ok && !emailsClash))
 
   if (notReady) {
     return (
@@ -415,14 +428,15 @@ function PerEmailJourney({
             onChange={setPrimaryEmail}
           />
           <Field
-            id="pe-password"
-            label="Password"
-            icon={KeyRound}
-            type="password"
-            autoComplete="new-password"
-            hint="At least 8 characters."
-            value={primaryPassword}
-            onChange={setPrimaryPassword}
+                id="pe-password"
+                label="Password"
+                icon={KeyRound}
+                type="password"
+                autoComplete="new-password"
+                hint={PASSWORD_REQUIREMENTS_TEXT}
+                error={primaryPwError}
+                value={primaryPassword}
+                onChange={setPrimaryPassword}
           />
 
           <label className="flex items-center gap-2.5 rounded-lg border border-dashed border-border px-3 py-2.5 text-sm">
@@ -452,7 +466,8 @@ function PerEmailJourney({
                 icon={KeyRound}
                 type="password"
                 autoComplete="new-password"
-                hint="At least 8 characters. Can differ from your first password."
+                hint={`${PASSWORD_REQUIREMENTS_TEXT} Can differ from your first password.`}
+                error={secondaryPwError}
                 value={secondaryPassword}
                 onChange={setSecondaryPassword}
               />
@@ -734,7 +749,11 @@ function PerBrandJourney({
   const [proof, setProof] = useState<{ options: string[] } | null>(null)
   const [autoStarted, setAutoStarted] = useState(false)
 
-  const canSubmit = looksLikeEmail(email) && password.length >= 8
+  // Same shared policy as the server so we never enable submit for a password
+  // Auth0 will reject (the per-brand create is proof-gated too).
+  const pwCheck = validateRegistrationPassword(password, [email])
+  const pwError = password.length > 0 && !pwCheck.ok ? pwCheck.failures.join("; ") : undefined
+  const canSubmit = looksLikeEmail(email) && pwCheck.ok
 
   // When diverted from the per-email journey we already have a valid email and
   // password, so kick off the create→proof handshake once without a manual step.
@@ -840,14 +859,15 @@ function PerBrandJourney({
             onChange={setEmail}
           />
           <Field
-            id="pb-password"
-            label={`${brandName} password`}
-            icon={KeyRound}
-            type="password"
-            autoComplete="new-password"
-            hint="At least 8 characters."
-            value={password}
-            onChange={setPassword}
+                id="pb-password"
+                label={`${brandName} password`}
+                icon={KeyRound}
+                type="password"
+                autoComplete="new-password"
+                hint={PASSWORD_REQUIREMENTS_TEXT}
+                error={pwError}
+                value={password}
+                onChange={setPassword}
           />
           {error ? (
             <Alert variant="destructive">
@@ -1019,6 +1039,7 @@ function Field({
   label,
   icon: Icon,
   hint,
+  error,
   value,
   onChange,
   type = "text",
@@ -1028,11 +1049,14 @@ function Field({
   label: string
   icon: typeof AtSign
   hint?: string
+  /** Live validation message; when set it replaces the hint and marks invalid. */
+  error?: string
   value: string
   onChange: (v: string) => void
   type?: string
   autoComplete?: string
 }) {
+  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id}>{label}</Label>
@@ -1047,10 +1071,20 @@ function Field({
           autoComplete={autoComplete}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
           className="pl-9"
         />
       </div>
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      {error ? (
+        <p id={`${id}-error`} className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : hint ? (
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
     </div>
   )
 }
