@@ -171,11 +171,27 @@ async function main() {
   }
 
   // 3) Deploy the current draft.
-  const deployed = await mgmtFetch(domain, token, `/actions/actions/${action.id}/deploy`, { method: "POST" })
-  console.log(`Deployed version ${deployed?.id || "(unknown)"} · deployed=${deployed?.deployed}`)
+  // Note: the POST /deploy response body reports deployed=false immediately (the
+  // freshly created version object, before the deploy settles). Do NOT trust it.
+  // Authoritative status comes from the follow-up GET on the action below.
+  const deployVersion = await mgmtFetch(domain, token, `/actions/actions/${action.id}/deploy`, { method: "POST" })
 
-  // 4) Read the code back and verify a byte-exact match.
+  // 4) Read the action back: verify a byte-exact code match AND confirm the
+  //    deploy actually landed (all_changes_deployed + deployed_version pinned).
   const readBack = await mgmtFetch(domain, token, `/actions/actions/${action.id}`)
+  const deployedVersionId = readBack?.deployed_version?.id
+  const currentVersionId = readBack?.current_version?.id
+  const isDeployed = Boolean(
+    readBack?.all_changes_deployed &&
+      readBack?.deployed_version?.deployed &&
+      deployedVersionId &&
+      deployedVersionId === currentVersionId,
+  )
+  console.log(
+    `Deployed version ${deployVersion?.id || deployedVersionId || "(unknown)"} · ` +
+      `deployed=${isDeployed}` +
+      (isDeployed ? "" : " (deploy not yet settled — re-check with GET /actions/actions/" + action.id + ")"),
+  )
   const remoteSha = sha256(readBack?.code || "")
   const match = remoteSha === localSha
   console.log(
@@ -213,7 +229,7 @@ async function main() {
   console.log(
     "\n" +
       JSON.stringify(
-        { tenant: tenantArg, domain, actionId: action.id, deployed: Boolean(deployed?.deployed), localSha, remoteSha, match, bound: true },
+        { tenant: tenantArg, domain, actionId: action.id, deployed: isDeployed, deployedVersionId, currentVersionId, localSha, remoteSha, match, bound: true },
         null,
         2,
       ),
