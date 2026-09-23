@@ -211,13 +211,18 @@ async function main() {
     return null
   }
 
+  // Collect created/existing connection IDs by name so the Vercel env cutover
+  // reads AUTH0_*_CONNECTION_ID from the machine-readable summary (stdout JSON)
+  // instead of scraping stderr. null on a dry run (connections not created yet).
+  const connectionIds = {}
+
   // 2) Shared EU database connection (Model 1 shared password; signup allowed).
-  await ensureConnectionEnabled({ name: SHARED_CONNECTION, strategy: "auth0" })
+  connectionIds[SHARED_CONNECTION] = await ensureConnectionEnabled({ name: SHARED_CONNECTION, strategy: "auth0" })
 
   // 3) Passwordless email connection (Model 2 verified-alternate-email / OTP).
   //    Without it the passwordless/otp grant on the EU apps has no connection
   //    to authenticate against and emailed-code sign-in fails.
-  await ensureConnectionEnabled({
+  connectionIds[PASSWORDLESS_CONNECTION] = await ensureConnectionEnabled({
     name: PASSWORDLESS_CONNECTION,
     strategy: "email",
     options: PASSWORDLESS_OPTIONS,
@@ -294,7 +299,7 @@ async function main() {
   process.stderr.write(`\n${apply ? "APPLIED" : "DRY RUN"} — planned ${plan.length} write(s) on ${domain}\n`)
   process.stdout.write(
     JSON.stringify(
-      { domain, sharedConnection: SHARED_CONNECTION, mgmtAudience, clientIds, mgmtClientId, plan },
+      { domain, sharedConnection: SHARED_CONNECTION, mgmtAudience, clientIds, connectionIds, mgmtClientId, plan },
       null,
       2,
     ) + "\n",

@@ -225,14 +225,23 @@ async function main() {
     return null
   }
 
+  // Collect created/existing connection IDs by name so the Vercel env cutover
+  // reads AUTH0_*_CONNECTION_ID from the machine-readable summary (stdout JSON)
+  // instead of scraping stderr. null on a dry run (connections not created yet).
+  const connectionIds = {}
+
   // 2) The three custom DB connections (controlled signup, brute-force on).
   for (const conn of DB_CONNECTIONS) {
-    await ensureConnection({ name: conn.name, strategy: "auth0", options: DB_OPTIONS })
+    connectionIds[conn.name] = await ensureConnection({ name: conn.name, strategy: "auth0", options: DB_OPTIONS })
   }
 
   // 3) Default DB connection + passwordless email connection, enabled on both apps.
-  await ensureConnection({ name: DEFAULT_DB_CONNECTION, strategy: "auth0" })
-  await ensureConnection({ name: PASSWORDLESS_CONNECTION, strategy: "email", options: PASSWORDLESS_OPTIONS })
+  connectionIds[DEFAULT_DB_CONNECTION] = await ensureConnection({ name: DEFAULT_DB_CONNECTION, strategy: "auth0" })
+  connectionIds[PASSWORDLESS_CONNECTION] = await ensureConnection({
+    name: PASSWORDLESS_CONNECTION,
+    strategy: "email",
+    options: PASSWORDLESS_OPTIONS,
+  })
 
   // 4) M2M app + its Management API grant (AUTH0_MGMT_CLIENT_ID/SECRET).
   let mgmtClientId = null
@@ -315,6 +324,7 @@ async function main() {
         defaultDbConnection: DEFAULT_DB_CONNECTION,
         mgmtAudience,
         clientIds,
+        connectionIds,
         mgmtClientId,
         plan,
       },
