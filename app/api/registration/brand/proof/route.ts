@@ -14,6 +14,7 @@ import { resolveConnectionNames, type ConnectionKey } from "@/lib/credential-mod
 import {
   connectionIdForKey,
   resolveExistingAccountByEmail,
+  purgeTransientEmailStub,
 } from "@/lib/credential-resolver"
 import {
   planModel4CrossBrandLink,
@@ -173,6 +174,13 @@ export async function POST(request: NextRequest) {
     try {
       await verifyEmailPasscode(creds, email, code)
       proofVerified = true
+      // The emailed code was proof only — the new brand credential is a fresh DB
+      // identity created below, so this transient passwordless stub is disposable
+      // and nothing downstream references it. Purge it now so a successful link
+      // (or any later plan/link failure) never leaves an orphan email|… user
+      // behind. purgeTransientEmailStub only deletes all-passwordless standalone
+      // records, so the existing primary (a real DB identity) is never touched.
+      await purgeTransientEmailStub(email)
     } catch (err) {
       if (err instanceof PasswordlessError) {
         return NextResponse.json({ error: "That code isn't right. Please try again." }, { status: 401 })

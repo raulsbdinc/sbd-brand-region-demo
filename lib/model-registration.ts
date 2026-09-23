@@ -24,6 +24,7 @@ import {
   appendCredentialBinding,
   buildCredentialBinding,
 } from "./credential-provisioning.ts"
+import { validateRegistrationPassword } from "./password-policy.ts"
 import type { Auth0User } from "./auth0-management.ts"
 import type { ConnectionKey, CredentialBinding, DemoUseCase } from "./credential-model.ts"
 import type { BrandId } from "./types"
@@ -137,6 +138,20 @@ async function safeUnlink(
     await deps.unlinkIdentity(primaryId, provider, secondaryId)
   } catch (err) {
     console.log("[v0] model-registration rollback: unlink failed:", (err as Error).message)
+  }
+}
+
+/**
+ * Best-effort delete of the transient passwordless proof stubs (e.g.
+ * "email|…") that consuming a one-time code mints at the IdP. In the Model 3
+ * flow the code is proof ONLY — the real account is a fresh DB identity — so
+ * the stub must never linger, whether the registration then succeeds or fails.
+ * Never throws: an undeleted stub is untidy, not user-facing, and must not turn
+ * a successful registration into a failure.
+ */
+async function deleteStubs(deps: ManagementDeps, stubUserIds: string[]): Promise<void> {
+  for (const uid of stubUserIds) {
+    if (uid) await safeDelete(deps, uid)
   }
 }
 
@@ -303,7 +318,14 @@ export async function executePerEmailRegistration(
  * is what makes replay impossible.
  */
 export interface ProofDeps {
-  verifyPasscode(email: string, otp: string): Promise<void>
+  /**
+   * Consume the one-time code at the IdP. Resolves ONLY when the code is valid
+   * for that exact email, and rejects (throws) on a wrong / expired /
+   * already-used code. It may return the transient passwordless stub identity
+   * the consumption minted (e.g. `{ sub: "email|…" }`) so the orchestrator can
+   * delete that proof artifact afterwards; returning nothing is also allowed.
+   */
+  verifyPasscode(email: string, otp: string): Promise<{ sub?: string } | void>
 }
 
 export type Model3RegisterOutcome =
@@ -383,17 +405,46 @@ export async function registerModel3WithProof(
     }
   }
 
+  // 3.5) Validate every password against the connection policy BEFORE consuming
+  //      any code. A policy rejection must NEVER cost the customer their
+  //      one-time code: consuming first and only then failing the create is
+  //      exactly what left an orphan passwordless stub with no real account
+  //      behind it (e.g. "Ciam!2026UK1A" for sbdciam-uk1-… — rejected by
+  //      Auth0's user-info rule because the email contains "uk1", which a
+  //      length check never predicts). We mirror the connection policy in
+  //      lib/password-policy so the browser and this gate agree exactly, and
+  //      check each password against its OWN email's user-info tokens.
+  for (const id of identities) {
+    const check = validateRegistrationPassword(id.password, [id.email])
+    if (!check.ok) {
+      return {
+        ok: false,
+        status: 400,
+        error: `That password doesn't meet the requirements: ${check.failures.join("; ")}.`,
+        failedEmails: [id.email.trim().toLowerCase()],
+      }
+    }
+  }
+
   // 4) Consume each code at the IdP immediately before any mutation. A replayed
   //    or otherwise bad code throws → we mutate nothing and ask for fresh codes.
+  //    Capture each transient passwordless stub the consumption mints so we can
+  //    delete it afterwards — in this flow the code is proof only.
   const failed: string[] = []
+  const stubUserIds: string[] = []
   for (const email of submitted) {
     try {
-      await deps.verifyPasscode(email, (codes[email] as string).trim())
+      const consumed = await deps.verifyPasscode(email, (codes[email] as string).trim())
+      const sub = consumed && typeof consumed.sub === "string" ? consumed.sub : ""
+      if (sub) stubUserIds.push(sub)
     } catch {
       failed.push(email)
     }
   }
   if (failed.length > 0) {
+    // One or more earlier codes may have been consumed before another failed —
+    // clean up their stubs too so a failed attempt leaves nothing behind.
+    await deleteStubs(deps, stubUserIds)
     return {
       ok: false,
       status: 401,
@@ -405,7 +456,7 @@ export async function registerModel3WithProof(
 
   // 5) Ownership proven for EVERY email this request. Stamp verified + provision.
   const verified: IdentityToCreate[] = identities.map((i) => ({ ...i, emailVerified: true }))
-  return executePerEmailRegistration(
+  const outcome = await executePerEmailRegistration(
     {
       connectionKey: params.connectionKey,
       connectionName: params.connectionName,
@@ -414,6 +465,12 @@ export async function registerModel3WithProof(
     },
     deps,
   )
+  // The consumed codes were proof only; the real accounts are the DB identities
+  // created above. Delete the transient email|… stubs regardless of outcome so
+  // a registration never leaves an orphan proof user behind (the exact residue
+  // observed when a post-proof create was rejected).
+  await deleteStubs(deps, stubUserIds)
+  return outcome
 }
 
 /**
