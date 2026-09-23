@@ -281,6 +281,15 @@ export function CustomerProfile({
       typeof summarizePasswordModelFromMethods
     >[0],
   )
+  // Whether `passwordModel` reflects the account's real, loaded topology. In
+  // demo mode (no management) the shared-account default is intentional and
+  // immediate. On the live profile the model only becomes trustworthy once the
+  // login-methods response lands — until then an empty model summarises as a
+  // single shared password, which would wrongly flash "one account, one
+  // password" onto a Model 4 (per-brand) account right after activation. On a
+  // hard load error we keep it unresolved (neutral copy) rather than assert a
+  // wrong password count.
+  const passwordModelResolved = !live || Boolean(methodsData)
 
   // Which discoverable password sections to render is ACCOUNT-aware, not
   // host-only (GLSCM-4834): a Model 4 account (separate DeWalt + Stanley
@@ -329,7 +338,11 @@ export function CustomerProfile({
           account" heading and above "Your details". Renders nothing when the
           account has only ever used this one site, so a first-time user sees no
           gap. Fed by the session claims the server page passed as `sites`. */}
-      <CrossBrandRecognition sites={sites} passwordModel={passwordModel} />
+      <CrossBrandRecognition
+        sites={sites}
+        passwordModel={passwordModel}
+        passwordModelResolved={passwordModelResolved}
+      />
 
       <div className="mt-8 space-y-5">
         <DetailsSection
