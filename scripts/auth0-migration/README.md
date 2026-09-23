@@ -28,10 +28,15 @@ Key facts:
 - **`sbd-emea-temp` is the correct Europe target** (not `sbd-eu-temp`). The
   earlier Cursor migration created/configured `sbd-eu-temp`, owned by a
   different account (`+tmp2`). Leave `sbd-eu-temp` alone; it is out of scope.
-- **Region mismatch (CIAM-15 / CIAM-14):** `sbd-emea-temp` resolves to **US-5**,
-  not an EMEA region. Residency for an EMEA identity store is a compliance
-  concern. **User is resolving the region choice.** If the tenant is recreated
-  in an EMEA region, its domain changes and every step below that references
+- **Region conflict (CIAM-15 / CIAM-14):** `sbd-emea-temp` resolves to **US-5**,
+  not an EMEA region. This is not merely a name mismatch: the published CIAM-14
+  Region Atlas (Okta Compliance Regions layer,
+  `https://mini-app-redesign-ciam-v0.vercel.app/`) maps **France/Germany → EMEA
+  hosted in Europe (EU, `eu-west-1` Ireland)** and **UK → United Kingdom (UK,
+  `eu-west-2` London)**. US-5 therefore **conflicts with the published
+  compliance map**, so this is a residency/compliance blocker, not a cosmetic
+  one. **User is resolving the region choice.** If the tenant is recreated in an
+  EMEA region, its domain changes and every step below that references
   `sbd-emea-temp.us.auth0.com` must be re-pointed. Do not proceed with EMEA
   provisioning until the region is confirmed.
 - **EMEA has zero users and only the Default App** — Models 1 & 2 require the
@@ -131,8 +136,10 @@ short-lived; never commit or pass them on the command line.
   auto-login is **not** a POC requirement.
 - **CIAM-5** Confluence four-model doc updated post-migration (topology text is
   stale: it says one EU tenant; reality is separate EMEA + UK).
-- **CIAM-14** region/compliance map reflects the Okta recommendation — carries
-  the US-5 residency note.
+- **CIAM-14** region/compliance map reflects the Okta recommendation. The
+  published Region Atlas (Okta Compliance Regions layer) maps FR/DE → EMEA in
+  Europe (`eu-west-1` Ireland) and UK → UK (`eu-west-2` London); the current
+  `sbd-emea-temp` US-5 residency **conflicts** with that map.
 
 Security invariants to preserve across all models: fail-closed ambiguous
 lookup, local sessions, verification gate, duplicate-signup prevention, correct
