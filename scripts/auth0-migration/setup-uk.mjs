@@ -50,7 +50,15 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { parseArgs, resolveDomain, resolveToken, assertMutableTarget, mgmtFetch, paginate } from "./mgmt.mjs"
+import {
+  parseArgs,
+  resolveDomain,
+  resolveToken,
+  assertMutableTarget,
+  mgmtFetch,
+  paginate,
+  getConnectionEnabledClientIds,
+} from "./mgmt.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -138,7 +146,7 @@ async function findClientGrant(domain, token, clientId, audience) {
 async function main() {
   const args = parseArgs()
   // Default to the verified UK-region tenant; refuse old/rejected tenants.
-  const domain = assertMutableTarget(resolveDomain({ ...args, tenant: args.tenant || "uk" }))
+  const domain = assertMutableTarget(resolveDomain({ ...args, tenant: args.tenant || "uk" }), "uk")
   const token = resolveToken()
   const apply = Boolean(args.apply)
   const mgmtAudience = `https://${domain}/api/v2/`
@@ -174,17 +182,33 @@ async function main() {
     const existing = await findConnectionByName(domain, token, name)
     if (existing) {
       process.stderr.write(`connection "${name}" exists → ${existing.id}\n`)
-      const merged = [...new Set([...(existing.enabled_clients || []), ...enabledClients])]
-      // Re-assert options (e.g. disable_signup) without clobbering unrelated ones.
-      const body = options
-        ? { enabled_clients: merged, options: { ...(existing.options || {}), ...options } }
-        : { enabled_clients: merged }
-      record("PATCH", `/connections/${existing.id}`, body)
-      if (apply && enabledClients.length) {
-        await mgmtFetch(domain, token, `/connections/${existing.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(body),
-        })
+      // Re-assert options (e.g. disable_signup) via PATCH /connections/{id}.
+      // This endpoint still owns connection config; only its enabled_clients
+      // handling is EOL, so we never send enabled_clients here.
+      if (options) {
+        const optBody = { options: { ...(existing.options || {}), ...options } }
+        record("PATCH", `/connections/${existing.id}`, optBody)
+        if (apply) {
+          await mgmtFetch(domain, token, `/connections/${existing.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(optBody),
+          })
+        }
+      }
+      // Enable the apps via the dedicated /connections/{id}/clients endpoint
+      // (legacy enabled_clients on GET/PATCH /connections/{id} is EOL for new
+      // tenants). PATCH is additive per-client ([{client_id, status:true}]).
+      const already = await getConnectionEnabledClientIds(domain, token, existing.id)
+      const toEnable = enabledClients.filter((id) => !already.has(id))
+      if (toEnable.length) {
+        const clientsBody = toEnable.map((client_id) => ({ client_id, status: true }))
+        record("PATCH", `/connections/${existing.id}/clients`, clientsBody)
+        if (apply) {
+          await mgmtFetch(domain, token, `/connections/${existing.id}/clients`, {
+            method: "PATCH",
+            body: JSON.stringify(clientsBody),
+          })
+        }
       }
       return existing.id
     }

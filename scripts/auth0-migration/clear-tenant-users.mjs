@@ -61,7 +61,8 @@ async function buildAllowlist(args) {
 
 async function main() {
   const args = parseArgs()
-  const domain = assertMutableTarget(resolveDomain(args))
+  const expectedTenant = String(args.tenant || "").toLowerCase() === "emea" ? "europe" : String(args.tenant || "").toLowerCase()
+  const domain = assertMutableTarget(resolveDomain(args), expectedTenant)
   const token = resolveToken()
   const apply = Boolean(args.apply)
   const onlyConnection = args.connection ? String(args.connection) : null

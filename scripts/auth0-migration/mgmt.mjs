@@ -33,12 +33,14 @@ const TENANT_DOMAINS = {
   emea: "sbd-emea-temp1.eu.auth0.com",
 }
 
-// Old/rejected tenants that must never be provisioned into or cleared.
-const FORBIDDEN_MUTATION_DOMAINS = new Set([
-  "sbd-emea-temp.us.auth0.com",
-  "sbd-eu-temp.eu.auth0.com",
-  "sbd-uk-temp.uk.auth0.com",
-])
+// STRICT ALLOWLIST — the only two hosts any MUTATING script may write to.
+// Anything else (old lookalikes, arbitrary --domain/env overrides, or a
+// cross-target host) is refused. Each tenant is pinned to exactly one host so
+// setup-uk cannot run against the EU host and vice versa.
+const MUTABLE_TENANT_DOMAINS = {
+  uk: "sbd-uk-temp1.uk.auth0.com",
+  europe: "sbd-emea-temp1.eu.auth0.com",
+}
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const args = { _: [] }
@@ -78,12 +80,26 @@ export function resolveDomain(args) {
 
 // Guard for MUTATING scripts (setup/clear). Read-only inventory may target the
 // old UK tenant as a config reference and deliberately does NOT call this.
-export function assertMutableTarget(domain) {
-  if (FORBIDDEN_MUTATION_DOMAINS.has(domain)) {
+//
+// STRICT ALLOWLIST + per-tenant pinning: a mutating script must name which
+// tenant it intends to write (`expectedTenant`), and the resolved domain must
+// be EXACTLY that tenant's one verified host. This refuses, in one check:
+//   - old/rejected lookalikes (sbd-emea-temp US-5, sbd-eu-temp, old sbd-uk-temp)
+//   - arbitrary --domain / AUTH0_*_DOMAIN overrides pointing anywhere else
+//   - cross-target mismatch (setup-uk against the EU host, or vice versa)
+export function assertMutableTarget(domain, expectedTenant) {
+  const tenant = String(expectedTenant || "").toLowerCase()
+  const allowed = MUTABLE_TENANT_DOMAINS[tenant]
+  if (!allowed) {
     throw new Error(
-      `Refusing to mutate ${domain} — it is an old/rejected tenant (US-5 sbd-emea-temp, ` +
-        `stray sbd-eu-temp, or reference-only old sbd-uk-temp). The only mutation targets are ` +
-        `sbd-emea-temp1.eu.auth0.com and sbd-uk-temp1.uk.auth0.com.`,
+      `assertMutableTarget requires an explicit expectedTenant of "uk" or "europe" (got ${JSON.stringify(expectedTenant)}).`,
+    )
+  }
+  if (domain !== allowed) {
+    throw new Error(
+      `Refusing to mutate ${domain} as tenant "${tenant}". The only permitted ${tenant} ` +
+        `mutation target is ${allowed}. Old/rejected tenants (sbd-emea-temp US-5, sbd-eu-temp, ` +
+        `old sbd-uk-temp), arbitrary --domain/env overrides, and cross-target hosts are all refused.`,
     )
   }
   return domain
@@ -156,6 +172,33 @@ export async function mgmtFetch(domain, token, path, init = {}, maxAttempts = 6)
     return body
   }
   throw lastErr || new Error(`Management API request failed: ${path}`)
+}
+
+/**
+ * Read the client IDs currently enabled on a connection via the dedicated
+ * GET /connections/{id}/clients endpoint. The legacy `enabled_clients` field on
+ * GET/PATCH /connections/{id} reached EOL for development (new) tenants in
+ * July 2026, so this is the only supported read. Uses checkpoint pagination
+ * (`take` + `next`), and returns the set of client_ids whose status is enabled.
+ * See https://auth0.com/docs/troubleshoot/product-lifecycle/deprecations-and-migrations/migrate-dedicated-connection-endpoints
+ */
+export async function getConnectionEnabledClientIds(domain, token, connectionId) {
+  const enabled = new Set()
+  let from = ""
+  for (;;) {
+    const q = `take=50${from ? `&from=${encodeURIComponent(from)}` : ""}`
+    const body = await mgmtFetch(domain, token, `/connections/${connectionId}/clients?${q}`)
+    const batch = body?.clients || []
+    for (const c of batch) {
+      // The dedicated endpoint only lists enabled clients; treat an explicit
+      // status:false (should not occur here) as disabled, everything else on.
+      if (c && c.client_id && c.status !== false) enabled.add(c.client_id)
+    }
+    const next = body?.next
+    if (!next || batch.length === 0) break
+    from = next
+  }
+  return enabled
 }
 
 /** Page through a list endpoint that supports page/per_page + include_totals. */

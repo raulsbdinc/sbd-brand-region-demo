@@ -39,9 +39,10 @@ Key facts:
   satisfied** — no user deletion is required on either target. `clear-tenant-users.mjs`
   remains available purely as a safety tool and is scoped to the two new tenants.
 - **Both targets need full provisioning**, not just a Vercel env re-point:
-  - **Europe** (`setup-emea.mjs`): shared DB connection + 3 EU web apps
-    (DeWalt FR, DeWalt DE, Stanley FR) + M2M app + Management API grant +
-    claims action. Models 1 & 2.
+  - **Europe** (`setup-emea.mjs`): shared DB connection + **passwordless email
+    connection** (OTP 180s / len 6 — required for Model 2 verified-alternate /
+    emailed-code sign-in) + 3 EU web apps (DeWalt FR, DeWalt DE, Stanley FR) +
+    M2M app + Management API grant + claims action. Models 1 & 2.
   - **UK** (`setup-uk.mjs`): the **three** custom DB connections
     (`sbd-demo-dewalt`, `sbd-demo-per-email`, `sbd-demo-stanley`) + default DB
     connection + passwordless email connection + 2 UK web apps (DeWalt UK,
@@ -53,6 +54,16 @@ Key facts:
 - **Model 2 "linked Google"** needs a `google-oauth2` social connection enabled
   on the apps (both tenants) — a manual step; it needs external Google OAuth
   secrets and is not scripted.
+- **Connection→client enablement uses the dedicated endpoints.** The legacy
+  `enabled_clients` field on `GET`/`PATCH /connections/{id}` reached EOL for
+  development (new) tenants, and both targets are development tenants. At create
+  time `POST /connections` still accepts `enabled_clients`; on every rerun the
+  scripts read enabled clients via `GET /connections/{id}/clients` (checkpoint
+  pagination) and enable apps via additive `PATCH /connections/{id}/clients`
+  (`[{client_id, status:true}]`, ≤50/call, returns 204). Connection **options**
+  (e.g. `disable_signup`) are still re-asserted via `PATCH /connections/{id}`
+  with an `options`-only body — never `enabled_clients`. Token scopes:
+  `read:connections`, `update:connections`.
 
 ### Observed old-UK parity captured in `setup-uk.mjs`
 
@@ -126,7 +137,7 @@ Read-only from the old `sbd-uk-temp` dashboard (both UK apps identical):
 | `mgmt.mjs` | Shared Management API helper (token from `AUTH0_MGMT_TOKEN`, 429/5xx retry, pagination, domain resolution). `resolveDomain` maps `uk`→`sbd-uk-temp1.uk.auth0.com`, `europe`/`emea`→`sbd-emea-temp1.eu.auth0.com`. `assertMutableTarget` refuses the old/rejected/stray tenants. Not executable on its own. | — |
 | `inventory-users.mjs` | **Read-only** user census per tenant; flags non-test records as `REVIEW`. May target the old UK tenant as a reference (does not mutate). | read-only |
 | `clear-tenant-users.mjs` | Deletes **user/database records only**; never apps/connections/actions/secrets. Refuses old/rejected tenants. `--apply` **fails closed** if any REVIEW record is not named in `--allow-review` / `--allow-review-file`. Not needed for this pass (targets start empty) — safety tool only. | **dry run** |
-| `setup-emea.mjs` | On `sbd-emea-temp1` (EU-2): shared DB connection + 3 EU web apps (password-realm + passwordless/otp grants) + M2M app + Management API grant; `--emit-action` writes `out/add-sbd-claims.emea.js` with `DEMO_SITES_BY_CLIENT_ID` populated. | **dry run** |
+| `setup-emea.mjs` | On `sbd-emea-temp1` (EU-2): shared DB connection + passwordless email connection (OTP 180s/len 6) + 3 EU web apps (password-realm + passwordless/otp grants) + M2M app + Management API grant; `--emit-action` writes `out/add-sbd-claims.emea.js` with `DEMO_SITES_BY_CLIENT_ID` populated. | **dry run** |
 | `setup-uk.mjs` | On `sbd-uk-temp1` (UK-1): the 3 custom DB connections (Disable Sign Ups ON, brute-force ON, Requires Username OFF) + default DB connection + passwordless email (OTP 180s/len 6) + 2 UK web apps (implicit + auth_code + refresh + password-realm + passwordless/otp) + M2M app + Management API grant; `--emit-action` writes `out/add-sbd-claims.uk.js`. | **dry run** |
 
 Token per tenant: Dashboard → Applications → APIs → Auth0 Management API → API
