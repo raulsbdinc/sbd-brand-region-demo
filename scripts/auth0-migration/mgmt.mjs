@@ -13,11 +13,15 @@
 //
 // Confirmed issuers (verified from OIDC discovery in the browser, NOT inferred
 // from tenant names):
-//   EMEA  sbd-emea-temp.us.auth0.com   (region US-5 — see residency note)
-//   UK    sbd-uk-temp.uk.auth0.com     (region EU/UK)
+//   UK      sbd-uk-temp.uk.auth0.com   (region EU/UK — stable target)
+//   Europe  provided at run time via --domain or AUTH0_EUROPE_DOMAIN.
+//           The verified EU-region tenant (e.g. sbd-emea-eu-temp.eu.auth0.com)
+//           REPLACES the rejected US-5 sbd-emea-temp.us.auth0.com, which must
+//           NOT be mutated (wrong residency for CIAM-14 / CIAM-15). The Europe
+//           domain is deliberately not hard-coded so no script can default to
+//           the US-5 tenant.
 
 const TENANT_DOMAINS = {
-  emea: "sbd-emea-temp.us.auth0.com",
   uk: "sbd-uk-temp.uk.auth0.com",
 }
 
@@ -44,9 +48,19 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export function resolveDomain(args) {
   if (args.domain) return String(args.domain)
   const tenant = String(args.tenant || "").toLowerCase()
+  if (tenant === "emea" || tenant === "europe") {
+    const fromEnv = process.env.AUTH0_EUROPE_DOMAIN
+    if (fromEnv) return String(fromEnv)
+    throw new Error(
+      "The Europe tenant domain is not hard-coded (the US-5 sbd-emea-temp is rejected for " +
+        "CIAM-14 residency). Pass --domain <eu-host> or set AUTH0_EUROPE_DOMAIN to the verified " +
+        "EU-region tenant (e.g. sbd-emea-eu-temp.eu.auth0.com).",
+    )
+  }
   if (TENANT_DOMAINS[tenant]) return TENANT_DOMAINS[tenant]
   throw new Error(
-    "Specify the target tenant: --tenant emea|uk (or an explicit --domain <host>).",
+    "Specify the target tenant: --tenant uk, or --tenant europe with --domain/AUTH0_EUROPE_DOMAIN " +
+      "(or an explicit --domain <host>).",
   )
 }
 

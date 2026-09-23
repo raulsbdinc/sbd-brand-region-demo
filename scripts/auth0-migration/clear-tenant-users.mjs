@@ -9,14 +9,19 @@
 //   export AUTH0_MGMT_TOKEN='...'
 //   node clear-tenant-users.mjs --tenant uk                 # DRY RUN: lists targets, deletes nothing
 //   node clear-tenant-users.mjs --tenant uk --connection sbd-demo-per-email   # limit to one connection
-//   node clear-tenant-users.mjs --tenant uk --apply         # EXECUTE deletions
+//   node clear-tenant-users.mjs --tenant uk --apply         # EXECUTE (only if no REVIEW rows)
 //
 // Requires token scope: read:users, delete:users.
 //
-// Clearing the full user DB of BOTH TEMP tenants is pre-authorized by the user.
-// The dry run still prints any REVIEW-flagged record (see inventory-users.mjs)
-// so a non-test record is caught before --apply.
+// SAFETY GATE (fail-closed): even though clearing the TEMP user DBs is
+// pre-authorized, `--apply` will REFUSE to run — deleting nothing — if any
+// target user is flagged REVIEW (does not look like disposable test data).
+// To clear a REVIEW record you must name it explicitly after eyeballing it:
+//   --allow-review <user_id[,user_id...]>       inline allowlist
+//   --allow-review-file <path>                  newline/comma-separated file
+// Obvious test records (see the hints below) still delete without an allowlist.
 
+import { readFile } from "node:fs/promises"
 import { parseArgs, resolveDomain, resolveToken, paginate, mgmtFetch } from "./mgmt.mjs"
 
 const TEST_EMAIL_DOMAINS = new Set([
@@ -37,6 +42,23 @@ function looksTest(u) {
 const connectionsOf = (u) =>
   [...new Set((Array.isArray(u.identities) ? u.identities : []).map((i) => i.connection).filter(Boolean))]
 
+async function buildAllowlist(args) {
+  const allow = new Set(
+    String(args["allow-review"] || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
+  if (args["allow-review-file"]) {
+    const raw = await readFile(String(args["allow-review-file"]), "utf8")
+    for (const tok of raw.split(/[\s,]+/)) {
+      const id = tok.trim()
+      if (id) allow.add(id)
+    }
+  }
+  return allow
+}
+
 async function main() {
   const args = parseArgs()
   const domain = resolveDomain(args)
@@ -56,9 +78,32 @@ async function main() {
 
   if (!apply) {
     process.stderr.write(`\nDRY RUN — nothing deleted. Would delete ${users.length} user(s).\n`)
+    if (review.length) {
+      process.stderr.write(
+        `NOTE: ${review.length} REVIEW record(s) above would BLOCK --apply unless allow-listed ` +
+          `via --allow-review <ids> or --allow-review-file <path>.\n`,
+      )
+    }
     process.stderr.write(`Re-run with --apply to execute.\n\n`)
     for (const u of users) process.stdout.write(`WOULD DELETE  ${(u.email || "(no email)").padEnd(40)} ${u.user_id}\n`)
     return
+  }
+
+  // FAIL-CLOSED: refuse the whole run if any REVIEW record is not explicitly
+  // allow-listed. Nothing is deleted — no partial destructive pass.
+  const allow = await buildAllowlist(args)
+  const blockedReview = review.filter((u) => !allow.has(u.user_id))
+  if (blockedReview.length) {
+    process.stderr.write(
+      `\nREFUSING --apply: ${blockedReview.length} REVIEW record(s) are not in the allowlist. Nothing deleted.\n`,
+    )
+    for (const u of blockedReview) {
+      process.stderr.write(`  BLOCKED  ${u.email || "(no email)"}  [${connectionsOf(u).join(",") || "none"}]  ${u.user_id}\n`)
+    }
+    process.stderr.write(
+      `Confirm each is disposable, then re-run with --allow-review <id1,id2> (or --allow-review-file <path>).\n\n`,
+    )
+    process.exit(1)
   }
 
   process.stderr.write(`\nAPPLYING — deleting ${users.length} user(s)...\n`)
