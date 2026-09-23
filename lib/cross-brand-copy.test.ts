@@ -62,3 +62,30 @@ test("per-brand takes precedence when both per-brand and per-email are set", () 
   }
   assert.equal(recognitionCopyMode(both), "per-brand")
 })
+
+test("unresolved model claims no password count (Model 4 loading window)", () => {
+  // The live profile derives the real model from a second request. On first
+  // render it is unresolved and an empty model summarises as a single shared
+  // password — passing resolved:false must suppress the "one password" claim so
+  // a per-brand (Model 4) account never flashes "one account, one password".
+  assert.equal(recognitionCopyMode(undefined, false), "unresolved")
+  const copy = crossBrandRecognitionCopy(undefined, false)
+  assert.doesNotMatch(copy, /one password/)
+  assert.doesNotMatch(copy, /separate password/)
+  // Still true for every model: same account, one directory record.
+  assert.match(copy, /same account/)
+  assert.match(copy, /one record/)
+})
+
+test("resolved:false overrides even a shared-looking model", () => {
+  // The exact defect: right after Model 4 activation the empty methods list
+  // summarises as `shared`, but the topology is not actually known yet.
+  assert.equal(recognitionCopyMode(shared, false), "unresolved")
+  assert.doesNotMatch(crossBrandRecognitionCopy(shared, false), /one password/)
+})
+
+test("resolved defaults to true so existing callers are unchanged", () => {
+  assert.equal(recognitionCopyMode(perBrand), recognitionCopyMode(perBrand, true))
+  assert.equal(recognitionCopyMode(shared), "shared")
+  assert.match(crossBrandRecognitionCopy(shared), /one account, one password, one record/)
+})

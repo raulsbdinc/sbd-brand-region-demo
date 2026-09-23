@@ -70,6 +70,7 @@ function SiteChips({ sites }: { sites: OtherSite[] }) {
 export function CrossBrandRecognition({
   sites,
   passwordModel,
+  passwordModelResolved = true,
 }: {
   sites: OtherSite[]
   /**
@@ -81,11 +82,25 @@ export function CrossBrandRecognition({
    * each brand/email keeps its own — derived from the bindings, never assumed.
    */
   passwordModel?: PasswordModelSummary
+  /**
+   * Whether `passwordModel` reflects the account's REAL, loaded topology. On
+   * the live profile the model is Management-backed and arrives on a second
+   * request, so it is unresolved on first render — during which an empty model
+   * would otherwise summarise as a single shared password and wrongly flash
+   * "one account, one password" onto a Model 4/Model 3 account. While
+   * unresolved the panel shows neutral copy that claims no password count.
+   * Defaults to true so server/dev callers that pass a definitive (or no) model
+   * keep the historical wording.
+   */
+  passwordModelResolved?: boolean
 }) {
   // First site ever for this account: deliberately no panel.
   if (sites.length === 0) return null
 
-  const recognitionCopy = crossBrandRecognitionCopy(passwordModel)
+  const recognitionCopy = crossBrandRecognitionCopy(
+    passwordModel,
+    passwordModelResolved,
+  )
 
   return (
     <section
