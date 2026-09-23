@@ -281,15 +281,25 @@ export function CustomerProfile({
       typeof summarizePasswordModelFromMethods
     >[0],
   )
+  // Demo mode (no management) is only a trustworthy, immediate shared-account
+  // default once `/api/account/status` has ACTUALLY loaded and reported that
+  // management is not configured. Until status resolves, `status` is undefined
+  // and `live` is falsy — which is INDISTINGUISHABLE from genuine demo mode, so
+  // keying off `!live` alone asserts the shared default during the very first
+  // (SSR/hydration) paint and flashes "one account, one password" onto a Model
+  // 4 account before we know anything. Requiring loaded status data keeps the
+  // first paint neutral. A status load error is NOT treated as demo mode.
+  const demoModeResolved = Boolean(status) && !status?.managementConfigured
+
   // Whether `passwordModel` reflects the account's real, loaded topology. In
-  // demo mode (no management) the shared-account default is intentional and
-  // immediate. On the live profile the model only becomes trustworthy once the
+  // resolved demo mode the shared-account default is intentional and immediate.
+  // On the live profile the model only becomes trustworthy once the
   // login-methods response lands — until then an empty model summarises as a
   // single shared password, which would wrongly flash "one account, one
-  // password" onto a Model 4 (per-brand) account right after activation. On a
-  // hard load error we keep it unresolved (neutral copy) rather than assert a
-  // wrong password count.
-  const passwordModelResolved = !live || Boolean(methodsData)
+  // password" onto a Model 4 (per-brand) account right after activation. Until
+  // either condition holds (including the first paint and any hard load error)
+  // we keep it unresolved (neutral copy) rather than assert a wrong count.
+  const passwordModelResolved = demoModeResolved || Boolean(methodsData)
 
   // Which discoverable password sections to render is ACCOUNT-aware, not
   // host-only (GLSCM-4834): a Model 4 account (separate DeWalt + Stanley
@@ -299,7 +309,8 @@ export function CustomerProfile({
   // yet. We wait for the login-methods result before trusting the model when a
   // real session exists, so a Model 4 account never flashes the wrong controls;
   // in demo mode (no management) we fall back to the host default immediately.
-  const credsResolved = !live || Boolean(methodsData) || Boolean(methodsError)
+  const credsResolved =
+    demoModeResolved || Boolean(methodsData) || Boolean(methodsError)
   const { showPerEmailActions, showBrandSection } = credsResolved
     ? resolveProfilePasswordSections({
         hostPerEmailModel: perEmailModelAvailable,
