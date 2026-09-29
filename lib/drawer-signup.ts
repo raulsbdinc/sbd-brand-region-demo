@@ -91,6 +91,30 @@ export function ukSignupModelCopy(
 }
 
 /**
+ * CIAM-17 recovery → Create Account handoff. The recovery gate
+ * (`detectOtherBrandOnlyCredential`) only fires when the email's account holds
+ * the SISTER brand's password and no per-email / shared / this-brand password —
+ * i.e. an existing per-brand (Model 4) account. Carrying the default Model 3
+ * pre-selection into Create Account would mismatch that account, so the drawer
+ * pre-selects the separate brand password and explains why. The customer may
+ * still change it (the server fails closed on a genuine mismatch). The note
+ * never names the other brand, matching the recovery message.
+ */
+export interface RecoverySignupPreset {
+  model: UkSignupModel
+  note: string
+}
+
+export function recoverySignupPreset(siteBrand: BrandId): RecoverySignupPreset {
+  const here = BRANDS[siteBrand].name
+  const title = ukSignupModelCopy("per-brand", siteBrand).title
+  return {
+    model: "per-brand",
+    note: `This email already uses a separate password for one of our brands, so we\u2019ve selected \u201C${title}\u201D to match. Choose a new ${here} password \u2014 we\u2019ll email you a code to confirm it\u2019s you, and your existing password stays unchanged.`,
+  }
+}
+
+/**
  * The OTHER UK brand for a storefront brand: DeWalt ⇄ Stanley. Returns null for
  * any brand without a UK brand connection (e.g. craftsman), so callers fail
  * closed rather than inventing a partner brand.
@@ -180,7 +204,7 @@ export function interpretBrandSignupResponse(res: HttpResult): BrandSignupAction
 
 /**
  * The drawer's reaction to a /api/registration/brand/proof response.
- *   - linked         : the second brand identity was created + linked → sign in.
+ *   - linked         : the second brand identity was created + linked ��� sign in.
  *   - bad-code       : the emailed one-time code was wrong / expired.
  *   - not-configured : deployment not configured for case 3/4.
  *   - error          : anything else, with a neutral message when present.

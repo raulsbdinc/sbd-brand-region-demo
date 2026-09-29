@@ -26,6 +26,7 @@ import {
   defaultUkSignupModel,
   ukSignupModelCopy,
   interpretBrandSignupResponse,
+  recoverySignupPreset,
 } from "./drawer-signup.ts"
 import { modelMismatchMessage } from "./account-model.ts"
 import { detectOtherBrandOnlyCredential } from "./brand-duplicate.ts"
@@ -167,4 +168,47 @@ test("CIAM-17: guidance names the storefront and points to Create account", () =
   const msg = brandNotSetUpMessage("DEWALT")
   assert.match(msg, /DEWALT/)
   assert.match(msg, /create/i)
+})
+
+// --- CIAM-17 recovery → Create Account pre-selects Model 4 ---------------------
+// Live-main finding (PR #67): verified Stanley-only Model 4 root
+// auth0|6abc3a37909482f7dbb6116b hit DeWalt forgot-password → gate → "Create an
+// account with this email", but DeWalt's drawer kept its default Model 3
+// ("A password for each email") selected — a guaranteed model mismatch.
+
+test("the recovery gate only fires for a brand-only (Model 4) account", () => {
+  const stanleyOnly = [{ ownedEmails: ["a@x.test"], identities: [{ connectionKey: "stanley" }] }]
+  const perEmail = [{ ownedEmails: ["a@x.test"], identities: [{ connectionKey: "per-email" }] }]
+  const both = [{ ownedEmails: ["a@x.test"], identities: [{ connectionKey: "stanley" }, { connectionKey: "dewalt" }] }]
+  const gate = (candidates: any) => detectOtherBrandOnlyCredential({ email: "a@x.test", brandKey: "dewalt", candidates })
+  assert.equal(gate(stanleyOnly), true)
+  assert.equal(gate(perEmail), false, "Model 3 password already works on DeWalt")
+  assert.equal(gate(both), false)
+})
+
+test("recovery handoff pre-selects the separate brand password on BOTH UK sites", () => {
+  for (const brand of ["dewalt", "stanley"] as const) {
+    const preset = recoverySignupPreset(brand)
+    assert.equal(preset.model, "per-brand")
+    assert.equal(drawerSignupFlow("uk", brand, preset.model), "per-brand")
+    const title = ukSignupModelCopy("per-brand", brand).title
+    assert.ok(preset.note.includes(title), "note names the option it selected")
+    assert.match(preset.note, /code/i)
+    assert.match(preset.note, /existing password stays unchanged/)
+  }
+})
+
+test("DeWalt recovery preset overrides DeWalt's Model 3 default; note never names the sister brand", () => {
+  assert.equal(defaultUkSignupModel("dewalt"), "per-email")
+  const preset = recoverySignupPreset("dewalt")
+  assert.notEqual(preset.model, defaultUkSignupModel("dewalt"))
+  assert.match(preset.note, /DEWALT/i)
+  assert.doesNotMatch(preset.note, /stanley/i)
+  assert.doesNotMatch(recoverySignupPreset("stanley").note, /dewalt/i)
+})
+
+test("normal new-account entry keeps the site defaults (explicit choice preserved)", () => {
+  assert.equal(drawerSignupFlow("uk", "dewalt"), "per-email")
+  assert.equal(drawerSignupFlow("uk", "stanley"), "per-brand")
+  assert.equal(drawerSignupFlow("fr", "dewalt", recoverySignupPreset("dewalt").model), "shared", "EU unaffected")
 })
