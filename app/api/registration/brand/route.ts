@@ -24,6 +24,7 @@ import {
   resolveExistingAccountByEmail,
 } from "@/lib/credential-resolver"
 import {
+  modelMismatchMessage,
   planModel4Registration,
   type Model4RejectReason,
 } from "@/lib/account-model"
@@ -149,8 +150,14 @@ export async function POST(request: NextRequest) {
   )
   const hasPerEmail = existing.account.bindings.some((b) => b.connectionKey === "per-email")
   if (!hasPerBrand || hasPerEmail) {
+    // Model 3 and Model 4 are alternative credential boundaries, never mixed on
+    // one account. Refuse without creating anything, but say why: the account
+    // uses a different sign-in model, and how to continue within it.
     return NextResponse.json(
-      { error: "We couldn't complete that right now. Please try again." },
+      {
+        error: modelMismatchMessage(hasPerEmail ? "per-email" : "other"),
+        reason: "model-mismatch",
+      },
       { status: 409 },
     )
   }

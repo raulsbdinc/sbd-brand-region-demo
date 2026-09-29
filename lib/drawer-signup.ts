@@ -28,6 +28,7 @@ import {
   accountModelSelectionAvailable,
   brandConnectionKey,
   crossBrandConfirmMessage,
+  modelMismatchMessage,
 } from "./account-model.ts"
 
 /** Which Create Account endpoint this storefront's drawer posts to. */
@@ -134,6 +135,7 @@ export type BrandSignupAction =
   | { kind: "created" }
   | { kind: "proof-required"; canEmailCode: boolean }
   | { kind: "brand-exists" }
+  | { kind: "model-mismatch"; message: string }
   | { kind: "not-configured" }
   | { kind: "error"; message?: string }
 
@@ -158,6 +160,12 @@ export function interpretBrandSignupResponse(res: HttpResult): BrandSignupAction
   // Additive discriminator from the route: this brand already has a credential.
   if (httpStatus === 409 && body.reason === "already-brand") {
     return { kind: "brand-exists" }
+  }
+
+  // The email belongs to an account on the OTHER demo model. Nothing was
+  // created; show the route's explanation instead of a generic failure.
+  if (httpStatus === 409 && body.reason === "model-mismatch") {
+    return { kind: "model-mismatch", message: messageOf(body) ?? modelMismatchMessage("other") }
   }
 
   return { kind: "error", message: messageOf(body) }

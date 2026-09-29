@@ -22,6 +22,10 @@ import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   crossBrandCollisionMessage,
   drawerSignupFlow,
+  defaultUkSignupModel,
+  ukSignupModelCopy,
+  UK_SIGNUP_MODELS,
+  type UkSignupModel,
   interpretBrandProofResponse,
   interpretBrandSignupResponse,
   interpretPerEmailCodeStart,
@@ -116,6 +120,13 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [createExists, setCreateExists] = useState(false)
+  // UK only: the demo account model the customer explicitly picks at signup.
+  // Both UK storefronts offer both models; the pre-selection keeps each site's
+  // historical default. Existing accounts are never converted.
+  const [signupModel, setSignupModel] = useState<UkSignupModel>(() =>
+    defaultUkSignupModel(SITE_BRAND),
+  )
+  const offersModelChoice = drawerSignupFlow(SITE_MARKET, SITE_BRAND) !== "shared"
   // Error shown on the password step when requesting a code (e.g. bad email).
   const [requestError, setRequestError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -492,7 +503,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     setCreateError(null)
     setCreateExists(false)
 
-    const flow = drawerSignupFlow(SITE_MARKET, SITE_BRAND)
+    const flow = drawerSignupFlow(SITE_MARKET, SITE_BRAND, signupModel)
     if (flow === "per-brand") {
       await handleBrandCreate()
       return
@@ -671,6 +682,14 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         setCreateError(
           "Account creation isn\u2019t available on this storefront right now.",
         )
+        setCreating(false)
+        return
+      }
+
+      if (action.kind === "model-mismatch") {
+        // The email's account uses the other demo model. Nothing was created
+        // or converted; explain and point to sign-in.
+        setCreateError(action.message)
         setCreating(false)
         return
       }
@@ -1496,6 +1515,46 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
               className={`${INPUT_CLASS} px-0`}
             />
           </div>
+
+          {offersModelChoice && (
+            <fieldset className="flex flex-col gap-3">
+              <legend className={labelClass}>How should your password work?</legend>
+              {UK_SIGNUP_MODELS.map((model) => {
+                const copy = ukSignupModelCopy(model, SITE_BRAND)
+                const checked = signupModel === model
+                return (
+                  <label
+                    key={model}
+                    className={`flex cursor-pointer items-start gap-3 border p-3 ${
+                      checked
+                        ? "border-[var(--brand)]"
+                        : "[border-color:var(--brand-label-muted)]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="signup-model"
+                      value={model}
+                      checked={checked}
+                      onChange={() => {
+                        setSignupModel(model)
+                        if (createError) setCreateError(null)
+                      }}
+                      className="mt-1 accent-[var(--brand)]"
+                    />
+                    <span className="flex flex-col gap-1">
+                      <span className="font-sans text-[13px] font-[700] [color:var(--brand-label-color)]">
+                        {copy.title}
+                      </span>
+                      <span className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-label-muted)]">
+                        {copy.description}
+                      </span>
+                    </span>
+                  </label>
+                )
+              })}
+            </fieldset>
+          )}
 
           {/* Password, with the policy shown up front as static helper text */}
           <div className="flex flex-col">

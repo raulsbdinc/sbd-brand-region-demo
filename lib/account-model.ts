@@ -686,3 +686,20 @@ export function planModel3Completion(
     primaryUserId: ctx.primaryUserId,
   }
 }
+
+/**
+ * Customer-facing explanation when Create Account is attempted with a demo model
+ * the existing account does NOT use (Model 3 and Model 4 are alternative
+ * credential boundaries; one account never mixes them). Neutral about anything
+ * beyond "this email already has an account with a different sign-in setup",
+ * and always gives a safe way forward. Nothing is created or converted.
+ */
+export function modelMismatchMessage(existing: "per-email" | "per-brand" | "other"): string {
+  if (existing === "per-email") {
+    return "This email already has an account that uses one password per email address. That password works on both UK storefronts, so sign in with it instead. A separate brand password can't be added to this account."
+  }
+  if (existing === "per-brand") {
+    return "This email already has an account that uses a separate password for each brand. Choose the separate brand password option to add this brand, or sign in with your existing brand password."
+  }
+  return "This email already has an account with a different sign-in setup. Sign in with your existing details instead."
+}

@@ -21,6 +21,7 @@ import {
   resolveConnectionNames,
   resolveCredentialFromCandidates,
   resolveEmailOwnership,
+  isPasswordlessOnlyRecord,
   resolveResetBinding,
   sanitizeCredentialBindings,
   type EmailOwnershipCandidate,
@@ -443,6 +444,10 @@ export async function resolveExistingAccountByEmail(
         ...readBindings(user).map((b) => normalizeEmail(b.email)),
         ...collectAccountVerifiedEmails(user),
       ].filter((e) => e.length > 0),
+      passwordlessOnly: isPasswordlessOnlyRecord({
+        identityProviders: (user.identities ?? []).map((i) => i.provider ?? ""),
+        bindingCount: readBindings(user).length,
+      }),
     }),
   )
 
