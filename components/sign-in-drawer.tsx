@@ -23,6 +23,7 @@ import {
   crossBrandCollisionMessage,
   drawerSignupFlow,
   defaultUkSignupModel,
+  recoverySignupPreset,
   ukSignupModelCopy,
   UK_SIGNUP_MODELS,
   type UkSignupModel,
@@ -126,6 +127,9 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const [signupModel, setSignupModel] = useState<UkSignupModel>(() =>
     defaultUkSignupModel(SITE_BRAND),
   )
+  // Set only by the CIAM-17 recovery handoff: explains why the brand-password
+  // option was pre-selected for a known brand-only account.
+  const [signupModelNote, setSignupModelNote] = useState<string | null>(null)
   const offersModelChoice = drawerSignupFlow(SITE_MARKET, SITE_BRAND) !== "shared"
   // Error shown on the password step when requesting a code (e.g. bad email).
   const [requestError, setRequestError] = useState<string | null>(null)
@@ -433,7 +437,16 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
 
   // Switch to the create-account step, preserving whatever email/password the
   // user has already typed and starting with a clean error state.
-  function goToCreate() {
+  function goToCreate(preset?: { model: UkSignupModel; note: string }) {
+    if (preset) {
+      setSignupModel(preset.model)
+      setSignupModelNote(preset.note)
+    } else if (signupModelNote) {
+      // Leaving a recovery-forced preset: a normal Create Account entry starts
+      // from the site default again so ordinary new accounts choose freely.
+      setSignupModel(defaultUkSignupModel(SITE_BRAND))
+      setSignupModelNote(null)
+    }
     setStep("create")
     setCreateError(null)
     setCreateExists(false)
@@ -1050,7 +1063,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
 
         <button
           type="button"
-          onClick={goToCreate}
+          onClick={() => goToCreate()}
           className="mt-2 flex h-8 w-full items-center justify-center gap-1 bg-transparent font-[700] [color:var(--brand-label-color)] [font-family:var(--brand-display-font)] [font-size:var(--brand-button-size)] [font-stretch:var(--brand-display-stretch)] [text-transform:var(--brand-display-case)] outline-none hover:underline focus-visible:underline"
         >
           Create an account
@@ -1173,7 +1186,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
                 setEmail(recoverEmail.trim())
                 setPassword("")
                 setRecoverNotSetUp(null)
-                goToCreate()
+                goToCreate(offersModelChoice ? recoverySignupPreset(SITE_BRAND) : undefined)
               }}
               className={`mt-4 ${PRIMARY_BUTTON_CLASS}`}
             >
@@ -1519,6 +1532,14 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
           {offersModelChoice && (
             <fieldset className="flex flex-col gap-3">
               <legend className={labelClass}>How should your password work?</legend>
+              {signupModelNote && signupModel === "per-brand" && (
+                <p
+                  role="status"
+                  className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]"
+                >
+                  {signupModelNote}
+                </p>
+              )}
               {UK_SIGNUP_MODELS.map((model) => {
                 const copy = ukSignupModelCopy(model, SITE_BRAND)
                 const checked = signupModel === model
