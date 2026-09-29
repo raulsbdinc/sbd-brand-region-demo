@@ -103,14 +103,14 @@ test("overlap {perEmail:true, brand:true} on DeWalt UK is Model 3 only", () => {
   assert.equal(s.showBrandSection, false) // the fix: no Brand section
 })
 
-test("overlap {perEmail:true, brand:true} on Stanley UK exposes neither", () => {
-  // Per-email never leaks onto Stanley UK; and per-email winning means the
-  // brand section stays hidden for this Model 3 account there too.
+test("overlap {perEmail:true, brand:true} on Stanley UK is Model 3 only", () => {
+  // Model 3 follows the account, not the host: per-email wins the overlap on
+  // Stanley UK too, and the brand section stays hidden (no model mixing).
   const s = resolveProfilePasswordSections({
     ...STANLEY_UK,
     facts: PER_EMAIL_AND_BRAND_CREDS,
   })
-  assert.equal(s.showPerEmailActions, false)
+  assert.equal(s.showPerEmailActions, true)
   assert.equal(s.showBrandSection, false)
 })
 
@@ -139,12 +139,22 @@ test("Model 3 account on DeWalt UK keeps per-email actions, no brand section", (
   assert.equal(s.showBrandSection, false)
 })
 
-test("Model 3 account on Stanley UK exposes neither model's controls", () => {
-  // Per-email must never leak onto Stanley UK, and a per-email account must not
-  // be offered a brand set (that would mix models at the backend).
+test("Model 3 account on Stanley UK keeps per-email actions, no brand section", () => {
+  // Live regression: DeWalt-first auth0|6abc3ff794e0a7dc7ff41ad4 signed into
+  // Stanley UK with its per-email password but its profile hid "This email has
+  // its own password" / Change password. The account's model must win over the
+  // host, and it must never be offered a brand set (that would mix models).
   const s = resolveProfilePasswordSections({ ...STANLEY_UK, facts: PER_EMAIL_CREDS })
-  assert.equal(s.showPerEmailActions, false)
+  assert.equal(s.showPerEmailActions, true)
   assert.equal(s.showBrandSection, false)
+})
+
+test("Model 4 (Stanley-first) account on Stanley UK is NOT converted to per-email", () => {
+  // auth0|6abc3a37909482f7dbb6116b: stanley brand credential + passwordless
+  // secondary alias only. No per-email actions while the hybrid is undecided.
+  const s = resolveProfilePasswordSections({ ...STANLEY_UK, facts: BRAND_CREDS })
+  assert.equal(s.showPerEmailActions, false)
+  assert.equal(s.showBrandSection, true)
 })
 
 // --- Fresh accounts keep the host default -----------------------------------
