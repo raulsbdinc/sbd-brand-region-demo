@@ -28,6 +28,7 @@ import {
   type CredentialBinding,
   type LinkedDbIdentity,
 } from "./credential-model.ts"
+import { validateRegistrationPassword } from "./password-policy.ts"
 import {
   passwordCredentialLabel,
   type PasswordCredentialView,
@@ -386,8 +387,18 @@ export interface PasswordPolicyResult {
   failures: string[]
 }
 
-/** Validate a candidate new password against the local baseline policy. */
-export function validateNewPassword(password: string): PasswordPolicyResult {
+/**
+ * Validate a candidate new password. EU/FR/DE (default): the baseline below.
+ * UK: the UK connection policy (15 characters, 3 of 4 classes, no email
+ * fragment) from lib/password-policy, so resets and profile changes match
+ * signup and Auth0.
+ */
+export function validateNewPassword(
+  password: string,
+  market?: string,
+  emails: string[] = [],
+): PasswordPolicyResult {
+  if (market === "uk") return validateRegistrationPassword(password, emails, "uk")
   const failures: string[] = []
   if (password.length < PASSWORD_MIN_LENGTH) {
     failures.push(`At least ${PASSWORD_MIN_LENGTH} characters`)
@@ -410,9 +421,11 @@ export function canSubmitPasswordChange(input: {
   current: string
   next: string
   confirm: string
+  market?: string
+  emails?: string[]
 }): boolean {
   if (!input.current) return false
-  if (!validateNewPassword(input.next).ok) return false
+  if (!validateNewPassword(input.next, input.market, input.emails ?? []).ok) return false
   if (input.next !== input.confirm) return false
   if (input.next === input.current) return false
   return true

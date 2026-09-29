@@ -195,7 +195,9 @@ export interface ProfilePasswordSections {
  *     passwords section on EITHER UK storefront, and never the per-email
  *     actions. Also shown on the per-brand host storefront for a fresh account
  *     with no scoped credentials yet (so it can set its first brand password).
- *   • Model 3 host-gating: per-email actions never leak onto Stanley UK.
+ *   • Model 3 follows the account: a real per-email account gets per-email
+ *     actions on BOTH UK storefronts. With no scoped credentials yet, only the
+ *     per-email host (DeWalt UK) defaults to them.
  */
 export function resolveProfilePasswordSections(input: {
   /** Host default: this storefront is the per-email (DeWalt UK) storefront. */
@@ -216,7 +218,13 @@ export function resolveProfilePasswordSections(input: {
     !hasPerEmailCredentials &&
     (hasBrandCredentials || input.hostPerBrandModel)
 
-  const showPerEmailActions = input.hostPerEmailModel && !isModel4Account
+  // A Model 3 account (real per-email credentials) is managed the same way on
+  // EITHER UK storefront, whichever site it signed up on. The per-email host
+  // (DeWalt UK) additionally defaults a fresh account to Model 3. A brand-only
+  // account on Stanley UK is deliberately NOT given per-email activation here:
+  // the combined per-email x per-brand topology is pending a stakeholder decision.
+  const showPerEmailActions =
+    isUk && !isModel4Account && (hasPerEmailCredentials || input.hostPerEmailModel)
 
   return { showPerEmailActions, showBrandSection }
 }

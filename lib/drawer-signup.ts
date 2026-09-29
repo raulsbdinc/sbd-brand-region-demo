@@ -41,11 +41,51 @@ export type DrawerSignupFlow = "shared" | "per-email" | "per-brand"
  * A UK brand with no brand connection fails closed to the shared signup; the
  * server routes still re-gate and refuse a model that market cannot host.
  */
-export function drawerSignupFlow(market: CountryId, brand: BrandId): DrawerSignupFlow {
+export function drawerSignupFlow(
+  market: CountryId,
+  brand: BrandId,
+  choice?: UkSignupModel,
+): DrawerSignupFlow {
   if (!accountModelSelectionAvailable(market)) return "shared"
-  if (brand === "dewalt") return "per-email"
-  if (brand === "stanley") return "per-brand"
-  return "shared"
+  if (!brandConnectionKey(brand)) return "shared"
+  return choice ?? defaultUkSignupModel(brand)
+}
+
+/**
+ * The UK demo account model a customer picks explicitly in Create Account.
+ * Both UK storefronts offer both, so neither model depends on which site the
+ * customer happened to start on. The server routes gate on market only.
+ */
+export type UkSignupModel = "per-email" | "per-brand"
+
+export const UK_SIGNUP_MODELS: readonly UkSignupModel[] = ["per-email", "per-brand"]
+
+/**
+ * The pre-selected option (unchanged historical behaviour): DeWalt UK starts on
+ * a password per email, Stanley UK on a password per brand.
+ */
+export function defaultUkSignupModel(brand: BrandId): UkSignupModel {
+  return brand === "dewalt" ? "per-email" : "per-brand"
+}
+
+/** Plain-language option copy. Never mentions Auth0 connections. */
+export function ukSignupModelCopy(
+  model: UkSignupModel,
+  siteBrand: BrandId,
+): { title: string; description: string } {
+  const here = BRANDS[siteBrand].name
+  const other = otherUkBrand(siteBrand)
+  const otherName = other ? BRANDS[other].name : "the other brand"
+  if (model === "per-email") {
+    return {
+      title: "A password for each email",
+      description: `Later you can add another verified email with its own password. Both work on ${here} and ${otherName}.`,
+    }
+  }
+  return {
+    title: `A separate ${here} password`,
+    description: `This password works on ${here} only. You can add a different ${otherName} password to the same account later.`,
+  }
 }
 
 /**

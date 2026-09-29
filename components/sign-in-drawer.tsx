@@ -15,6 +15,7 @@ import { GOOGLE_SIGNIN_PATH } from "@/lib/auth0-connections"
 import { looksLikeEmail } from "@/lib/auth-service"
 import {
   interpretRecoveryResetResponse,
+  interpretRecoveryStartResponse,
   recoverySuccessMessage,
 } from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
@@ -28,6 +29,7 @@ import {
 } from "@/lib/drawer-signup"
 import {
   PASSWORD_REQUIREMENTS_TEXT,
+  UK_PASSWORD_REQUIREMENTS_TEXT,
   validateRegistrationPassword,
 } from "@/lib/password-policy"
 
@@ -64,7 +66,8 @@ const INPUT_CLASS =
 // step. Sourced from the shared policy module so the hint, the client-side
 // submit gate, and the server's pre-consumption gate are always identical
 // (>=8 chars, >=3 of the 4 char types, and no part of the email address).
-const PASSWORD_REQUIREMENTS = PASSWORD_REQUIREMENTS_TEXT
+const PASSWORD_REQUIREMENTS =
+  SITE_MARKET === "uk" ? UK_PASSWORD_REQUIREMENTS_TEXT : PASSWORD_REQUIREMENTS_TEXT
 
 /** Mask a local part for display: `jane@x.com` -> `j•••@x.com`. */
 function maskEmail(value: string): string {
@@ -151,6 +154,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const [recoverEmail, setRecoverEmail] = useState("")
   const [recoverError, setRecoverError] = useState<string | null>(null)
   const [recoverSending, setRecoverSending] = useState(false)
+  const [recoverNotSetUp, setRecoverNotSetUp] = useState<string | null>(null)
   const [recoverCode, setRecoverCode] = useState("")
   const [recoverNext, setRecoverNext] = useState("")
   const [recoverConfirm, setRecoverConfirm] = useState("")
@@ -479,7 +483,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     // per-brand (Model 4) journeys this is what prevents a predictably-weak
     // password (too short, too few character classes, or containing part of the
     // email) from consuming an OTP and being rejected only after the fact.
-    const policy = validateRegistrationPassword(password, [email])
+    const policy = validateRegistrationPassword(password, [email], SITE_MARKET)
     if (!policy.ok) {
       setCreateError(PASSWORD_REQUIREMENTS)
       return
@@ -787,13 +791,20 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       return
     }
     setRecoverError(null)
+    setRecoverNotSetUp(null)
     setRecoverSending(true)
     try {
-      await fetch("/api/recovery/start", {
+      const res = await fetch("/api/recovery/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email: recoverEmail.trim() }),
       })
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      const action = interpretRecoveryStartResponse({ httpStatus: res.status, body: data })
+      if (action.kind === "brand-not-set-up") {
+        setRecoverNotSetUp(action.message)
+        return
+      }
       setRecoverSentTo(recoverEmail.trim())
       setStep("recover-reset")
     } catch {
@@ -839,6 +850,12 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       setRecoverResetError("Those passwords don\u2019t match.")
       return
     }
+    if (
+      !validateRegistrationPassword(recoverNext, recoverSentTo ? [recoverSentTo] : [], SITE_MARKET).ok
+    ) {
+      setRecoverResetError("Choose a stronger password. " + PASSWORD_REQUIREMENTS)
+      return
+    }
     setRecoverResetting(true)
     setRecoverResetError(null)
     try {
@@ -878,6 +895,12 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         setRecoverResetError(
           "Choose a stronger password. " + PASSWORD_REQUIREMENTS,
         )
+        return
+      }
+      if (action.kind === "brand-not-set-up") {
+        setRecoverEmail(recoverSentTo)
+        setRecoverNotSetUp(action.message)
+        setStep("recover-email")
         return
       }
       setRecoverResetError(
@@ -1108,6 +1131,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
             onChange={(e) => {
               setRecoverEmail(e.target.value)
               if (recoverError) setRecoverError(null)
+              if (recoverNotSetUp) setRecoverNotSetUp(null)
             }}
             className={`${INPUT_CLASS} px-0`}
           />
@@ -1117,6 +1141,26 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
           <p role="alert" className={alertClass}>
             {recoverError}
           </p>
+        )}
+
+        {recoverNotSetUp && (
+          <div role="status" className="mt-4">
+            <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+              {recoverNotSetUp}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setEmail(recoverEmail.trim())
+                setPassword("")
+                setRecoverNotSetUp(null)
+                goToCreate()
+              }}
+              className={`mt-4 ${PRIMARY_BUTTON_CLASS}`}
+            >
+              Create an account with this email
+            </button>
+          </div>
         )}
 
         <button

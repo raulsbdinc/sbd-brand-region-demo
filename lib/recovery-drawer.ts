@@ -16,7 +16,20 @@ import { validateNewPassword } from "./password-change.ts"
 /** What the drawer should do after asking the server to email a reset code. */
 export type RecoveryStartAction =
   | { kind: "sent" }
+  | { kind: "brand-not-set-up"; message: string }
   | { kind: "error"; message?: string }
+
+/**
+ * CIAM-17 (UK): the response code used when the email only has the SISTER
+ * brand's password — nothing here to reset, so no code is sent and the customer
+ * is guided to Create Account's second-brand ownership proof instead.
+ */
+export const BRAND_NOT_SET_UP_CODE = "brand-not-set-up"
+
+/** Customer-facing guidance for BRAND_NOT_SET_UP_CODE. Never names the other brand. */
+export function brandNotSetUpMessage(brandName: string): string {
+  return `${brandName} sign-in isn\u2019t set up for this email yet, so there\u2019s no ${brandName} password to reset. Choose Create an account with this same email to add ${brandName} \u2014 we\u2019ll confirm it\u2019s you, and your existing passwords stay unchanged.`
+}
 
 /**
  * Interpret the response of POST /api/recovery/passcode/start. The start step
@@ -28,7 +41,12 @@ export function interpretRecoveryStartResponse(input: {
   httpStatus: number
   body: Record<string, unknown>
 }): RecoveryStartAction {
-  if (input.httpStatus >= 200 && input.httpStatus < 300) return { kind: "sent" }
+  if (input.httpStatus >= 200 && input.httpStatus < 300) {
+    if (input.body.code === BRAND_NOT_SET_UP_CODE && typeof input.body.message === "string") {
+      return { kind: "brand-not-set-up", message: input.body.message }
+    }
+    return { kind: "sent" }
+  }
   const message =
     typeof input.body.error === "string" ? input.body.error : undefined
   return { kind: "error", message }
@@ -49,6 +67,7 @@ export type RecoveryResetAction =
     }
   | { kind: "bad-code" }
   | { kind: "weak-password" }
+  | { kind: "brand-not-set-up"; message: string }
   | { kind: "generic"; message?: string }
 
 /**
@@ -82,6 +101,9 @@ export function interpretRecoveryResetResponse(input: {
   const code = typeof body.code === "string" ? body.code : ""
   if (httpStatus === 400 && code === "bad-code") return { kind: "bad-code" }
   if (httpStatus === 400 && code === "weak-password") return { kind: "weak-password" }
+  if (code === BRAND_NOT_SET_UP_CODE && typeof body.error === "string") {
+    return { kind: "brand-not-set-up", message: body.error }
+  }
   const message = typeof body.error === "string" ? body.error : undefined
   return { kind: "generic", message }
 }
@@ -118,9 +140,11 @@ export function canSubmitRecoveryReset(input: {
   code: string
   next: string
   confirm: string
+  market?: string
+  email?: string
 }): boolean {
   if (input.code.trim().length === 0) return false
-  if (!validateNewPassword(input.next).ok) return false
+  if (!validateNewPassword(input.next, input.market, input.email ? [input.email] : []).ok) return false
   if (input.next !== input.confirm) return false
   return true
 }

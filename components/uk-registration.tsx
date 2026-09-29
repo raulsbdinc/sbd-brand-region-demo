@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ACCOUNT_MODEL_META, type AccountModel, crossBrandConfirmMessage } from "@/lib/account-model"
-import { validateRegistrationPassword, PASSWORD_REQUIREMENTS_TEXT } from "@/lib/password-policy"
+import { validateRegistrationPassword, UK_PASSWORD_REQUIREMENTS_TEXT as PASSWORD_REQUIREMENTS_TEXT } from "@/lib/password-policy"
 
 interface Props {
   /** Concrete deployment brand name, e.g. "DeWalt". */
@@ -306,10 +306,10 @@ function PerEmailJourney({
   // (length, 3-of-4 classes, and no email user-info) so the form never enables
   // submit for a password Auth0 will reject — and, critically, never lets us
   // consume the customer's one-time code only to fail the create afterwards.
-  const primaryPwCheck = validateRegistrationPassword(primaryPassword, [primaryEmail])
+  const primaryPwCheck = validateRegistrationPassword(primaryPassword, [primaryEmail], "uk")
   const primaryPwError =
     primaryPassword.length > 0 && !primaryPwCheck.ok ? primaryPwCheck.failures.join("; ") : undefined
-  const secondaryPwCheck = validateRegistrationPassword(secondaryPassword, [secondaryEmail])
+  const secondaryPwCheck = validateRegistrationPassword(secondaryPassword, [secondaryEmail], "uk")
   const secondaryPwError =
     addSecond && secondaryPassword.length > 0 && !secondaryPwCheck.ok
       ? secondaryPwCheck.failures.join("; ")
@@ -751,7 +751,7 @@ function PerBrandJourney({
 
   // Same shared policy as the server so we never enable submit for a password
   // Auth0 will reject (the per-brand create is proof-gated too).
-  const pwCheck = validateRegistrationPassword(password, [email])
+  const pwCheck = validateRegistrationPassword(password, [email], "uk")
   const pwError = password.length > 0 && !pwCheck.ok ? pwCheck.failures.join("; ") : undefined
   const canSubmit = looksLikeEmail(email) && pwCheck.ok
 

@@ -58,6 +58,8 @@ import {
   validateNewPassword,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
+import { newPasswordChecklist } from "@/lib/password-policy"
+import { SITE_MARKET } from "@/lib/site"
 import { buildAuthLoginUrl, startAuthRedirect } from "@/lib/auth0-connections"
 import {
   DOWNSTREAM_CATEGORY_LABELS,
@@ -431,10 +433,10 @@ function ChangePasswordDialog({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
 
-  const policy = validateNewPassword(next)
+  const policy = validateNewPassword(next, SITE_MARKET)
   const confirmMismatch = confirm.length > 0 && confirm !== next
   const reuse = next.length > 0 && next === current
-  const canSubmit = !busy && canSubmitPasswordChange({ current, next, confirm })
+  const canSubmit = !busy && canSubmitPasswordChange({ current, next, confirm, market: SITE_MARKET })
 
   function wipe() {
     setCurrent("")
@@ -560,11 +562,7 @@ function ChangePasswordDialog({
             />
             {/* Concise policy checklist — validation, not feature copy. */}
             <ul id="pw-policy" className="space-y-1 text-xs text-muted-foreground">
-              {[
-                { ok: next.length >= 8, text: "At least 8 characters" },
-                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
-                { ok: /[0-9]/.test(next), text: "At least one number" },
-              ].map((r) => (
+              {newPasswordChecklist(next, SITE_MARKET).map((r) => (
                 <li key={r.text} className="flex items-center gap-1.5">
                   <Check
                     className={cn(
