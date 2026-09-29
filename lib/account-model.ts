@@ -703,3 +703,51 @@ export function modelMismatchMessage(existing: "per-email" | "per-brand" | "othe
   }
   return "This email already has an account with a different sign-in setup. Sign in with your existing details instead."
 }
+
+// --- Model 4 second-brand signup against an existing account ----------------
+
+export type BrandProofMethod = "password" | "email-code"
+
+export type BrandSignupExistingDecision =
+  | { kind: "model-mismatch"; existingModel: "per-email" | "other" }
+  | { kind: "already-brand" }
+  | { kind: "proof-required"; proofOptions: BrandProofMethod[] }
+
+/**
+ * What a UK per-brand (Model 4) signup does when the email already belongs to
+ * exactly ONE account. Same-model (the account already holds the OTHER brand's
+ * password) → ownership proof, then this brand is linked to that SAME root.
+ * Cross-model (a per-email account, or one with no brand password) → refuse
+ * with a model-mismatch; nothing is created, converted, or mixed.
+ *
+ * Both proofs are offered: the other brand's password, or an emailed one-time
+ * code. Fresh Model 4 roots are created unverified (`verify_email: false`), so
+ * gating the code on verification would make second-brand enrollment impossible.
+ */
+export function planBrandSignupForExistingAccount(params: {
+  connectionKey: "dewalt" | "stanley"
+  email: string
+  account: { bindings: CredentialBinding[]; verifiedEmails: string[] }
+}): BrandSignupExistingDecision {
+  const { bindings } = params.account
+  const hasPerBrand = bindings.some(
+    (b) => b.connectionKey === "dewalt" || b.connectionKey === "stanley",
+  )
+  const hasPerEmail = bindings.some((b) => b.connectionKey === "per-email")
+  if (!hasPerBrand || hasPerEmail) {
+    return { kind: "model-mismatch", existingModel: hasPerEmail ? "per-email" : "other" }
+  }
+  if (bindings.some((b) => b.connectionKey === params.connectionKey)) {
+    return { kind: "already-brand" }
+  }
+  return { kind: "proof-required", proofOptions: ["password", "email-code"] }
+}
+
+/** Whether a submitted proof method was actually offered for this account. */
+export function brandProofMethodAllowed(
+  offered: readonly unknown[] | undefined,
+  method: BrandProofMethod,
+): boolean {
+  if (method === "password") return true
+  return Array.isArray(offered) && offered.includes("email-code")
+}
