@@ -20,6 +20,7 @@ import {
   brandProofMethodAllowed,
   planBrandSignupForExistingAccount,
   planModel4CrossBrandLink,
+  unverifiedBrandAccountMessage,
   type Model4LinkRejectReason,
 } from "@/lib/account-model"
 import { executeBrandLink } from "@/lib/model-registration"
@@ -55,6 +56,11 @@ function planRejection(reason: Model4LinkRejectReason): NextResponse {
       return NextResponse.json({ configured: false, reason: "not-configured" }, { status: 200 })
     case "proof-required":
       return NextResponse.json({ error: "We couldn't verify that. Please try again." }, { status: 401 })
+    case "email-unverified":
+      return NextResponse.json(
+        { error: unverifiedBrandAccountMessage(), reason: "email-unverified" },
+        { status: 409 },
+      )
     default:
       // no-existing-account, model-conflict, duplicate-brand-credential,
       // market/brand/email — all collapse to one neutral message.
@@ -130,8 +136,19 @@ export async function POST(request: NextRequest) {
     email,
     account: existing.account,
   })
-  const offeredOptions = offered.kind === "proof-required" ? offered.proofOptions : []
-  if (!brandProofMethodAllowed(offeredOptions, method)) {
+  if (offered.kind === "verification-required") {
+    return NextResponse.json(
+      { error: unverifiedBrandAccountMessage(), reason: "email-unverified" },
+      { status: 409 },
+    )
+  }
+  if (offered.kind !== "proof-required") {
+    return NextResponse.json(
+      { error: "We couldn't complete that right now. Please try again." },
+      { status: 409 },
+    )
+  }
+  if (!brandProofMethodAllowed(offered.proofOptions, method)) {
     return NextResponse.json(
       { error: "Confirm your email address first, then try again.", reason: "email-unverified" },
       { status: 409 },
@@ -217,6 +234,9 @@ export async function POST(request: NextRequest) {
       bindings: existing.account.bindings,
     },
     proofVerified,
+    ownershipEmailVerified: existing.account.verifiedEmails.some(
+      (e) => e.trim().toLowerCase() === email.trim().toLowerCase(),
+    ),
     connectionNames: resolveConnectionNames(),
   })
   if (!plan.ok) return planRejection(plan.reason)

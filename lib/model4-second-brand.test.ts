@@ -14,6 +14,7 @@ import {
 import {
   brandProofMethodAllowed,
   planBrandSignupForExistingAccount,
+  unverifiedBrandAccountMessage,
   planModel4CrossBrandLink,
 } from "./account-model.ts"
 import {
@@ -135,10 +136,12 @@ async function addSecondBrand(
   password: string,
 ) {
   const [root] = await t.deps.getUsersByEmail(email)
+  // Mirrors collectAccountVerifiedEmails: the root email counts only when verified.
+  const verifiedEmails = root.email_verified ? [email] : []
   const decision = planBrandSignupForExistingAccount({
     connectionKey: site,
     email,
-    account: { bindings: t.bindingsOf(root), verifiedEmails: [] },
+    account: { bindings: t.bindingsOf(root), verifiedEmails },
   })
   if (decision.kind !== "proof-required") return { decision }
 
@@ -158,6 +161,7 @@ async function addSecondBrand(
     email,
     existingAccount: { auth0UserId: root.user_id, bindings: t.bindingsOf(root) },
     proofVerified: true,
+    ownershipEmailVerified: true,
     connectionNames: NAMES,
   })
   assert.equal(plan.ok, true)
@@ -176,14 +180,36 @@ async function addSecondBrand(
   return { decision, out }
 }
 
+/** Simulates the first brand's existing confirmation link → root email_verified=true. */
+function confirmEmail(t: ReturnType<typeof makeTenant>, rootId: string) {
+  const root = t.users.get(rootId)!
+  t.users.set(rootId, { ...root, email_verified: true })
+}
+
 for (const [first, second, firstPw, secondPw] of [
   ["stanley", "dewalt", STANLEY_PW, DEWALT_PW],
   ["dewalt", "stanley", DEWALT_PW, STANLEY_PW],
 ] as const) {
+  test(`Model 4 ${first}-first UNVERIFIED → ${second}: refused with verification guidance, no link, no second root`, async () => {
+    const t = makeTenant()
+    const email = `m4-unverified-${first === "stanley" ? "a" : "b"}@example.com`
+    const rootId = await registerBrand(t, first, email, firstPw)
+    assert.equal(t.users.get(rootId)!.email_verified, false)
+
+    const { decision, out } = await addSecondBrand(t, second, email, secondPw)
+    assert.equal(decision.kind, "verification-required")
+    assert.equal(out, undefined)
+    assert.equal(t.users.size, 1)
+    assert.deepEqual(t.bindingsOf(t.users.get(rootId)!).map((b) => b.connectionKey), [first])
+    assert.equal(t.signIn(second, email, secondPw), null)
+    assert.match(unverifiedBrandAccountMessage(), /confirm/i)
+  })
+
   test(`Model 4 ${first}-first → ${second}: OTP proof links ${second} to the SAME root; each password only on its brand`, async () => {
     const t = makeTenant()
     const email = `m4-${first}first@example.com`
     const rootId = await registerBrand(t, first, email, firstPw)
+    confirmEmail(t, rootId)
 
     const { decision, out } = await addSecondBrand(t, second, email, secondPw)
     assert.equal(decision.kind, "proof-required")
@@ -212,7 +238,7 @@ for (const [first, second, firstPw, secondPw] of [
   test(`Model 4 ${first}-first: repeating ${second} enrollment is refused, never a second credential`, async () => {
     const t = makeTenant()
     const email = `m4-repeat-${first === "stanley" ? "a" : "b"}@example.com`
-    await registerBrand(t, first, email, firstPw)
+    confirmEmail(t, await registerBrand(t, first, email, firstPw))
     await addSecondBrand(t, second, email, secondPw)
     const again = await addSecondBrand(t, second, email, "Another-Strong-Pass-3")
     assert.equal(again.decision.kind, "already-brand")
@@ -246,6 +272,7 @@ test("cross-model: per-email (Model 3) root + Model 4 signup fails closed with m
     email,
     existingAccount: { auth0UserId: root.user_id, bindings: t.bindingsOf(root) },
     proofVerified: true,
+    ownershipEmailVerified: true,
     connectionNames: NAMES,
   })
   assert.deepEqual(plan, { ok: false, reason: "model-conflict" })

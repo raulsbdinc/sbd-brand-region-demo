@@ -518,10 +518,18 @@ export interface Model4CrossBrandContext {
   existingAccount: Model4ExistingAccount | null
   /** Whether ownership proof (password or email code) has been verified. */
   proofVerified: boolean
+  /**
+   * Whether the email is VERIFIED on the existing account (root
+   * `email_verified`, or an OTP-proven linked alias). A fresh Model 4 root is
+   * created unverified until its confirmation link is used; linking a second
+   * brand onto an unconfirmed root would let an unproven mailbox gain a credential.
+   */
+  ownershipEmailVerified: boolean
   connectionNames: Record<ConnectionKey, string | undefined>
 }
 
 export type Model4LinkRejectReason =
+  | "email-unverified"
   | "market-unavailable"
   | "invalid-email"
   | "unsupported-brand"
@@ -578,6 +586,8 @@ export function planModel4CrossBrandLink(
 
   // Proof of ownership must already be verified by the endpoint.
   if (!ctx.proofVerified) return { ok: false, reason: "proof-required" }
+
+  if (!ctx.ownershipEmailVerified) return { ok: false, reason: "email-unverified" }
 
   const existing = ctx.existingAccount.bindings
 
@@ -711,7 +721,13 @@ export type BrandProofMethod = "password" | "email-code"
 export type BrandSignupExistingDecision =
   | { kind: "model-mismatch"; existingModel: "per-email" | "other" }
   | { kind: "already-brand" }
+  | { kind: "verification-required" }
   | { kind: "proof-required"; proofOptions: BrandProofMethod[] }
+
+/** Guidance when the existing brand account's email has not been confirmed yet. */
+export function unverifiedBrandAccountMessage(): string {
+  return "This email already has an account on the other UK storefront, but its email address hasn't been confirmed yet. Use the confirmation link we emailed when that account was created (or sign in there and resend it from your profile), then come back to add this brand. Nothing has been changed."
+}
 
 /**
  * What a UK per-brand (Model 4) signup does when the email already belongs to
@@ -720,9 +736,13 @@ export type BrandSignupExistingDecision =
  * Cross-model (a per-email account, or one with no brand password) → refuse
  * with a model-mismatch; nothing is created, converted, or mixed.
  *
- * Both proofs are offered: the other brand's password, or an emailed one-time
- * code. Fresh Model 4 roots are created unverified (`verify_email: false`), so
- * gating the code on verification would make second-brand enrollment impossible.
+ * The email must already be VERIFIED on that account (root `email_verified`,
+ * set by the first brand's confirmation link, or an OTP-proven alias). An
+ * unconfirmed root is refused with `verification-required` and guidance to
+ * finish the first brand's verification — never linked.
+ *
+ * When verified, both proofs are offered: the other brand's password, or an
+ * emailed one-time code to that verified address.
  */
 export function planBrandSignupForExistingAccount(params: {
   connectionKey: "dewalt" | "stanley"
@@ -740,6 +760,9 @@ export function planBrandSignupForExistingAccount(params: {
   if (bindings.some((b) => b.connectionKey === params.connectionKey)) {
     return { kind: "already-brand" }
   }
+  const email = normalizeEmail(params.email)
+  const verified = params.account.verifiedEmails.some((e) => normalizeEmail(e) === email)
+  if (!email || !verified) return { kind: "verification-required" }
   return { kind: "proof-required", proofOptions: ["password", "email-code"] }
 }
 

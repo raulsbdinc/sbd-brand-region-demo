@@ -296,10 +296,18 @@ function crossCtx(over: Partial<Parameters<typeof planModel4CrossBrandLink>[0]> 
       bindings: [binding("dewalt")],
     },
     proofVerified: true,
+    ownershipEmailVerified: true,
     connectionNames: { ...ALL_CONNECTIONS },
     ...over,
   }
 }
+
+test("planModel4CrossBrandLink: refuses to link onto an unverified existing email even with proof", () => {
+  assert.deepEqual(planModel4CrossBrandLink(crossCtx({ ownershipEmailVerified: false })), {
+    ok: false,
+    reason: "email-unverified",
+  })
+})
 
 test("planModel4CrossBrandLink: links the second brand under the existing primary", () => {
   const r = planModel4CrossBrandLink(crossCtx())

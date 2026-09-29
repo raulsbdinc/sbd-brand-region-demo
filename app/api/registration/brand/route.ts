@@ -26,6 +26,7 @@ import {
 import {
   modelMismatchMessage,
   planBrandSignupForExistingAccount,
+  unverifiedBrandAccountMessage,
   planModel4Registration,
   type Model4RejectReason,
 } from "@/lib/account-model"
@@ -174,6 +175,16 @@ export async function POST(request: NextRequest) {
         error: "An account already exists for this brand. Try signing in instead.",
         reason: "already-brand",
       },
+      { status: 409 },
+    )
+  }
+
+  if (decision.kind === "verification-required") {
+    // Same model, but the first brand's email hasn't been confirmed yet. Never
+    // link a credential onto an unproven mailbox; guide the customer to finish
+    // the first brand's verification. Nothing is created.
+    return NextResponse.json(
+      { error: unverifiedBrandAccountMessage(), reason: "email-unverified" },
       { status: 409 },
     )
   }

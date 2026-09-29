@@ -29,6 +29,7 @@ import {
   brandConnectionKey,
   crossBrandConfirmMessage,
   modelMismatchMessage,
+  unverifiedBrandAccountMessage,
 } from "./account-model.ts"
 
 /** Which Create Account endpoint this storefront's drawer posts to. */
@@ -166,6 +167,12 @@ export function interpretBrandSignupResponse(res: HttpResult): BrandSignupAction
   // created; show the route's explanation instead of a generic failure.
   if (httpStatus === 409 && body.reason === "model-mismatch") {
     return { kind: "model-mismatch", message: messageOf(body) ?? modelMismatchMessage("other") }
+  }
+
+  // Same model, but the first brand's email isn't confirmed yet. Surface the
+  // route's guidance (reuses the explanatory model-mismatch panel; nothing made).
+  if (httpStatus === 409 && body.reason === "email-unverified") {
+    return { kind: "model-mismatch", message: messageOf(body) ?? unverifiedBrandAccountMessage() }
   }
 
   return { kind: "error", message: messageOf(body) }
