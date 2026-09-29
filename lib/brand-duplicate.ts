@@ -59,3 +59,45 @@ export function detectCurrentBrandCredential(params: {
     return candidate.identities.some((id) => id.connectionKey === params.brandKey)
   })
 }
+
+/**
+ * CIAM-17: whether `email` has ONLY the sister brand's password and nothing this
+ * storefront can reset. True iff at least one candidate owns the email, some
+ * owner holds a real identity on the OTHER brand's connection, and NO owner
+ * holds an identity on this brand, the per-email connection, or the shared
+ * connection (any of those gives the reset a legitimate target).
+ *
+ * Forgot-password must then NOT email a code or create a credential; the
+ * customer is guided to Create Account (the existing second-brand ownership
+ * proof). Conservative in the same way as detectCurrentBrandCredential: a brand
+ * identity on an account that doesn't own the email never counts.
+ */
+export function detectOtherBrandOnlyCredential(params: {
+  email: string
+  brandKey: BrandConnectionKey
+  candidates: BrandDuplicateCandidate[]
+}): boolean {
+  const normalized = normalizeEmail(params.email)
+  if (!normalized) return false
+  const otherKey: BrandConnectionKey =
+    params.brandKey === "dewalt" ? "stanley" : "dewalt"
+
+  const owners = params.candidates.filter((candidate) =>
+    candidate.ownedEmails.map(normalizeEmail).includes(normalized),
+  )
+  if (owners.length === 0) return false
+
+  const resettableHere = owners.some((owner) =>
+    owner.identities.some(
+      (id) =>
+        id.connectionKey === params.brandKey ||
+        id.connectionKey === "per-email" ||
+        id.connectionKey === "shared",
+    ),
+  )
+  if (resettableHere) return false
+
+  return owners.some((owner) =>
+    owner.identities.some((id) => id.connectionKey === otherKey),
+  )
+}

@@ -82,6 +82,8 @@ import {
   validateNewPassword,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
+import { newPasswordChecklist } from "@/lib/password-policy"
+import { SITE_MARKET } from "@/lib/site"
 import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
@@ -1130,7 +1132,7 @@ function SetBrandPasswordDialog({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
 
-  const policy = validateNewPassword(next)
+  const policy = validateNewPassword(next, SITE_MARKET)
   const confirmMismatch = confirm.length > 0 && confirm !== next
   const canSubmit = !busy && policy.ok && confirm === next && confirm.length > 0
 
@@ -1237,11 +1239,7 @@ function SetBrandPasswordDialog({
               describedBy={`set-brand-policy-${brand}`}
             />
             <ul id={`set-brand-policy-${brand}`} className="space-y-1 text-xs text-muted-foreground">
-              {[
-                { ok: next.length >= 8, text: "At least 8 characters" },
-                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
-                { ok: /[0-9]/.test(next), text: "At least one number" },
-              ].map((r) => (
+              {newPasswordChecklist(next, SITE_MARKET).map((r) => (
                 <li key={r.text} className="flex items-center gap-1.5">
                   <Check
                     className={cn("size-3.5 shrink-0", r.ok ? "text-primary" : "text-muted-foreground/40")}
@@ -3287,10 +3285,10 @@ function ChangePasswordDialog({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
 
-  const policy = validateNewPassword(next)
+  const policy = validateNewPassword(next, SITE_MARKET)
   const confirmMismatch = confirm.length > 0 && confirm !== next
   const reuse = next.length > 0 && next === current
-  const canSubmit = !busy && canSubmitPasswordChange({ current, next, confirm })
+  const canSubmit = !busy && canSubmitPasswordChange({ current, next, confirm, market: SITE_MARKET })
 
   function wipe() {
     setCurrent("")
@@ -3412,11 +3410,7 @@ function ChangePasswordDialog({
             />
             {/* Concise policy checklist — validation, not feature copy. */}
             <ul id={`pw-policy-${target.label}`} className="space-y-1 text-xs text-muted-foreground">
-              {[
-                { ok: next.length >= 8, text: "At least 8 characters" },
-                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
-                { ok: /[0-9]/.test(next), text: "At least one number" },
-              ].map((r) => (
+              {newPasswordChecklist(next, SITE_MARKET).map((r) => (
                 <li key={r.text} className="flex items-center gap-1.5">
                   <Check
                     className={cn(
@@ -3544,7 +3538,7 @@ function ActivatePerEmailDialog({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
 
-  const policy = validateNewPassword(next)
+  const policy = validateNewPassword(next, SITE_MARKET)
   const confirmMismatch = confirm.length > 0 && confirm !== next
   const canSubmit =
     !busy && current.length > 0 && policy.ok && confirm === next && confirm.length > 0
@@ -3659,11 +3653,7 @@ function ActivatePerEmailDialog({
               id={`activate-policy-${secondaryEmail}`}
               className="space-y-1 text-xs text-muted-foreground"
             >
-              {[
-                { ok: next.length >= 8, text: "At least 8 characters" },
-                { ok: /[a-z]/.test(next) && /[A-Z]/.test(next), text: "Upper and lowercase letters" },
-                { ok: /[0-9]/.test(next), text: "At least one number" },
-              ].map((r) => (
+              {newPasswordChecklist(next, SITE_MARKET).map((r) => (
                 <li key={r.text} className="flex items-center gap-1.5">
                   <Check
                     className={cn(

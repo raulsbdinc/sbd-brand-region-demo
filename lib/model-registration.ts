@@ -53,7 +53,6 @@ export interface ManagementDeps {
   updateUser(userId: string, body: { app_metadata?: Record<string, unknown> }): Promise<Auth0User>
 }
 
-const MIN_PASSWORD_LENGTH = 8
 
 export interface CreatedCredential {
   bindingId: string
@@ -73,12 +72,15 @@ function readBindingsFrom(user: Auth0User): CredentialBinding[] {
   return Array.isArray(raw) ? (raw as CredentialBinding[]) : []
 }
 
-/** Light pre-check; the connection's real policy is enforced by Auth0 on create. */
-function passwordError(password: unknown): string | null {
-  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
-    return `Use at least ${MIN_PASSWORD_LENGTH} characters.`
-  }
-  if (password.length > 128) return "That password is too long."
+/**
+ * Pre-check against the UK connection policy (Model 3/4 are UK-only): 15
+ * characters, 3 of 4 classes, no fragment of the credential's email. Auth0
+ * still enforces its own rule on create.
+ */
+function passwordError(password: unknown, email?: string): string | null {
+  if (typeof password !== "string") return "Enter a password."
+  const check = validateRegistrationPassword(password, email ? [email] : [], "uk")
+  if (!check.ok) return `${check.failures[0]}.`
   return null
 }
 
@@ -197,7 +199,7 @@ export async function executePerEmailRegistration(
     return { ok: false, status: 403, error: "Please verify your email address first." }
   }
   for (const id of identities) {
-    const pwErr = passwordError(id.password)
+    const pwErr = passwordError(id.password, id.email)
     if (pwErr) return { ok: false, status: 400, error: pwErr }
   }
 
@@ -415,7 +417,8 @@ export async function registerModel3WithProof(
   //      lib/password-policy so the browser and this gate agree exactly, and
   //      check each password against its OWN email's user-info tokens.
   for (const id of identities) {
-    const check = validateRegistrationPassword(id.password, [id.email])
+    // Model 3/4 registration is UK-only, so the UK connection policy applies.
+    const check = validateRegistrationPassword(id.password, [id.email], "uk")
     if (!check.ok) {
       return {
         ok: false,
@@ -492,7 +495,7 @@ export async function executeBrandRegistration(
   deps: ManagementDeps,
 ): Promise<ExecOutcome> {
   const { connectionKey, connectionName, email, password, brand } = params
-  const pwErr = passwordError(password)
+  const pwErr = passwordError(password, email)
   if (pwErr) return { ok: false, status: 400, error: pwErr }
 
   try {
@@ -570,7 +573,7 @@ async function linkCredentialToPrimary(
 ): Promise<ExecOutcome> {
   const { primaryUserId, connectionKey, connectionName, connectionId, email, password, useCase, brand } =
     params
-  const pwErr = passwordError(password)
+  const pwErr = passwordError(password, email)
   if (pwErr) return { ok: false, status: 400, error: pwErr }
 
   let primary: Auth0User

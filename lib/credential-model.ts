@@ -503,6 +503,28 @@ export interface EmailOwnershipCandidate {
   userId: string
   /** Emails this account provably owns (any casing — normalized here). */
   ownedEmails: string[]
+  /**
+   * True for a standalone record that holds ONLY passwordless (`email`/`sms`)
+   * identities and no credential bindings. Auth0 mints one of these whenever a
+   * one-time code is verified for an address that has no passwordless identity
+   * yet (e.g. a recovery or ownership code). It holds no password and is not a
+   * customer account, so it must never count as a second owner — otherwise one
+   * real account plus that stub looks "ambiguous" and registration fails closed.
+   */
+  passwordlessOnly?: boolean
+}
+
+/**
+ * Whether an Auth0 record is a standalone passwordless stub: every identity is
+ * a passwordless provider and it carries no credential bindings.
+ */
+export function isPasswordlessOnlyRecord(params: {
+  identityProviders: string[]
+  bindingCount: number
+}): boolean {
+  if (params.bindingCount > 0) return false
+  if (params.identityProviders.length === 0) return false
+  return params.identityProviders.every((p) => p === "email" || p === "sms")
 }
 
 export type EmailOwnershipResolution =
@@ -541,6 +563,7 @@ export function resolveEmailOwnership(params: {
   for (const candidate of params.candidates) {
     if (!candidate.userId) continue
     if (exclude && candidate.userId === exclude) continue
+    if (candidate.passwordlessOnly) continue
     const owned = candidate.ownedEmails.map(normalizeEmail)
     if (owned.includes(normalized)) owners.add(candidate.userId)
   }

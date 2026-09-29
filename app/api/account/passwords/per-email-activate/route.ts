@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { validateRegistrationPassword } from "@/lib/password-policy"
 import {
   requireAccountUser,
   managementErrorResponse,
@@ -97,9 +98,10 @@ export async function POST(request: Request) {
   if (!secondaryEmailInput || !currentPassword || !newPassword) {
     return NextResponse.json({ error: "That request isn't valid." }, { status: 400 })
   }
-  if (newPassword.length < 8 || newPassword.length > 128) {
+  const policy = validateRegistrationPassword(newPassword, [secondaryEmailInput], "uk")
+  if (!policy.ok) {
     return NextResponse.json(
-      { error: "Use at least 8 characters for the new password." },
+      { error: `${policy.failures[0]}.`, code: "weak_password" },
       { status: 400 },
     )
   }

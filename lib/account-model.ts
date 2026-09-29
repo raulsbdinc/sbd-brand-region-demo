@@ -518,10 +518,18 @@ export interface Model4CrossBrandContext {
   existingAccount: Model4ExistingAccount | null
   /** Whether ownership proof (password or email code) has been verified. */
   proofVerified: boolean
+  /**
+   * Whether the email is VERIFIED on the existing account (root
+   * `email_verified`, or an OTP-proven linked alias). A fresh Model 4 root is
+   * created unverified until its confirmation link is used; linking a second
+   * brand onto an unconfirmed root would let an unproven mailbox gain a credential.
+   */
+  ownershipEmailVerified: boolean
   connectionNames: Record<ConnectionKey, string | undefined>
 }
 
 export type Model4LinkRejectReason =
+  | "email-unverified"
   | "market-unavailable"
   | "invalid-email"
   | "unsupported-brand"
@@ -578,6 +586,8 @@ export function planModel4CrossBrandLink(
 
   // Proof of ownership must already be verified by the endpoint.
   if (!ctx.proofVerified) return { ok: false, reason: "proof-required" }
+
+  if (!ctx.ownershipEmailVerified) return { ok: false, reason: "email-unverified" }
 
   const existing = ctx.existingAccount.bindings
 
@@ -685,4 +695,82 @@ export function planModel3Completion(
     email,
     primaryUserId: ctx.primaryUserId,
   }
+}
+
+/**
+ * Customer-facing explanation when Create Account is attempted with a demo model
+ * the existing account does NOT use (Model 3 and Model 4 are alternative
+ * credential boundaries; one account never mixes them). Neutral about anything
+ * beyond "this email already has an account with a different sign-in setup",
+ * and always gives a safe way forward. Nothing is created or converted.
+ */
+export function modelMismatchMessage(existing: "per-email" | "per-brand" | "other"): string {
+  if (existing === "per-email") {
+    return "This email already has an account that uses one password per email address. That password works on both UK storefronts, so sign in with it instead. A separate brand password can't be added to this account."
+  }
+  if (existing === "per-brand") {
+    return "This email already has an account that uses a separate password for each brand. Choose the separate brand password option to add this brand, or sign in with your existing brand password."
+  }
+  return "This email already has an account with a different sign-in setup. Sign in with your existing details instead."
+}
+
+// --- Model 4 second-brand signup against an existing account ----------------
+
+export type BrandProofMethod = "password" | "email-code"
+
+export type BrandSignupExistingDecision =
+  | { kind: "model-mismatch"; existingModel: "per-email" | "other" }
+  | { kind: "already-brand" }
+  | { kind: "verification-required" }
+  | { kind: "proof-required"; proofOptions: BrandProofMethod[] }
+
+/** Guidance when the existing brand account's email has not been confirmed yet. */
+export function unverifiedBrandAccountMessage(): string {
+  return "This email already has an account on the other UK storefront, but its email address hasn't been confirmed yet. Use the confirmation link we emailed when that account was created (or sign in there and resend it from your profile), then come back to add this brand. Nothing has been changed."
+}
+
+/**
+ * What a UK per-brand (Model 4) signup does when the email already belongs to
+ * exactly ONE account. Same-model (the account already holds the OTHER brand's
+ * password) → ownership proof, then this brand is linked to that SAME root.
+ * Cross-model (a per-email account, or one with no brand password) → refuse
+ * with a model-mismatch; nothing is created, converted, or mixed.
+ *
+ * The email must already be VERIFIED on that account (root `email_verified`,
+ * set by the first brand's confirmation link, or an OTP-proven alias). An
+ * unconfirmed root is refused with `verification-required` and guidance to
+ * finish the first brand's verification — never linked.
+ *
+ * When verified, both proofs are offered: the other brand's password, or an
+ * emailed one-time code to that verified address.
+ */
+export function planBrandSignupForExistingAccount(params: {
+  connectionKey: "dewalt" | "stanley"
+  email: string
+  account: { bindings: CredentialBinding[]; verifiedEmails: string[] }
+}): BrandSignupExistingDecision {
+  const { bindings } = params.account
+  const hasPerBrand = bindings.some(
+    (b) => b.connectionKey === "dewalt" || b.connectionKey === "stanley",
+  )
+  const hasPerEmail = bindings.some((b) => b.connectionKey === "per-email")
+  if (!hasPerBrand || hasPerEmail) {
+    return { kind: "model-mismatch", existingModel: hasPerEmail ? "per-email" : "other" }
+  }
+  if (bindings.some((b) => b.connectionKey === params.connectionKey)) {
+    return { kind: "already-brand" }
+  }
+  const email = normalizeEmail(params.email)
+  const verified = params.account.verifiedEmails.some((e) => normalizeEmail(e) === email)
+  if (!email || !verified) return { kind: "verification-required" }
+  return { kind: "proof-required", proofOptions: ["password", "email-code"] }
+}
+
+/** Whether a submitted proof method was actually offered for this account. */
+export function brandProofMethodAllowed(
+  offered: readonly unknown[] | undefined,
+  method: BrandProofMethod,
+): boolean {
+  if (method === "password") return true
+  return Array.isArray(offered) && offered.includes("email-code")
 }

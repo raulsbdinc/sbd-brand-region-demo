@@ -17,12 +17,30 @@
 // Kept import-free so lib/model-registration (unit-tested under node:test) and
 // the client registration form both validate identically.
 
+// UK: the sbd-uk-temp1 DB connections (sbd-demo-per-email, sbd-demo-stanley,
+// sbd-demo-dewalt) all enforce password_options.complexity.min_length = 15
+// (read-only GET /api/v2/connections, 29 Sep). An 8-character password passed
+// the old 8-char check, cost the customer an OTP, and was then rejected by
+// Auth0. The 3-of-4 character-class and no-email-fragment rules are kept as
+// app-side safeguards on top of Auth0's length rule. EU/FR/DE keep 8.
 export const PASSWORD_MIN_LENGTH = 8
+export const UK_PASSWORD_MIN_LENGTH = 15
 export const PASSWORD_MAX_LENGTH = 128
 
-/** Human-readable policy, shown as form helper text and reused in errors. */
-export const PASSWORD_REQUIREMENTS_TEXT =
-  "At least 8 characters, including at least 3 of: lowercase, uppercase, numbers, and special characters. Don't include part of your email address."
+/** Minimum password length for a market's database connections. */
+export function passwordMinLength(market?: string): number {
+  return market === "uk" ? UK_PASSWORD_MIN_LENGTH : PASSWORD_MIN_LENGTH
+}
+
+/** Human-readable policy for a market, shown as helper text and in errors. */
+export function passwordRequirementsText(market?: string): string {
+  return `At least ${passwordMinLength(market)} characters, including at least 3 of: lowercase, uppercase, numbers, and special characters. Don't include part of your email address.`
+}
+
+/** Default (EU/FR/DE) policy text. */
+export const PASSWORD_REQUIREMENTS_TEXT = passwordRequirementsText()
+/** UK policy text. */
+export const UK_PASSWORD_REQUIREMENTS_TEXT = passwordRequirementsText("uk")
 
 export interface PasswordPolicyResult {
   ok: boolean
@@ -69,10 +87,12 @@ function characterClasses(pw: string): number {
 export function validateRegistrationPassword(
   password: unknown,
   emails: string[] = [],
+  market?: string,
 ): PasswordPolicyResult {
   const pw = typeof password === "string" ? password : ""
   const failures: string[] = []
-  if (pw.length < PASSWORD_MIN_LENGTH) failures.push(`At least ${PASSWORD_MIN_LENGTH} characters`)
+  const min = passwordMinLength(market)
+  if (pw.length < min) failures.push(`At least ${min} characters`)
   if (pw.length > PASSWORD_MAX_LENGTH) failures.push(`No more than ${PASSWORD_MAX_LENGTH} characters`)
   if (characterClasses(pw) < 3) {
     failures.push("At least 3 of: lowercase, uppercase, numbers, special characters")
@@ -85,4 +105,41 @@ export function validateRegistrationPassword(
     }
   }
   return { ok: failures.length === 0, failures }
+}
+
+/**
+ * UK checklist rows for new-password forms (profile change, set brand
+ * password, set second-email password) — the same rules as
+ * validateRegistrationPassword(pw, emails, "uk"), one row per rule.
+ */
+export function ukPasswordChecklist(
+  password: string,
+  emails: string[] = [],
+): { ok: boolean; text: string }[] {
+  const pw = typeof password === "string" ? password : ""
+  const lower = pw.toLowerCase()
+  const tokens = emails.flatMap(emailUserInfoTokens)
+  return [
+    { ok: pw.length >= UK_PASSWORD_MIN_LENGTH, text: `At least ${UK_PASSWORD_MIN_LENGTH} characters` },
+    { ok: characterClasses(pw) >= 3, text: "At least 3 of: lowercase, uppercase, numbers, special characters" },
+    { ok: pw.length > 0 && !tokens.some((t) => lower.includes(t)), text: "Doesn't include part of your email address" },
+  ]
+}
+
+/**
+ * Checklist rows for a new-password form on this market: the UK connection
+ * rules on UK, and the unchanged EU/FR/DE baseline everywhere else.
+ */
+export function newPasswordChecklist(
+  password: string,
+  market?: string,
+  emails: string[] = [],
+): { ok: boolean; text: string }[] {
+  if (market === "uk") return ukPasswordChecklist(password, emails)
+  const pw = typeof password === "string" ? password : ""
+  return [
+    { ok: pw.length >= PASSWORD_MIN_LENGTH, text: `At least ${PASSWORD_MIN_LENGTH} characters` },
+    { ok: /[a-z]/.test(pw) && /[A-Z]/.test(pw), text: "Upper and lowercase letters" },
+    { ok: /[0-9]/.test(pw), text: "At least one number" },
+  ]
 }

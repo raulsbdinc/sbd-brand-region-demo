@@ -5,9 +5,11 @@ import {
   verifyEmailPasscode,
   PasswordlessError,
 } from "@/lib/auth0-passwordless"
-import { resolveRecoveryTarget } from "@/lib/credential-resolver"
+import { recoveryBrandNotSetUp, resolveRecoveryTarget } from "@/lib/credential-resolver"
 import { applyPasswordUpdate } from "@/lib/apply-password-update"
 import { BRANDS } from "@/lib/brands"
+import { BRAND_NOT_SET_UP_CODE, brandNotSetUpMessage } from "@/lib/recovery-drawer"
+import { SITE_BRAND_INFO, SITE_MARKET } from "@/lib/site"
 import {
   mapPasswordUpdateError,
   planPasswordUpdate,
@@ -59,7 +61,7 @@ export async function POST(request: Request) {
   }
   // Validate the NEW password locally first — it describes the requester's own
   // input, so a specific hint here leaks nothing about the account.
-  const policy = validateNewPassword(newPassword)
+  const policy = validateNewPassword(newPassword, SITE_MARKET, [email])
   if (!policy.ok) {
     return NextResponse.json(
       { code: "weak-password", error: "Choose a stronger password.", failures: policy.failures },
@@ -98,6 +100,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: NEUTRAL_FAILURE }, { status: 400 })
   }
   if (!target) {
+    // CIAM-17: ownership is proven, so it is safe to say this brand's sign-in
+    // isn't set up (e.g. a code requested before the start-step gate shipped).
+    // Never create a credential here — Create Account owns that.
+    const notSetUp = await recoveryBrandNotSetUp(email).catch(() => false)
+    if (notSetUp) {
+      return NextResponse.json(
+        {
+          code: BRAND_NOT_SET_UP_CODE,
+          error: brandNotSetUpMessage(SITE_BRAND_INFO.name),
+        },
+        { status: 409 },
+      )
+    }
     return NextResponse.json({ error: NEUTRAL_FAILURE }, { status: 400 })
   }
 

@@ -16,6 +16,7 @@ import { NextResponse, type NextRequest } from "next/server"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import { resolveConnectionNames } from "@/lib/credential-model"
 import {
+  modelMismatchMessage,
   planModel3Registration,
   type Model3RegisterBinding,
 } from "@/lib/account-model"
@@ -91,10 +92,19 @@ export async function POST(request: NextRequest) {
   // collides can't become this brand's password, so it fails closed.
   const isPrimaryTarget = norm(target) === primary
   const guard = await resolvePerEmailRegistrationGuard(norm(target))
-  if (guard.kind === "divert-cross-brand" && isPrimaryTarget) {
+  // The customer explicitly chose a password per email, but this email's
+  // account uses a password per brand. Models 3 and 4 are alternative
+  // credential boundaries, so we neither convert the account nor add a hybrid
+  // credential: explain and point to the brand-password option / sign-in.
+  if (guard.kind === "divert-cross-brand") {
     return NextResponse.json(
-      { status: "cross-brand-required", proofOptions: guard.proofOptions },
-      { status: 200 },
+      {
+        error: isPrimaryTarget
+          ? modelMismatchMessage("per-brand")
+          : "That second email already belongs to an account with a different sign-in setup. Use a different email address.",
+        reason: "model-mismatch",
+      },
+      { status: 409 },
     )
   }
   if (guard.kind === "already-registered") {
@@ -106,8 +116,7 @@ export async function POST(request: NextRequest) {
       { status: 409 },
     )
   }
-  if (guard.kind === "fail-closed" || guard.kind === "divert-cross-brand") {
-    // fail-closed, or a secondary email that collides with another brand.
+  if (guard.kind === "fail-closed") {
     return NextResponse.json(
       { error: "We couldn't complete that right now. Please try again." },
       { status: 409 },

@@ -10,6 +10,9 @@ import {
   startEmailPasscode,
   PasswordlessError,
 } from "@/lib/auth0-passwordless"
+import { recoveryBrandNotSetUp } from "@/lib/credential-resolver"
+import { BRAND_NOT_SET_UP_CODE, brandNotSetUpMessage } from "@/lib/recovery-drawer"
+import { SITE_BRAND_INFO } from "@/lib/site"
 
 /**
  * STEP 1 of the in-drawer "forgot password" flow: email a one-time verification
@@ -48,6 +51,21 @@ export async function POST(request: Request) {
   // Same per-email/IP throttle as public recovery; a throttled request still
   // returns the identical neutral response so it is indistinguishable.
   if (isRecoveryThrottled(recoveryThrottleKey(email, request))) return neutral()
+
+  // CIAM-17 (UK only): a sister-brand-only account has no password on THIS
+  // brand to reset. Send no code and create nothing — guide the customer to
+  // Create Account, which runs the existing second-brand ownership proof.
+  try {
+    if (await recoveryBrandNotSetUp(email)) {
+      return NextResponse.json({
+        ok: true,
+        code: BRAND_NOT_SET_UP_CODE,
+        message: brandNotSetUpMessage(SITE_BRAND_INFO.name),
+      })
+    }
+  } catch {
+    // Lookup failure → fall through to the ordinary neutral recovery.
+  }
 
   const creds = resolvePasswordlessCreds(request.headers.get("cookie"))
   if (!creds) return neutral()

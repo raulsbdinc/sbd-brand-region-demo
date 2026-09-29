@@ -16,6 +16,7 @@ import {
   startEmailPasscode,
   PasswordlessError,
 } from "@/lib/auth0-passwordless"
+import { brandProofMethodAllowed } from "@/lib/account-model"
 
 export const runtime = "nodejs"
 
@@ -23,6 +24,7 @@ interface M4Handoff extends Record<string, unknown> {
   primaryUserId: string
   email: string
   brand: string
+  proofOptions?: unknown[]
 }
 
 export async function POST(request: NextRequest) {
@@ -36,6 +38,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "That request has expired. Please start again." },
       { status: 401 },
+    )
+  }
+
+  // Codes are only offered when the address is verified on the existing
+  // account; never email one the proof route would (rightly) refuse.
+  if (!brandProofMethodAllowed(handoff.data.proofOptions, "email-code")) {
+    return NextResponse.json(
+      { error: "Confirm your email address first, then try again.", reason: "email-unverified" },
+      { status: 409 },
     )
   }
 

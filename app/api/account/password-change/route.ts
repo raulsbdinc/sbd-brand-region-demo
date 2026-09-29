@@ -11,6 +11,7 @@ import {
 } from "@/lib/auth0-regions"
 import { passwordRealmExchange } from "@/lib/auth0-password-grant"
 import { applyPasswordUpdate } from "@/lib/apply-password-update"
+import { SITE_MARKET } from "@/lib/site"
 import {
   mapPasswordUpdateError,
   planPasswordUpdate,
@@ -108,7 +109,7 @@ export async function POST(request: NextRequest) {
     )
   }
   // Enforce the baseline policy server-side too (never trust the client gate).
-  if (!validateNewPassword(newPassword).ok) {
+  if (!validateNewPassword(newPassword, SITE_MARKET).ok) {
     return NextResponse.json(
       {
         error:
@@ -145,6 +146,18 @@ export async function POST(request: NextRequest) {
       // exists. Fails closed on missing / ambiguous / unowned / social targets.
       return NextResponse.json(
         { error: "That credential can't be changed." },
+        { status: 400 },
+      )
+    }
+    // UK connections also reject a password containing part of the target
+    // credential's email; check it here, before any Auth0 call.
+    if (!validateNewPassword(newPassword, SITE_MARKET, [target.email]).ok) {
+      return NextResponse.json(
+        {
+          error:
+            "That new password doesn't meet the password policy. Choose a stronger one.",
+          code: "weak-password",
+        },
         { status: 400 },
       )
     }

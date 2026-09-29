@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { validateRegistrationPassword, UK_PASSWORD_REQUIREMENTS_TEXT } from "@/lib/password-policy"
 
 type Step = "email" | "verify" | "done"
 
@@ -207,7 +208,7 @@ export function AddEmailJourney() {
                   className="pl-9"
                 />
               </div>
-              <p className="text-xs text-muted-foreground">At least 8 characters.</p>
+              <p className="text-xs text-muted-foreground">{UK_PASSWORD_REQUIREMENTS_TEXT}</p>
             </div>
             {error ? (
               <Alert variant="destructive">
@@ -217,7 +218,7 @@ export function AddEmailJourney() {
             <div className="flex items-center gap-3">
               <Button
                 onClick={verify}
-                disabled={busy || !otp || password.length < 8}
+                disabled={busy || !otp || !validateRegistrationPassword(password, [email], "uk").ok}
                 className="flex-1"
               >
                 {busy ? <Loader2 className="animate-spin" data-icon="inline-start" /> : null}

@@ -21,6 +21,7 @@ import {
   resolveConnectionNames,
   resolveCredentialFromCandidates,
   resolveEmailOwnership,
+  isPasswordlessOnlyRecord,
   resolveResetBinding,
   sanitizeCredentialBindings,
   type EmailOwnershipCandidate,
@@ -55,10 +56,12 @@ import {
 } from "@/lib/login-alias"
 import {
   detectCurrentBrandCredential,
+  detectOtherBrandOnlyCredential,
   type BrandConnectionKey,
   type BrandDuplicateCandidate,
 } from "@/lib/brand-duplicate"
 import {
+  accountModelSelectionAvailable,
   brandConnectionKey,
   planPerEmailRegistrationGuard,
   type PerEmailExistingFacts,
@@ -70,8 +73,8 @@ import {
   toManagementUserId,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
-import { SITE_BRAND } from "@/lib/site"
-import type { BrandId } from "@/lib/types"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import type { BrandId, CountryId } from "@/lib/types"
 
 /** The connection NAME for a key (server-only). */
 export function connectionNameForKey(key: ConnectionKey): string | undefined {
@@ -441,6 +444,10 @@ export async function resolveExistingAccountByEmail(
         ...readBindings(user).map((b) => normalizeEmail(b.email)),
         ...collectAccountVerifiedEmails(user),
       ].filter((e) => e.length > 0),
+      passwordlessOnly: isPasswordlessOnlyRecord({
+        identityProviders: (user.identities ?? []).map((i) => i.provider ?? ""),
+        bindingCount: readBindings(user).length,
+      }),
     }),
   )
 
@@ -739,6 +746,36 @@ export async function currentBrandCredentialExists(
   }))
 
   return detectCurrentBrandCredential({ email, brandKey, candidates })
+}
+
+/**
+ * CIAM-17 bridge: on a UK storefront, whether forgot-password for `email` would
+ * find ONLY the sister brand's password (e.g. a Stanley-only account on DeWalt).
+ * Fails SAFE to `false` (normal neutral recovery applies) outside the UK, when
+ * Management is unconfigured, or when a lookup failed.
+ */
+export async function recoveryBrandNotSetUp(
+  email: string,
+  siteBrand: BrandId = SITE_BRAND,
+  market: CountryId = SITE_MARKET,
+): Promise<boolean> {
+  if (!accountModelSelectionAvailable(market)) return false
+  if (siteBrand !== "dewalt" && siteBrand !== "stanley") return false
+  if (!isManagementConfigured()) return false
+
+  const { candidates: users, ok } = await gatherCandidates(email)
+  if (!ok) return false
+
+  const candidates: BrandDuplicateCandidate[] = users.map((user) => ({
+    ownedEmails: [
+      normalizeEmail(user.email),
+      ...readBindings(user).map((b) => normalizeEmail(b.email)),
+      ...collectAccountVerifiedEmails(user),
+    ].filter((e) => e.length > 0),
+    identities: mapIdentities(user),
+  }))
+
+  return detectOtherBrandOnlyCredential({ email, brandKey: siteBrand, candidates })
 }
 
 export interface ResolvedResetTarget {

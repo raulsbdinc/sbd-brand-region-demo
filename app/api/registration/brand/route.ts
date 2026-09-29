@@ -24,6 +24,9 @@ import {
   resolveExistingAccountByEmail,
 } from "@/lib/credential-resolver"
 import {
+  modelMismatchMessage,
+  planBrandSignupForExistingAccount,
+  unverifiedBrandAccountMessage,
   planModel4Registration,
   type Model4RejectReason,
 } from "@/lib/account-model"
@@ -144,22 +147,25 @@ export async function POST(request: NextRequest) {
   // Coherence pre-check: if the existing account is a per-email (Model 3)
   // account, linking a brand credential would MIX models. Fail closed here with
   // a neutral message rather than starting a proof the linker would later reject.
-  const hasPerBrand = existing.account.bindings.some(
-    (b) => b.connectionKey === "dewalt" || b.connectionKey === "stanley",
-  )
-  const hasPerEmail = existing.account.bindings.some((b) => b.connectionKey === "per-email")
-  if (!hasPerBrand || hasPerEmail) {
+  const decision = planBrandSignupForExistingAccount({
+    connectionKey: plan.connectionKey,
+    email: plan.email,
+    account: existing.account,
+  })
+  if (decision.kind === "model-mismatch") {
+    // Model 3 and Model 4 are alternative credential boundaries, never mixed on
+    // one account. Refuse without creating anything, but say why: the account
+    // uses a different sign-in model, and how to continue within it.
     return NextResponse.json(
-      { error: "We couldn't complete that right now. Please try again." },
+      {
+        error: modelMismatchMessage(decision.existingModel),
+        reason: "model-mismatch",
+      },
       { status: 409 },
     )
   }
 
-  // Already have THIS brand? Then there is nothing to link — neutral message.
-  const alreadyThisBrand = existing.account.bindings.some(
-    (b) => b.connectionKey === plan.connectionKey,
-  )
-  if (alreadyThisBrand) {
+  if (decision.kind === "already-brand") {
     // Machine-readable discriminator (additive) so the storefront Create Account
     // drawer can show existing-account / sign-in guidance for THIS brand rather
     // than a neutral "try again". Existing consumers that only read `error` are
@@ -173,16 +179,23 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Offer email-code proof only when the mailbox is a known owned address.
-  const canEmailCode = existing.account.verifiedEmails.some(
-    (e) => e.toLowerCase() === email.toLowerCase(),
-  )
-  const proofOptions = canEmailCode ? ["password", "email-code"] : ["password"]
+  if (decision.kind === "verification-required") {
+    // Same model, but the first brand's email hasn't been confirmed yet. Never
+    // link a credential onto an unproven mailbox; guide the customer to finish
+    // the first brand's verification. Nothing is created.
+    return NextResponse.json(
+      { error: unverifiedBrandAccountMessage(), reason: "email-unverified" },
+      { status: 409 },
+    )
+  }
+
+  const { proofOptions } = decision
 
   const token = mintJourneyToken("model4-proof", {
     primaryUserId: existing.account.auth0UserId,
     email: plan.email,
     brand: plan.brand,
+    proofOptions,
   })
 
   const res = NextResponse.json(
