@@ -15,6 +15,7 @@ import {
   EyeOff,
   Fingerprint,
   HelpCircle,
+  Info,
   KeyRound,
   LifeBuoy,
   Loader2,
@@ -1057,6 +1058,14 @@ function BrandPasswordSection({
       title="Brand passwords"
       description="Your account uses a separate password for each brand. Set or change the one you need — the other brand's password is never affected."
     >
+      <p
+        role="note"
+        aria-label="About this section"
+        className="mb-3 flex items-start gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+      >
+        <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+        <span>This section is shown in the POC so we can test separate brand passwords.</span>
+      </p>
       {methodsError ? (
         <Note>{UNAVAILABLE_COPY}</Note>
       ) : !live ? (
