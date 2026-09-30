@@ -28,6 +28,10 @@ import {
   type DemoUseCase,
 } from "./credential-model.ts"
 import type { BrandId, CountryId } from "./types"
+import {
+  LEGACY_PER_EMAIL_ACCOUNT_MESSAGE,
+  UK_PER_EMAIL_ACCOUNTS_FLAG,
+} from "./uk-feature-flags.ts"
 
 // --- The selectable models --------------------------------------------------
 
@@ -704,7 +708,13 @@ export function planModel3Completion(
  * beyond "this email already has an account with a different sign-in setup",
  * and always gives a safe way forward. Nothing is created or converted.
  */
-export function modelMismatchMessage(existing: "per-email" | "per-brand" | "other"): string {
+export function modelMismatchMessage(
+  existing: "per-email" | "per-brand" | "other",
+  perEmailEnabled: boolean = UK_PER_EMAIL_ACCOUNTS_FLAG,
+): string {
+  // With the per-email setup off, an existing per-email account gets neutral
+  // guidance that never offers that setup as a choice.
+  if (existing === "per-email" && !perEmailEnabled) return LEGACY_PER_EMAIL_ACCOUNT_MESSAGE
   if (existing === "per-email") {
     return "This email already has an account that uses one password per email address. That password works on both UK storefronts, so sign in with it instead. A separate brand password can't be added to this account."
   }

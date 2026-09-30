@@ -34,6 +34,7 @@ import {
 } from "@/lib/per-email-activation"
 import { passwordRealmExchange } from "@/lib/auth0-password-grant"
 import { resolveSigninCredential } from "@/lib/credential-resolver"
+import { perEmailRouteGate } from "@/lib/per-email-route-gate"
 
 export const dynamic = "force-dynamic"
 
@@ -64,6 +65,8 @@ export const dynamic = "force-dynamic"
  * is idempotent (it reuses already-provisioned identities rather than duplicating).
  */
 export async function POST(request: Request) {
+  const disabled = perEmailRouteGate()
+  if (disabled) return disabled
   const guard = await requireAccountUser()
   if (!guard.ok) return guard.response
   // Capture the id so nested closures keep the narrowed (ok:true) type.

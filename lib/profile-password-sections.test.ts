@@ -16,10 +16,11 @@ import {
   emailPasswordActionAriaLabel,
 } from "./email-password-actions.ts"
 
-// Host-gate shorthands for the two UK storefronts and EU.
-const DEWALT_UK = { hostPerEmailModel: true, hostPerBrandModel: false }
-const STANLEY_UK = { hostPerEmailModel: false, hostPerBrandModel: true }
-const EU = { hostPerEmailModel: false, hostPerBrandModel: false }
+// Host-gate shorthands for the two UK storefronts and EU. These historical
+// cases pin the per-email flag ON; flag-off behaviour is in uk-flag-off.test.ts.
+const DEWALT_UK = { hostPerEmailModel: true, hostPerBrandModel: false, perEmailEnabled: true }
+const STANLEY_UK = { hostPerEmailModel: false, hostPerBrandModel: true, perEmailEnabled: true }
+const EU = { hostPerEmailModel: false, hostPerBrandModel: false, perEmailEnabled: true }
 
 const NO_CREDS = { hasPerEmailCredentials: false, hasBrandCredentials: false }
 const BRAND_CREDS = { hasPerEmailCredentials: false, hasBrandCredentials: true }

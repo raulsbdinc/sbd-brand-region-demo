@@ -34,6 +34,7 @@ import { realManagementDeps } from "@/lib/model-registration-deps"
 import { isManagementConfigured } from "@/lib/auth0-management"
 import { verifyEmailPasscode, resolvePasswordlessCreds } from "@/lib/auth0-passwordless"
 import { readJourneyToken, journeyCookieName, journeyCookieOptions } from "@/lib/journey-handoff"
+import { perEmailRouteGate } from "@/lib/per-email-route-gate"
 
 export const runtime = "nodejs"
 
@@ -56,6 +57,8 @@ function planRejection(reason: Model3RejectReason): NextResponse {
 const str = (v: unknown): string => (typeof v === "string" ? v : "")
 
 export async function POST(request: NextRequest) {
+  const disabled = perEmailRouteGate()
+  if (disabled) return disabled
   let body: Record<string, unknown>
   try {
     body = (await request.json()) as Record<string, unknown>

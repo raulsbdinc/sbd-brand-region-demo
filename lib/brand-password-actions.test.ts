@@ -13,8 +13,8 @@ import {
 
 // --- profilePasswordModelVisibility: one model per UK storefront ------------
 
-test("DeWalt UK exposes Model 3 (per-email) only", () => {
-  const v = profilePasswordModelVisibility({ market: "uk", brand: "dewalt" })
+test("flag on: DeWalt UK exposes Model 3 (per-email) only", () => {
+  const v = profilePasswordModelVisibility({ market: "uk", brand: "dewalt", perEmailEnabled: true })
   assert.deepEqual(v, { perEmail: true, perBrand: false })
 })
 

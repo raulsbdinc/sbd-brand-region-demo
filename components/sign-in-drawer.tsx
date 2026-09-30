@@ -19,11 +19,13 @@ import {
   recoverySuccessMessage,
 } from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import { perEmailAccountsEnabled } from "@/lib/uk-feature-flags"
 import {
   crossBrandCollisionMessage,
   drawerSignupFlow,
   defaultUkSignupModel,
   recoverySignupPreset,
+  ukBrandPasswordIntro,
   ukSignupModelCopy,
   UK_SIGNUP_MODELS,
   type UkSignupModel,
@@ -131,6 +133,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   // option was pre-selected for a known brand-only account.
   const [signupModelNote, setSignupModelNote] = useState<string | null>(null)
   const offersModelChoice = drawerSignupFlow(SITE_MARKET, SITE_BRAND) !== "shared"
+  const perEmailOn = perEmailAccountsEnabled(SITE_MARKET)
   // Error shown on the password step when requesting a code (e.g. bad email).
   const [requestError, setRequestError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -1529,7 +1532,24 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
             />
           </div>
 
-          {offersModelChoice && (
+          {offersModelChoice && !perEmailOn && (
+            <div className="flex flex-col gap-2">
+              <p className={labelClass}>{ukBrandPasswordIntro(SITE_BRAND).title}</p>
+              {signupModelNote && (
+                <p
+                  role="status"
+                  className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]"
+                >
+                  {signupModelNote}
+                </p>
+              )}
+              <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-label-muted)]">
+                {ukBrandPasswordIntro(SITE_BRAND).description}
+              </p>
+            </div>
+          )}
+
+          {offersModelChoice && perEmailOn && (
             <fieldset className="flex flex-col gap-3">
               <legend className={labelClass}>How should your password work?</legend>
               {signupModelNote && signupModel === "per-brand" && (
