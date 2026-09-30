@@ -13,6 +13,7 @@
 // endpoints remain the real trust boundary; this only decides what to render.
 
 import type { BrandId, CountryId } from "./types.ts"
+import { UK_PER_EMAIL_ACCOUNTS_FLAG } from "./uk-feature-flags.ts"
 
 /** The two brands that have their own per-brand connection/credential. */
 export type ProfileBrand = "dewalt" | "stanley"
@@ -124,8 +125,16 @@ export interface ProfilePasswordModelVisibility {
 export function profilePasswordModelVisibility(input: {
   market: CountryId
   brand: BrandId
+  /** UK per-email flag (default: the deployment flag, OFF unless set). */
+  perEmailEnabled?: boolean
 }): ProfilePasswordModelVisibility {
   const uk = input.market === "uk"
+  const perEmailOn = input.perEmailEnabled ?? UK_PER_EMAIL_ACCOUNTS_FLAG
+  const isBrand = input.brand === "dewalt" || input.brand === "stanley"
+  if (!perEmailOn) {
+    // Flag off: both UK storefronts run a separate password per brand only.
+    return { perEmail: false, perBrand: uk && isBrand }
+  }
   return {
     perEmail: uk && input.brand === "dewalt",
     perBrand: uk && input.brand === "stanley",
@@ -178,6 +187,11 @@ export interface ProfilePasswordSections {
   showPerEmailActions: boolean
   /** Model 4 prominent Brand passwords section. */
   showBrandSection: boolean
+  /**
+   * Flag off + the account holds older per-email passwords: show neutral
+   * guidance only (no conversion, no setup controls).
+   */
+  legacyPerEmailAccount?: boolean
 }
 
 /**
@@ -205,9 +219,22 @@ export function resolveProfilePasswordSections(input: {
   /** Host default: this storefront is the per-brand (Stanley UK) storefront. */
   hostPerBrandModel: boolean
   facts: AccountCredentialFacts
+  /** UK per-email flag (default: the deployment flag, OFF unless set). */
+  perEmailEnabled?: boolean
 }): ProfilePasswordSections {
   const isUk = input.hostPerEmailModel || input.hostPerBrandModel
   const { hasPerEmailCredentials, hasBrandCredentials } = input.facts
+  const perEmailOn = input.perEmailEnabled ?? UK_PER_EMAIL_ACCOUNTS_FLAG
+
+  if (!perEmailOn) {
+    // An existing per-email account is never converted or merged into brand
+    // passwords: it gets NO password-setup controls (neither per-email nor
+    // brand), only neutral guidance that its current passwords keep working.
+    if (isUk && hasPerEmailCredentials) {
+      return { showPerEmailActions: false, showBrandSection: false, legacyPerEmailAccount: true }
+    }
+    return { showPerEmailActions: false, showBrandSection: isUk, legacyPerEmailAccount: false }
+  }
 
   // Per-email credentials define a Model 3 account even when a brand DB
   // credential co-exists. Model 4 is brand credentials WITHOUT per-email.

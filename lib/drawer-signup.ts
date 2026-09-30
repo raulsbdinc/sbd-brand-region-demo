@@ -24,6 +24,7 @@
 
 import { BRANDS } from "./brands.ts"
 import type { BrandId, CountryId } from "./types.ts"
+import { UK_PER_EMAIL_ACCOUNTS_FLAG, perEmailAccountsEnabled } from "./uk-feature-flags.ts"
 import {
   accountModelSelectionAvailable,
   brandConnectionKey,
@@ -47,27 +48,54 @@ export function drawerSignupFlow(
   market: CountryId,
   brand: BrandId,
   choice?: UkSignupModel,
+  perEmailEnabled: boolean = perEmailAccountsEnabled(market),
 ): DrawerSignupFlow {
   if (!accountModelSelectionAvailable(market)) return "shared"
   if (!brandConnectionKey(brand)) return "shared"
-  return choice ?? defaultUkSignupModel(brand)
+  const model = choice ?? defaultUkSignupModel(brand, perEmailEnabled)
+  // With the per-email setup switched off, a stale or forged per-email choice
+  // falls back to the brand password — never to a shared cross-brand password.
+  if (model === "per-email" && !perEmailEnabled) return "per-brand"
+  return model
 }
 
 /**
- * The UK demo account model a customer picks explicitly in Create Account.
- * Both UK storefronts offer both, so neither model depends on which site the
- * customer happened to start on. The server routes gate on market only.
+ * The UK account setups Create Account can offer. With the per-email flag on,
+ * both are offered on both UK storefronts. With it off (the default), only a
+ * separate password for each brand.
  */
 export type UkSignupModel = "per-email" | "per-brand"
 
 export const UK_SIGNUP_MODELS: readonly UkSignupModel[] = ["per-email", "per-brand"]
 
+export function ukSignupModels(perEmailEnabled: boolean): readonly UkSignupModel[] {
+  return perEmailEnabled ? UK_SIGNUP_MODELS : ["per-brand"]
+}
+
 /**
- * The pre-selected option (unchanged historical behaviour): DeWalt UK starts on
- * a password per email, Stanley UK on a password per brand.
+ * The pre-selected option. Flag off: always a separate brand password. Flag on
+ * (historical): DeWalt UK starts on a password per email, Stanley UK per brand.
  */
-export function defaultUkSignupModel(brand: BrandId): UkSignupModel {
+export function defaultUkSignupModel(
+  brand: BrandId,
+  perEmailEnabled: boolean = UK_PER_EMAIL_ACCOUNTS_FLAG,
+): UkSignupModel {
+  if (!perEmailEnabled) return "per-brand"
   return brand === "dewalt" ? "per-email" : "per-brand"
+}
+
+/**
+ * Plain-language explainer shown in Create Account when the separate brand
+ * password is the only UK setup. No model numbers, no connection names.
+ */
+export function ukBrandPasswordIntro(siteBrand: BrandId): { title: string; description: string } {
+  const here = BRANDS[siteBrand].name
+  const other = otherUkBrand(siteBrand)
+  const otherName = other ? BRANDS[other].name : "our other brand"
+  return {
+    title: `Your ${here} password`,
+    description: `Choose a password for ${here}. You can use the same verified email with ${otherName}, but ${otherName} needs its own different password \u2014 we\u2019ll email you a code to confirm it\u2019s you before adding it. You always sign in with your email and the password for the site you\u2019re on.`,
+  }
 }
 
 /** Plain-language option copy. Never mentions Auth0 connections. */
@@ -105,8 +133,17 @@ export interface RecoverySignupPreset {
   note: string
 }
 
-export function recoverySignupPreset(siteBrand: BrandId): RecoverySignupPreset {
+export function recoverySignupPreset(
+  siteBrand: BrandId,
+  perEmailEnabled: boolean = UK_PER_EMAIL_ACCOUNTS_FLAG,
+): RecoverySignupPreset {
   const here = BRANDS[siteBrand].name
+  if (!perEmailEnabled) {
+    return {
+      model: "per-brand",
+      note: `This email already has a password for one of our other brands. Choose a new, different ${here} password \u2014 we\u2019ll email you a code to confirm it\u2019s you, and your existing password stays unchanged.`,
+    }
+  }
   const title = ukSignupModelCopy("per-brand", siteBrand).title
   return {
     model: "per-brand",

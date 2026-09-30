@@ -86,14 +86,14 @@ test("recovery reset submit is gated by the UK policy before the code is used", 
 
 test("either model can be chosen explicitly on DeWalt UK and Stanley UK", () => {
   for (const brand of ["dewalt", "stanley"] as const) {
-    assert.equal(drawerSignupFlow("uk", brand, "per-email"), "per-email")
-    assert.equal(drawerSignupFlow("uk", brand, "per-brand"), "per-brand")
+    assert.equal(drawerSignupFlow("uk", brand, "per-email", true), "per-email")
+    assert.equal(drawerSignupFlow("uk", brand, "per-brand", true), "per-brand")
   }
 })
 
 test("defaults preserve existing host behaviour when no choice is made", () => {
-  assert.equal(defaultUkSignupModel("dewalt"), "per-email")
-  assert.equal(defaultUkSignupModel("stanley"), "per-brand")
+  assert.equal(defaultUkSignupModel("dewalt", true), "per-email")
+  assert.equal(defaultUkSignupModel("stanley", true), "per-brand")
   assert.equal(drawerSignupFlow("uk", "stanley"), "per-brand")
 })
 
@@ -120,8 +120,8 @@ test("brand route model-mismatch 409 is surfaced, not a generic failure", () => 
 })
 
 test("mismatch copy explains the existing model and a safe way forward", () => {
-  assert.match(modelMismatchMessage("per-email"), /one password per email/)
-  assert.match(modelMismatchMessage("per-email"), /sign in/i)
+  assert.match(modelMismatchMessage("per-email", true), /one password per email/)
+  assert.match(modelMismatchMessage("per-email", true), /sign in/i)
   assert.match(modelMismatchMessage("per-brand"), /separate password for each brand/)
   assert.doesNotMatch(modelMismatchMessage("other"), /sbd-demo|connection/)
 })
@@ -188,7 +188,7 @@ test("the recovery gate only fires for a brand-only (Model 4) account", () => {
 
 test("recovery handoff pre-selects the separate brand password on BOTH UK sites", () => {
   for (const brand of ["dewalt", "stanley"] as const) {
-    const preset = recoverySignupPreset(brand)
+    const preset = recoverySignupPreset(brand, true)
     assert.equal(preset.model, "per-brand")
     assert.equal(drawerSignupFlow("uk", brand, preset.model), "per-brand")
     const title = ukSignupModelCopy("per-brand", brand).title
@@ -199,16 +199,16 @@ test("recovery handoff pre-selects the separate brand password on BOTH UK sites"
 })
 
 test("DeWalt recovery preset overrides DeWalt's Model 3 default; note never names the sister brand", () => {
-  assert.equal(defaultUkSignupModel("dewalt"), "per-email")
-  const preset = recoverySignupPreset("dewalt")
-  assert.notEqual(preset.model, defaultUkSignupModel("dewalt"))
+  assert.equal(defaultUkSignupModel("dewalt", true), "per-email")
+  const preset = recoverySignupPreset("dewalt", true)
+  assert.notEqual(preset.model, defaultUkSignupModel("dewalt", true))
   assert.match(preset.note, /DEWALT/i)
   assert.doesNotMatch(preset.note, /stanley/i)
-  assert.doesNotMatch(recoverySignupPreset("stanley").note, /dewalt/i)
+  assert.doesNotMatch(recoverySignupPreset("stanley", true).note, /dewalt/i)
 })
 
 test("normal new-account entry keeps the site defaults (explicit choice preserved)", () => {
-  assert.equal(drawerSignupFlow("uk", "dewalt"), "per-email")
-  assert.equal(drawerSignupFlow("uk", "stanley"), "per-brand")
+  assert.equal(drawerSignupFlow("uk", "dewalt", undefined, true), "per-email")
+  assert.equal(drawerSignupFlow("uk", "stanley", undefined, true), "per-brand")
   assert.equal(drawerSignupFlow("fr", "dewalt", recoverySignupPreset("dewalt").model), "shared", "EU unaffected")
 })

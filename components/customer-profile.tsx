@@ -84,6 +84,7 @@ import {
 } from "@/lib/password-change"
 import { newPasswordChecklist } from "@/lib/password-policy"
 import { SITE_MARKET } from "@/lib/site"
+import { LEGACY_PER_EMAIL_PROFILE_LINE } from "@/lib/uk-feature-flags"
 import {
   ADDRESS_LOCALITY_ORDER,
   COMMUNICATION_CHANNELS,
@@ -313,7 +314,7 @@ export function CustomerProfile({
   // in demo mode (no management) we fall back to the host default immediately.
   const credsResolved =
     demoModeResolved || Boolean(methodsData) || Boolean(methodsError)
-  const { showPerEmailActions, showBrandSection } = credsResolved
+  const { showPerEmailActions, showBrandSection, legacyPerEmailAccount } = credsResolved
     ? resolveProfilePasswordSections({
         hostPerEmailModel: perEmailModelAvailable,
         hostPerBrandModel: perBrandModelAvailable,
@@ -373,6 +374,15 @@ export function CustomerProfile({
                 primaryEmail={email}
                 modelSelectionAvailable={showPerEmailActions}
               />
+
+        {legacyPerEmailAccount ? (
+          <p
+            role="note"
+            className="rounded-md border border-border bg-muted px-4 py-3 text-sm leading-relaxed text-muted-foreground"
+          >
+            {LEGACY_PER_EMAIL_PROFILE_LINE}
+          </p>
+        ) : null}
 
         {showBrandSection && deploymentBrand ? (
           <BrandPasswordSection live={live} deploymentBrand={deploymentBrand} />

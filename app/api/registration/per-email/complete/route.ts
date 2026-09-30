@@ -23,6 +23,7 @@ import { verifyEmailPasscode, resolvePasswordlessCreds } from "@/lib/auth0-passw
 import { executePerEmailLink } from "@/lib/model-registration"
 import { realManagementDeps } from "@/lib/model-registration-deps"
 import { readJourneyToken, journeyCookieName, journeyCookieOptions } from "@/lib/journey-handoff"
+import { perEmailRouteGate } from "@/lib/per-email-route-gate"
 
 export const runtime = "nodejs"
 
@@ -32,6 +33,8 @@ interface M3Handoff extends Record<string, unknown> {
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = perEmailRouteGate()
+  if (disabled) return disabled
   const guard = await requireAccountUser({ requireManagement: true })
   if (!guard.ok) return guard.response
   const sub = guard.user.sub

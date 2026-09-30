@@ -16,10 +16,13 @@ import { requireAccountUser } from "@/lib/account-guard"
 import { getUser } from "@/lib/auth0-management"
 import { startEmailPasscode, resolvePasswordlessCreds } from "@/lib/auth0-passwordless"
 import { mintJourneyToken, journeyCookieName, journeyCookieOptions } from "@/lib/journey-handoff"
+import { perEmailRouteGate } from "@/lib/per-email-route-gate"
 
 export const runtime = "nodejs"
 
 export async function POST(request: NextRequest) {
+  const disabled = perEmailRouteGate()
+  if (disabled) return disabled
   const guard = await requireAccountUser({ requireManagement: true })
   if (!guard.ok) return guard.response
   const sub = guard.user.sub
