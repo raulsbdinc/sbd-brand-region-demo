@@ -25,14 +25,24 @@ const perEmail: PasswordModelSummary = {
   brands: [],
 }
 
-test("no model defaults to the shared (one-password) wording", () => {
+test("no model: default copy never claims a shared password (Model 4 only)", () => {
   assert.equal(recognitionCopyMode(undefined), "shared")
-  assert.match(crossBrandRecognitionCopy(undefined), /one account, one password, one record/)
+  const copy = crossBrandRecognitionCopy(undefined)
+  assert.doesNotMatch(copy, /one password|one account, one password/i)
+  assert.match(copy, /Each brand uses its own password/)
 })
 
-test("EU Models 1/2 shared account keeps the one-password wording", () => {
+test("shared-looking model: copy never claims one password across sites", () => {
   assert.equal(recognitionCopyMode(shared), "shared")
-  assert.match(crossBrandRecognitionCopy(shared), /one account, one password, one record/)
+  assert.doesNotMatch(crossBrandRecognitionCopy(shared), /one password/i)
+})
+
+test("no recognition mode claims one password across sites", () => {
+  for (const m of [undefined, shared, perBrand, perEmail]) {
+    for (const resolved of [true, false]) {
+      assert.doesNotMatch(crossBrandRecognitionCopy(m, resolved), /one password|works across/i)
+    }
+  }
 })
 
 test("UK Model 4 per-brand copy does NOT claim one password", () => {
@@ -87,5 +97,5 @@ test("resolved:false overrides even a shared-looking model", () => {
 test("resolved defaults to true so existing callers are unchanged", () => {
   assert.equal(recognitionCopyMode(perBrand), recognitionCopyMode(perBrand, true))
   assert.equal(recognitionCopyMode(shared), "shared")
-  assert.match(crossBrandRecognitionCopy(shared), /one account, one password, one record/)
+  assert.doesNotMatch(crossBrandRecognitionCopy(shared), /one password/i)
 })

@@ -56,9 +56,10 @@ export function recognitionCopyMode(
 }
 
 const COPY: Record<RecognitionCopyMode, string> = {
-  // EU Models 1 & 2 — unchanged one-password wording.
+  // No brand credential derived. Model 4 has no shared password any more, so
+  // this must not claim one password across sites.
   shared:
-    "Each Stanley Black & Decker site keeps its own sign-in, which is why we asked you again here, but it\u2019s one account, one password, one record in the directory.",
+    "Each Stanley Black & Decker site keeps its own sign-in, which is why we asked you again here. Each brand uses its own password.",
   // UK Model 4 — one customer record, but a SEPARATE password per brand.
   // The old copy wrongly implied "one password"; this states the truth.
   "per-brand":

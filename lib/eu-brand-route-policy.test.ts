@@ -163,7 +163,7 @@ test("brand routes pass the real SITE_MARKET to the executors (no UK fallback)",
   assert.match(add, /validateRegistrationPassword\(password, \[\], SITE_MARKET\)/)
 })
 
-test("FR/DE drawer notice uses brand/region wording; UK keeps its copy", () => {
+test("FR/DE and UK drawer notices use Model 4 brand/region wording", () => {
   for (const m of ["fr", "de"]) {
     const text = brandRegionNotice(m)
     assert.match(text, /DeWalt France and DeWalt Germany/)
@@ -171,5 +171,8 @@ test("FR/DE drawer notice uses brand/region wording; UK keeps its copy", () => {
     assert.match(text, /UK sites are a separate region/)
     assert.doesNotMatch(text, /One Stanley Black & Decker account/)
   }
-  assert.match(brandRegionNotice("uk"), /One Stanley Black & Decker account/)
+  const uk = brandRegionNotice("uk", "dewalt")
+  assert.doesNotMatch(uk, /One Stanley Black & Decker account/)
+  assert.match(uk, /DeWalt UK\. Stanley needs its own sign-up and password/)
+  assert.match(uk, /France and Germany sites are a separate region/)
 })
