@@ -50,14 +50,40 @@ changed. The boundary is tested: 14 characters is rejected and 15 passes.
   ownership code, then links to the same canonical user. A DeWalt password never
   grants Stanley access, and resetting the Stanley password never touches DeWalt.
 - **Google and passcode** can't bypass brand enrollment (`lib/brand-access.ts`). On
-  a brand storefront they only sign in a customer who already holds that brand's
-  password.
-- **Legacy shared `sbd-emea` users** (4 existed on 1 October) are not converted,
-  merged, relinked or deleted. They can still sign in with their existing password,
-  because the password route tries the shared connection first. To get brand
-  passwords they enroll explicitly: create the brand password on that storefront,
-  prove ownership with a code, and the new identity links to the same user. Linking
-  never happens automatically from a matching email.
+  a brand storefront they only sign in an account that holds that brand's password
+  identity **or a legacy shared `sbd-emea` identity** (see the next point). A new
+  brand-only account (for example, DeWalt only) is refused on Stanley.
+- **Legacy shared `sbd-emea` users are deliberately allowed on every EU brand
+  storefront.** This is the supported carve-out that keeps existing users working.
+  They are not converted, merged, relinked or deleted. One rule,
+  `identitiesAuthorizeBrand()` in `lib/brand-access.ts`, grants brand access when
+  the account holds an identity on the brand connection **or** on the shared
+  connection (`resolveConnectionNames().shared`, which is `sbd-emea` in
+  production). Every EU route applies it the same way:
+  - **Password:** attempt 1 still tries the shared connection, so the existing
+    `sbd-emea` password signs in on DeWalt FR/DE and Stanley FR.
+  - **Passcode:** `planPasscodeStart({brandScoped:true})` permits the
+    shared-default database challenge.
+  - **Google:** `/api/signin/google/reconcile` allows a Google identity that is
+    already linked to a legacy shared account. The brand session gate then clears
+    the pending mark.
+
+  So a legacy account has full access without a brand enrollment
+  (`credential_bindings`). `/profile` correctly says its password works across
+  DeWalt and Stanley, and offers "Set DeWalt password" for optional explicit
+  enrollment. Explicit enrollment works as follows: create the brand password on
+  that storefront, prove ownership with a code, and the new identity links to the
+  same user. Linking never happens automatically from a matching email. A Google
+  identity that is already linked to a legacy account is correctly refused as
+  `in_use` when someone tries to connect it to a different, brand-only account.
+- **Worked example (read-only, 1 October):** legacy canonical
+  `auth0|6ab5332a6029bedc6a60283e` (`wydawo7069@replyloop.com`, created 24 Sep)
+  has the identities `sbd-emea`, passwordless `email`, and `google-oauth2`
+  (`raul.sbdinc@gmail.com`), plus `login_alias_emails=[that Gmail]`. It has no
+  `credential_bindings`, so cold Google on DeWalt DE opens it through the carve-out.
+  The brand-only canonical `auth0|6abea843efbb24ef76d3de10` has only
+  `sbd-emea-dewalt` (binding `dewalt`). Auth0's users-by-email search does not find
+  the Gmail, because only primary emails are indexed.
 - **Sessions** stay local to each storefront. There is no cross-domain SSO.
 
 ## Model 3 / Model 4 registration + Google reconcile (28 August)
