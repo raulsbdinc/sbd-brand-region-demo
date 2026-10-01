@@ -85,6 +85,18 @@ changed. The boundary is tested: 14 characters is rejected and 15 passes.
   `sbd-emea-dewalt` (binding `dewalt`). Auth0's users-by-email search does not find
   the Gmail, because only primary emails are indexed.
 - **Sessions** stay local to each storefront. There is no cross-domain SSO.
+- **Recovery copy (anonymous).** There is no standalone recovery page. `/recover`
+  redirects to `/?auth=recover`, which opens the storefront drawer straight on
+  "Reset your password". The drawer shows `brandRegionNotice(SITE_MARKET)` on every
+  step, recovery included. On FR/DE it reads: "Your DeWalt email and password work
+  on DeWalt France and DeWalt Germany. Stanley needs its own sign-up and password.
+  UK sites are a separate region with their own accounts." UK keeps its
+  shared-account line. Checked live on 1 October on DeWalt FR, DeWalt DE and
+  Stanley FR. The old unmounted `components/recovery-center.tsx` ("Recover your SBD
+  account") was deleted so it can't be remounted by mistake. Password policy
+  (15 characters minimum, plus the 3-of-4 character safeguard) is unchanged. The
+  legacy carve-out above is also unchanged: a legacy `sbd-emea` customer resets
+  the shared password, and a brand-only customer resets only that brand's password.
 
 ## Model 3 / Model 4 registration + Google reconcile (28 August)
 
