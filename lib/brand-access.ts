@@ -22,7 +22,12 @@ export function brandAccessEnforced(market: string): boolean {
  *  so an enrolled customer's passcode is sent on the passwordless connection as
  *  mailbox proof. UK keeps its native brand-connection database challenge. */
 export function brandPasscodeUsesMailboxProof(market: string): boolean {
-  return market === "fr" || market === "de"
+  // Neither the EU nor the UK tenant delivers native database OTP on the brand
+  // connections; a native challenge there fails silently (swallowed for
+  // anti-enumeration) and no code ever reaches the inbox. Every enforced market
+  // therefore proves the mailbox via the passwordless email connection, then
+  // verify re-resolves the this-brand canonical before stamping a session.
+  return market === "fr" || market === "de" || market === "uk"
 }
 
 /**

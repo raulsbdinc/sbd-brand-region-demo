@@ -86,11 +86,10 @@ export async function POST(request: NextRequest) {
     brandScoped,
   })
 
-  // The EU tenant does not support native database OTP on the brand
+  // Neither the EU nor the UK tenant supports native database OTP on the brand
   // connections, so a brand-enrolled (Model 4) customer's code goes out on the
   // passwordless email connection as mailbox proof. Verify consumes it and then
   // re-resolves the brand-enrolled canonical; no session comes from the code.
-  // UK keeps the native database challenge on its own brand connection.
   const brandProof =
     brandPasscodeUsesMailboxProof(SITE_MARKET) &&
     brandScoped &&
