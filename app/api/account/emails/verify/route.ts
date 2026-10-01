@@ -103,9 +103,8 @@ export async function POST(request: Request) {
   // the SAME deterministic enumerate+hydrate guard the per-email completion
   // route uses — it inspects every Auth0 identity's email (including a linked
   // SOCIAL identity's profileData.email, which getUsersByEmail cannot see), so a
-  // foreign account's linked Google address is correctly rejected here. On
-  // rejection it also purges the transient passwordless stub the code step
-  // minted, so no standalone/linked passwordless identity is left behind.
+  // foreign account's linked Google address is correctly rejected here. A
+  // rejection mutates nothing — no record is deleted or unlinked.
   const ownership = await guardAddEmailOwnership({
     email,
     currentUserId: guard.user.sub,

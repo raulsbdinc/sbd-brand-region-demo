@@ -26,6 +26,8 @@ export interface HandoffCodecPayload {
    * snapshot could not be taken, so nothing can be proven new.
    */
   preExistingPasswordlessSubs?: string[] | null
+  /** brand-enroll-proof only: the existing primary the proof is bound to. */
+  primaryUserId?: string
 }
 
 function sign(body: string, key: string): string {

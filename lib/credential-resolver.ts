@@ -36,7 +36,6 @@ import {
   searchUsersStrict,
   listUsersPage,
   isManagementConfigured,
-  deleteUser,
   linkIdentity,
   type Auth0User,
 } from "@/lib/auth0-management"
@@ -50,7 +49,6 @@ import {
   hydrateOwnershipCandidates,
   mapAddEmailGuardResponse,
   planAddEmailOwnership,
-  selectTransientEmailStubIds,
   type AddEmailCandidate,
   type AddEmailOwnershipDecision,
 } from "@/lib/add-email-ownership"
@@ -720,46 +718,6 @@ async function enumerateAddEmailCandidates(): Promise<{
   })
 }
 
-/**
- * Best-effort cleanup of the transient passwordless OTP stub the emailed-code
- * step minted, called when an add is rejected so no standalone/linked
- * passwordless identity is left behind. Only deletes top-level records whose
- * root email is the submitted address AND whose every identity is passwordless
- * — never a record with a real identity. Swallows all errors (cleanup must
- * never turn a clean rejection into a 5xx).
- */
-export async function purgeTransientEmailStub(email: string): Promise<void> {
-  if (!isManagementConfigured()) return
-  const normalized = normalizeEmail(email)
-  if (!normalized) return
-
-  let users: Auth0User[]
-  try {
-    users = await getUsersByEmail(normalized)
-  } catch {
-    return
-  }
-
-  const stubIds = selectTransientEmailStubIds({
-    email: normalized,
-    candidates: users
-      .filter((u) => !!u.user_id)
-      .map((u) => ({
-        userId: u.user_id,
-        rootEmail: u.email ?? "",
-        identityProviders: (u.identities ?? []).map((id) => id.provider),
-      })),
-  })
-
-  for (const id of stubIds) {
-    try {
-      await deleteUser(id)
-    } catch {
-      // best-effort — a failed cleanup must not change the customer-facing result
-    }
-  }
-}
-
 /** The single decision every email-linking route must obey before linking. */
 export type AddEmailGuardResult =
   | { ok: true }
@@ -773,12 +731,11 @@ export type AddEmailGuardResult =
  * weaker `getUsersByEmail` check that could not see a foreign account's linked
  * social identity).
  *
- * It runs the deterministic enumerate+hydrate resolver, and on ANY non-allow
- * outcome it (a) purges the transient passwordless OTP stub the code step
- * minted so nothing is left behind, and (b) returns the neutral customer copy +
- * HTTP status the route should return verbatim. Allow only when every existing
- * owner of the normalized address resolves to THIS account (unowned, or the
- * same canonical parent — the Model 4 cross-brand / retry case).
+ * It runs the deterministic enumerate+hydrate resolver and returns the neutral
+ * customer copy + HTTP status the route should return verbatim. It is READ-ONLY:
+ * a refusal never deletes, unlinks or transfers any record. Allow only when
+ * every existing owner of the normalized address resolves to THIS account
+ * (unowned, or the same canonical parent — the Model 4 cross-brand / retry case).
  */
 export async function guardAddEmailOwnership(params: {
   email: string
@@ -788,12 +745,7 @@ export async function guardAddEmailOwnership(params: {
     params.email,
     params.currentUserId,
   )
-  const mapped = mapAddEmailGuardResponse(ownership)
-  if (mapped.ok) return mapped
-
-  // Rejected — clean up the transient stub before returning neutral copy.
-  await purgeTransientEmailStub(params.email)
-  return mapped
+  return mapAddEmailGuardResponse(ownership)
 }
 
 /**

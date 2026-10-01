@@ -14,8 +14,11 @@ import { resolveConnectionNames, type ConnectionKey } from "@/lib/credential-mod
 import {
   connectionIdForKey,
   resolveExistingAccountByEmail,
-  purgeTransientEmailStub,
+  readPasswordlessStub,
+  linkPasswordlessStub,
 } from "@/lib/credential-resolver"
+import { ENROLL_PROOF_COOKIE, handoffKey } from "@/lib/passcode-handoff"
+import { proveEnrollmentOwnershipOtp } from "@/lib/ownership-otp-proof"
 import {
   brandProofMethodAllowed,
   planBrandSignupForExistingAccount,
@@ -76,6 +79,11 @@ function clearHandoff(res: NextResponse): void {
     ...journeyCookieOptions(),
     maxAge: 0,
   })
+  clearEnrollProof(res)
+}
+
+function clearEnrollProof(res: NextResponse): void {
+  res.cookies.set(ENROLL_PROOF_COOKIE, "", { path: "/", maxAge: 0 })
 }
 
 export async function POST(request: NextRequest) {
@@ -206,22 +214,39 @@ export async function POST(request: NextRequest) {
         { status: 200 },
       )
     }
-    try {
-      await verifyEmailPasscode(creds, email, code)
-      proofVerified = true
-      // The emailed code was proof only — the new brand credential is a fresh DB
-      // identity created below, so this transient passwordless stub is disposable
-      // and nothing downstream references it. Purge it now so a successful link
-      // (or any later plan/link failure) never leaves an orphan email|… user
-      // behind. purgeTransientEmailStub only deletes all-passwordless standalone
-      // records, so the existing primary (a real DB identity) is never touched.
-      await purgeTransientEmailStub(email)
-    } catch (err) {
-      if (err instanceof PasswordlessError) {
+    // Preserving proof: signed pre-send snapshot + IdP consumption + FRESH
+    // unique same-primary re-check. Never deletes or unlinks anything; a
+    // pre-existing email/sms customer or foreign owner is left untouched.
+    const proof = await proveEnrollmentOwnershipOtp(
+      {
+        rawHandoff: request.cookies.get(ENROLL_PROOF_COOKIE)?.value,
+        key: handoffKey(),
+        code,
+        siteBrand: SITE_BRAND,
+        expected: { email, primaryUserId: handoff.data.primaryUserId },
+      },
+      {
+        verifyOtp: (e, c) => verifyEmailPasscode(creds, e, c),
+        resolvePrimary: async (e) => {
+          const fresh = await resolveExistingAccountByEmail(e)
+          return fresh.kind === "single" ? fresh.account.auth0UserId : null
+        },
+        readStub: readPasswordlessStub,
+        linkStub: linkPasswordlessStub,
+      },
+    )
+    if (!proof.ok) {
+      if (proof.reason === "bad-code") {
         return NextResponse.json({ error: "That code isn't right. Please try again." }, { status: 401 })
       }
-      throw err
+      const res = NextResponse.json(
+        { error: "We couldn't complete that right now. Please try again." },
+        { status: 409 },
+      )
+      if (proof.codeConsumed) clearEnrollProof(res)
+      return res
     }
+    proofVerified = true
   }
 
   // --- Plan the link PURELY (fails closed if proof missing/model conflict) --

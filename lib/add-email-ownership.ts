@@ -287,41 +287,6 @@ export async function hydrateOwnershipCandidates<TUser>(params: {
 }
 
 /**
- * One top-level record for the transient-stub cleanup decision: its id, root
- * email, and the providers of its identities.
- */
-export interface StubCandidate {
-  userId: string
-  rootEmail: string
-  identityProviders: string[]
-}
-
-/**
- * Select the ids of TRANSIENT passwordless stubs to delete on a rejected add:
- * top-level records whose root email is the submitted address AND whose every
- * identity is passwordless (`email`/`sms`). A record holding any real identity
- * (a genuine account) is NEVER selected, so cleanup can only ever remove the
- * OTP artifact the emailed-code step minted — never a real customer's account.
- */
-export function selectTransientEmailStubIds(params: {
-  email: string
-  candidates: StubCandidate[]
-}): string[] {
-  const normalized = normalizeEmail(params.email)
-  if (!normalized) return []
-  const out: string[] = []
-  for (const candidate of params.candidates) {
-    if (!candidate.userId) continue
-    if (normalizeEmail(candidate.rootEmail) !== normalized) continue
-    const providers = candidate.identityProviders
-    const allPasswordless =
-      providers.length > 0 && providers.every((p) => p === "email" || p === "sms")
-    if (allPasswordless) out.push(candidate.userId)
-  }
-  return out
-}
-
-/**
  * A minimal, framework-free shape of an Auth0 user for identity-email extraction:
  * its root email plus each identity's own email (top-level and/or `profileData`).
  */

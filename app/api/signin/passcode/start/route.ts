@@ -27,7 +27,9 @@ import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
   encodeHandoff,
+  handoffKey,
 } from "@/lib/passcode-handoff"
+import { carryForwardProofSnapshot } from "@/lib/ownership-otp-proof"
 
 export const runtime = "nodejs"
 
@@ -92,8 +94,23 @@ export async function POST(request: NextRequest) {
 
   // Recorded BEFORE the challenge is sent, so verify can tell a stub minted by
   // THIS challenge from any pre-existing email-only account (never touched).
+  // A resend within a still-valid signed brand-proof handoff for the same
+  // email + brand keeps the ORIGINAL snapshot and expiry anchor, so a stub the
+  // first send may have minted is never misread as pre-existing.
+  const now = Date.now()
+  const carried = brandProof
+    ? carryForwardProofSnapshot({
+        priorRaw: request.cookies.get(HANDOFF_COOKIE_NAME)?.value,
+        key: handoffKey(),
+        flow: "brand-proof",
+        email,
+        brand: SITE_BRAND,
+        now,
+      })
+    : null
+  const iat = carried?.iat ?? now
   const preExistingPasswordlessSubs = brandProof
-    ? await snapshotPasswordlessSubsFor(email)
+    ? (carried?.preExistingPasswordlessSubs ?? (await snapshotPasswordlessSubsFor(email)))
     : undefined
 
   let authSession: string | undefined
@@ -123,15 +140,15 @@ export async function POST(request: NextRequest) {
     HANDOFF_COOKIE_NAME,
     encodeHandoff(
       brandProof
-        ? { flow: "brand-proof", email, iat: Date.now(), brand: SITE_BRAND, preExistingPasswordlessSubs }
-        : { flow, email, authSession, iat: Date.now() },
+        ? { flow: "brand-proof", email, iat, brand: SITE_BRAND, preExistingPasswordlessSubs }
+        : { flow, email, authSession, iat: now },
     ),
     {
       httpOnly: true,
       secure: true,
       sameSite: "lax",
       path: "/",
-      maxAge: HANDOFF_TTL_SECONDS,
+      maxAge: Math.max(1, HANDOFF_TTL_SECONDS - Math.floor((now - (brandProof ? iat : now)) / 1000)),
     },
   )
   return response
