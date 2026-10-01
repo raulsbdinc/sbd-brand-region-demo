@@ -1077,11 +1077,11 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
     body = (
       <form onSubmit={handleVerify} className="mt-6">
         <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
-          {"We sent a one-time passcode to "}
+          {"If "}
           <span className="font-[600] [color:var(--brand-label-color)]">
             {maskEmail(email)}
           </span>
-          {". Enter it below to sign in."}
+          {` has an account for ${brand.name}, we'll send a code. Enter it below to sign in.`}
         </p>
 
         <div className="mt-6 flex flex-col">

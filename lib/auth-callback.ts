@@ -20,6 +20,25 @@
 
 import "server-only"
 import { NextResponse } from "next/server"
+import { filterDefaultIdTokenClaims } from "@auth0/nextjs-auth0/server"
+import type { SessionData } from "@auth0/nextjs-auth0/types"
+import { brandSessionUser } from "@/lib/brand-session-gate"
+import { SITE_MARKET } from "@/lib/site"
+
+/**
+ * Shared `beforeSessionSaved` hook. Keeps the SDK's default claim filtering
+ * (supplying a hook disables it) and, on EU storefronts, marks every
+ * SDK-callback session as brand-PENDING so the proxy gates it until
+ * /api/signin/google/reconcile verifies this storefront's brand enrollment.
+ */
+export async function brandBeforeSessionSaved(
+  session: SessionData,
+): Promise<SessionData> {
+  return {
+    ...session,
+    user: brandSessionUser(filterDefaultIdTokenClaims(session.user), SITE_MARKET),
+  }
+}
 
 /** Structural shape of the SDK error we care about (avoids importing internals).
  *  `cause` is typed `unknown` to stay assignable to the SDK's `SdkError`. */
