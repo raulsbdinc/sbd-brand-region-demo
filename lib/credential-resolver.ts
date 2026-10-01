@@ -73,6 +73,7 @@ import {
   toManagementUserId,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
+import { selectBrandPasscodeAccount } from "@/lib/brand-passcode-proof"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import type { BrandId, CountryId } from "@/lib/types"
 
@@ -266,6 +267,35 @@ export async function resolveSigninCredential(
     connectionName,
     binding: resolution.binding,
   }
+}
+
+/**
+ * The canonical account a brand passcode sign-in should open, re-resolved
+ * server-side AFTER the emailed code has been consumed. Returns the single
+ * account enrolled in THIS storefront's brand for `email` (binding + backing
+ * identity), or null — never an email-only match, never another brand.
+ */
+export async function resolveBrandPasscodeAccount(
+  email: string,
+  siteBrand: BrandId = SITE_BRAND,
+): Promise<string | null> {
+  if (!isManagementConfigured()) return null
+  if (siteBrand !== "dewalt" && siteBrand !== "stanley") return null
+  const resolution = await resolveSigninCredential(email, siteBrand).catch(() => null)
+  if (!resolution || resolution.kind !== "resolved" || resolution.connectionKey !== siteBrand) {
+    return null
+  }
+  const { candidates: users, ok } = await gatherCandidates(email)
+  if (!ok) return null
+  return selectBrandPasscodeAccount({
+    email,
+    brandKey: siteBrand,
+    candidates: users.map((user) => ({
+      accountId: user.user_id ?? "",
+      bindings: readBindings(user),
+      identities: mapIdentities(user),
+    })),
+  })
 }
 
 // --- Shared login-alias resolution (Model 2 verified alternate emails) ------

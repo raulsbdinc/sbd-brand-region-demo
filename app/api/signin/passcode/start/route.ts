@@ -75,6 +75,18 @@ export async function POST(request: NextRequest) {
     brandScoped: brandAccessEnforced(SITE_MARKET),
   })
 
+  // The EU tenant does not support native database OTP on the brand
+  // connections, so a brand-enrolled (Model 4) customer's code goes out on the
+  // passwordless email connection as mailbox proof. Verify consumes it and then
+  // re-resolves the brand-enrolled canonical; no session comes from the code.
+  const brandScoped = brandAccessEnforced(SITE_MARKET)
+  const brandProof =
+    brandScoped &&
+    permitsChallenge &&
+    flow === "database" &&
+    !!dbConnectionName &&
+    resolution.kind === "resolved"
+
   let authSession: string | undefined
   // AMBIGUOUS or UNAVAILABLE — fail CLOSED: issue NO challenge on ANY realm. We
   // still set the handoff (with no auth_session) below so the verify step fails
@@ -82,7 +94,9 @@ export async function POST(request: NextRequest) {
   // non-revealing.
   if (permitsChallenge) {
     try {
-      if (flow === "database") {
+      if (brandProof) {
+        await startEmailPasscode(creds, email)
+      } else if (flow === "database") {
         authSession = await startDatabaseChallenge(creds, email, dbConnectionName)
       } else {
         await startEmailPasscode(creds, email)
@@ -98,7 +112,7 @@ export async function POST(request: NextRequest) {
   const response = generic()
   response.cookies.set(
     HANDOFF_COOKIE_NAME,
-    encodeHandoff({ flow, email, authSession, iat: Date.now() }),
+    encodeHandoff({ flow: brandProof ? "brand-proof" : flow, email, authSession, iat: Date.now() }),
     {
       httpOnly: true,
       secure: true,

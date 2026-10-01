@@ -17,7 +17,9 @@ export const HANDOFF_COOKIE_NAME = "__pc_ho"
 export const HANDOFF_TTL_SECONDS = 5 * 60
 
 export interface HandoffPayload {
-  flow: PasscodeFlow
+  /** "brand-proof": EU brand passcode delivered via the email connection as
+   *  mailbox proof; verify re-resolves the brand-enrolled canonical. */
+  flow: PasscodeFlow | "brand-proof"
   email: string
   /** Only set on the database flow. */
   authSession?: string
