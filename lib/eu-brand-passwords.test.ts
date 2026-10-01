@@ -1,0 +1,125 @@
+// 1 October (Mark Luvaas): on the EU tenant sbd-emea-temp1, DeWalt France and
+// DeWalt Germany share ONE DeWalt password; Stanley France has its own.
+// Per-email passwords never appear outside UK.
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+
+import { brandAccessEnforced, identitiesAuthorizeBrand } from "./brand-access.ts"
+import {
+  EU_PASSWORD_MIN_LENGTH,
+  passwordMinLength,
+  passwordRequirementsText,
+  validateRegistrationPassword,
+} from "./password-policy.ts"
+import { connectionKeyForName, resolveConnectionNames } from "./credential-model.ts"
+import { drawerSignupFlow } from "./drawer-signup.ts"
+import { perEmailAccountsEnabled } from "./uk-feature-flags.ts"
+
+const EU_ENV = {
+  NEXT_PUBLIC_AUTH0_CONNECTION: "sbd-emea",
+  AUTH0_DEWALT_CONNECTION: "sbd-emea-dewalt",
+  AUTH0_STANLEY_CONNECTION: "sbd-emea-stanley",
+}
+const names = resolveConnectionNames(EU_ENV)
+
+const dewalt = { brand: names.dewalt, shared: names.shared }
+const stanley = { brand: names.stanley, shared: names.shared }
+
+// --- CIAM-16: guidance, client validation and Auth0 policy agree ------------
+
+test("FR/DE minimum length is the real sbd-emea policy (15), and the guidance says so", () => {
+  assert.equal(EU_PASSWORD_MIN_LENGTH, 15)
+  for (const m of ["fr", "de"]) {
+    assert.equal(passwordMinLength(m), 15)
+    assert.match(passwordRequirementsText(m), /At least 15 characters/)
+    assert.doesNotMatch(passwordRequirementsText(m), /At least 8/)
+  }
+})
+
+test("FR/DE true boundary: 14 characters rejected, 15 accepted (before any code is sent)", () => {
+  for (const m of ["fr", "de"]) {
+    const r14 = validateRegistrationPassword("Abcdefghij12!x", ["jane@example.com"], m)
+    assert.equal(r14.ok, false, `${m}: 14 chars must fail`)
+    assert.ok(r14.failures.includes("At least 15 characters"))
+    const r15 = validateRegistrationPassword("Abcdefghij12!xy", ["jane@example.com"], m)
+    assert.equal(r15.ok, true, `${m}: 15 chars must pass`)
+  }
+})
+
+test("FR/DE reject the previously-advertised 8-character shape", () => {
+  assert.equal(validateRegistrationPassword("Abcdef1!", [], "fr").ok, false)
+  assert.equal(validateRegistrationPassword("Abcdef1!", [], "de").ok, false)
+})
+
+// --- DeWalt shared across FR and DE ----------------------------------------
+
+test("DeWalt FR and DeWalt DE resolve to the SAME brand connection (one credential, one reset)", () => {
+  assert.equal(names.dewalt, "sbd-emea-dewalt")
+  assert.equal(connectionKeyForName("sbd-emea-dewalt", names), "dewalt")
+  // Both markets read the same env contract, so FR-first and DE-first land on one identity.
+  const fr = resolveConnectionNames({ ...EU_ENV, NEXT_PUBLIC_MARKET: "fr" })
+  const de = resolveConnectionNames({ ...EU_ENV, NEXT_PUBLIC_MARKET: "de" })
+  assert.equal(fr.dewalt, de.dewalt)
+})
+
+test("FR-first and DE-first DeWalt enrollment both authorize the other DeWalt market", () => {
+  const enrolledViaEitherMarket = [{ connection: "sbd-emea-dewalt" }]
+  assert.equal(identitiesAuthorizeBrand(enrolledViaEitherMarket, dewalt), true)
+})
+
+test("signup on all three EU storefronts is brand-password only", () => {
+  for (const m of ["fr", "de"] as const) {
+    assert.equal(drawerSignupFlow(m, "dewalt"), "per-brand")
+  }
+  assert.equal(drawerSignupFlow("fr", "stanley"), "per-brand")
+})
+
+// --- Stanley isolation ------------------------------------------------------
+
+test("a DeWalt-only account is NOT authorized on Stanley (no bypass via Google/passcode)", () => {
+  assert.equal(brandAccessEnforced("fr"), true)
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea-dewalt" }], stanley), false)
+  assert.equal(identitiesAuthorizeBrand([{ connection: "google-oauth2" }], stanley), false)
+})
+
+test("a Stanley-only account is NOT authorized on DeWalt", () => {
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea-stanley" }], dewalt), false)
+})
+
+test("after explicit Stanley enrollment + ownership link, the canonical user holds both brands", () => {
+  const linked = [{ connection: "sbd-emea-dewalt" }, { connection: "sbd-emea-stanley" }]
+  assert.equal(identitiesAuthorizeBrand(linked, dewalt), true)
+  assert.equal(identitiesAuthorizeBrand(linked, stanley), true)
+  // The two identities stay on different connections, so the reset lifecycles are independent.
+  assert.notEqual(connectionKeyForName("sbd-emea-stanley", names), connectionKeyForName("sbd-emea-dewalt", names))
+})
+
+test("a brand gate with no brand connection configured fails closed", () => {
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], { shared: "sbd-emea" }), false)
+})
+
+// --- Legacy shared users ----------------------------------------------------
+
+test("legacy shared sbd-emea users keep working (not converted, not locked out)", () => {
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], dewalt), true)
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], stanley), true)
+})
+
+// --- Per-email stays UK-only and off ---------------------------------------
+
+test("per-email is never enabled outside UK, even if the flag is forced on", () => {
+  for (const m of ["fr", "de"]) {
+    assert.equal(perEmailAccountsEnabled(m as never, true), false)
+    assert.equal(drawerSignupFlow(m as "fr", "dewalt", "per-email", true), "per-brand")
+  }
+})
+
+// --- UK regression ---------------------------------------------------------
+
+test("UK is unchanged: 15-char policy, per-brand by default, brand gate not applied", () => {
+  assert.equal(passwordMinLength("uk"), 15)
+  assert.equal(drawerSignupFlow("uk", "dewalt", undefined, false), "per-brand")
+  assert.equal(drawerSignupFlow("uk", "stanley", undefined, false), "per-brand")
+  assert.equal(brandAccessEnforced("uk"), false)
+})

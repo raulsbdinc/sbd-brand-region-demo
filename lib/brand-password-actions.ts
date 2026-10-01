@@ -131,6 +131,11 @@ export function profilePasswordModelVisibility(input: {
   const uk = input.market === "uk"
   const perEmailOn = input.perEmailEnabled ?? UK_PER_EMAIL_ACCOUNTS_FLAG
   const isBrand = input.brand === "dewalt" || input.brand === "stanley"
+  // EU (FR/DE) runs separate brand passwords only; the per-email flag is
+  // UK-scoped and never applies here.
+  if (input.market === "fr" || input.market === "de") {
+    return { perEmail: false, perBrand: isBrand }
+  }
   if (!perEmailOn) {
     // Flag off: both UK storefronts run a separate password per brand only.
     return { perEmail: false, perBrand: uk && isBrand }

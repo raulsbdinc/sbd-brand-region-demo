@@ -35,8 +35,7 @@ import {
   interpretPerEmailCreateResponse,
 } from "@/lib/drawer-signup"
 import {
-  PASSWORD_REQUIREMENTS_TEXT,
-  UK_PASSWORD_REQUIREMENTS_TEXT,
+  passwordRequirementsText,
   validateRegistrationPassword,
 } from "@/lib/password-policy"
 
@@ -73,8 +72,7 @@ const INPUT_CLASS =
 // step. Sourced from the shared policy module so the hint, the client-side
 // submit gate, and the server's pre-consumption gate are always identical
 // (>=8 chars, >=3 of the 4 char types, and no part of the email address).
-const PASSWORD_REQUIREMENTS =
-  SITE_MARKET === "uk" ? UK_PASSWORD_REQUIREMENTS_TEXT : PASSWORD_REQUIREMENTS_TEXT
+const PASSWORD_REQUIREMENTS = passwordRequirementsText(SITE_MARKET)
 
 /** Mask a local part for display: `jane@x.com` -> `j•••@x.com`. */
 function maskEmail(value: string): string {

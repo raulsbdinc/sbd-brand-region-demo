@@ -1,6 +1,6 @@
 // MODEL 4 (PER-BRAND) REGISTRATION — entry route
 // ==============================================
-// UK-only. The customer registers on THIS storefront brand with an email + a
+// UK + EU (FR/DE). The customer registers on THIS storefront brand with an email + a
 // brand-specific password. The browser submits only email + password; the model
 // id, brand, and connection are all determined server-side.
 //
@@ -24,6 +24,7 @@ import {
   resolveExistingAccountByEmail,
 } from "@/lib/credential-resolver"
 import {
+  brandRealmsIsolated,
   modelMismatchMessage,
   planBrandSignupForExistingAccount,
   unverifiedBrandAccountMessage,
@@ -151,6 +152,7 @@ export async function POST(request: NextRequest) {
     connectionKey: plan.connectionKey,
     email: plan.email,
     account: existing.account,
+    passwordProofAvailable: !brandRealmsIsolated(SITE_MARKET),
   })
   if (decision.kind === "model-mismatch") {
     // Model 3 and Model 4 are alternative credential boundaries, never mixed on

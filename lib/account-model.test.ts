@@ -113,9 +113,11 @@ test("validateSharedSignupRequest: a UK account-model id must use the dedicated 
 
 // --- 2. market gating -------------------------------------------------------
 
-test("account-model selection is offered only in the UK market", () => {
-  assert.equal(accountModelSelectionAvailable("uk"), true)
-  for (const m of ["fr", "de", "us", "ca", "au"] as CountryId[]) {
+test("brand-password setup is offered on UK and EU (FR/DE) storefronts only", () => {
+  for (const m of ["uk", "fr", "de"] as CountryId[]) {
+    assert.equal(accountModelSelectionAvailable(m), true)
+  }
+  for (const m of ["us", "ca", "au"] as CountryId[]) {
     assert.equal(accountModelSelectionAvailable(m), false)
   }
 })
@@ -279,7 +281,7 @@ test("planModel4Registration: fails closed on bad input", () => {
     { ok: false, reason: "not-configured" },
   )
   assert.deepEqual(
-    planModel4Registration({ email: "jane@example.com" }, ctx({ market: "de" })),
+    planModel4Registration({ email: "jane@example.com" }, ctx({ market: "us" })),
     { ok: false, reason: "market-unavailable" },
   )
 })
@@ -390,7 +392,7 @@ test("planModel4CrossBrandLink: this brand already has a credential → duplicat
 })
 
 test("planModel4CrossBrandLink: other guards (market, brand, config, email)", () => {
-  assert.deepEqual(planModel4CrossBrandLink(crossCtx({ market: "fr" })), {
+  assert.deepEqual(planModel4CrossBrandLink(crossCtx({ market: "us" })), {
     ok: false,
     reason: "market-unavailable",
   })
