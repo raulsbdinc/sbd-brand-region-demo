@@ -171,14 +171,14 @@ export type RecoverySelector = { scope: "shared" } | { bindingId: string }
  * resolution, or null when we must fail closed:
  *   • "resolved" WITH a binding id -> the exact per-email / per-brand credential
  *     (Model 3 resets only that email; Model 4 resets only the current brand).
- *   • "shared-default"             -> the account's shared credential (Model 1/2).
- *   • "resolved" without a usable binding id, "ambiguous", "unavailable"
- *                                  -> null (never guess which credential to reset).
+ *   • "shared-default" (no bound Model 4 credential), "resolved" without a
+ *     usable binding id, "ambiguous", "unavailable"
+ *                                  -> null (never guess which credential to reset;
+ *                                     there is no legacy shared reset).
  */
 export function selectorForRecovery(
   resolution: RecoveryResolutionLike,
 ): RecoverySelector | null {
-  if (resolution.kind === "shared-default") return { scope: "shared" }
   if (resolution.kind === "resolved") {
     const id = resolution.binding?.id
     if (typeof id === "string" && id.trim()) return { bindingId: id.trim() }

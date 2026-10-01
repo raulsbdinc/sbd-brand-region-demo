@@ -30,7 +30,6 @@ import {
   signinResolutionPermitsRealmOperation,
   summarizePasswordModel,
   summarizePasswordModelFromMethods,
-  SHARED_CONNECTION_FALLBACK,
   type CandidateAccount,
   type ConnectionKey,
   type CredentialBinding,
@@ -97,26 +96,19 @@ test("allowlist: sanitize normalizes email and dedupes bindings", () => {
 })
 
 // --- 2. Env resolution + fallback chain ------------------------------------
-test("env: shared falls back through the documented chain to sbd-eu", () => {
-  assert.equal(resolveConnectionNames({}).shared, SHARED_CONNECTION_FALLBACK)
-  assert.equal(
-    resolveConnectionNames({ NEXT_PUBLIC_AUTH0_CONNECTION: "compat" }).shared,
-    "compat",
-  )
-  assert.equal(
-    resolveConnectionNames({
-      AUTH0_CONNECTION: "mid",
-      NEXT_PUBLIC_AUTH0_CONNECTION: "compat",
-    }).shared,
-    "mid",
-  )
+test("env: Model 4 only — shared connection is retired even when legacy env vars remain", () => {
+  assert.equal(resolveConnectionNames({}).shared, undefined)
   assert.equal(
     resolveConnectionNames({
       AUTH0_SHARED_CONNECTION: "primary",
       AUTH0_CONNECTION: "mid",
       NEXT_PUBLIC_AUTH0_CONNECTION: "compat",
     }).shared,
-    "primary",
+    undefined,
+  )
+  assert.equal(
+    resolveConnectionIds({ AUTH0_SHARED_CONNECTION_ID: "con_shared" }).shared,
+    undefined,
   )
 })
 
@@ -864,9 +856,9 @@ test("ownership: resolveCredential delegates as a single candidate (same-account
 })
 
 // --- 14. Sign-in realm decision helper (unavailable fails closed) -----------
-test("decision: resolved and shared-default PERMIT a realm operation", () => {
+test("decision: only resolved PERMITS a realm operation (Model 4 only, no shared-default attempt)", () => {
   assert.equal(signinResolutionPermitsRealmOperation("resolved"), true)
-  assert.equal(signinResolutionPermitsRealmOperation("shared-default"), true)
+  assert.equal(signinResolutionPermitsRealmOperation("shared-default"), false)
 })
 
 test("decision: ambiguous and unavailable FORBID any realm operation (no exchange/challenge/reset)", () => {

@@ -8,6 +8,39 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## Model 4 only — legacy removed (1 October, supersedes the carve-out below)
+
+The owner decided to remove legacy behaviour entirely. Current policy:
+
+- **Same brand + same region = one email, one user, one password across markets.**
+  For example, DeWalt FR and DeWalt DE. Every other brand needs its own enrollment and its
+  own password, linked to the same canonical user only after ownership proof. UK is a
+  separate region.
+- **No shared or grandfather fallback.** `resolveConnectionNames().shared` is always
+  `undefined` (old env vars are ignored). `identitiesAuthorizeBrand()` accepts only the
+  brand's own connection. Password sign-in only tries the resolved, bound credential,
+  with no shared attempt and no shared-alias retry. The passcode plan and recovery drawer
+  have no shared default either. Google and passcode only sign in an account enrolled in
+  that brand.
+- **Cross-brand password change (account page).** The current password is verified with
+  the *target* brand's own existing app client, set as server-only, sensitive env vars:
+  `AUTH0_VERIFIER_STANLEY_CLIENT_ID/_SECRET` on `sbd-demo-dewalt-fr` and `sbd-demo-dewalt-de`
+  (from Stanley FR's app), and `AUTH0_VERIFIER_DEWALT_CLIENT_ID/_SECRET` on
+  `sbd-demo-stanley-fr` (from DeWalt FR's app). Storefront connections were not broadened.
+  `lib/password-verifier.ts` fails closed when a verifier is missing, or is the same as
+  the storefront client. The binding and canonical checks are unchanged.
+- **Data prune (EU tenant `sbd-emea-temp1.eu.auth0.com`, 1 October).** Of 27 users, 21
+  were valid Model 4 and were kept. 6 were deleted: 4 legacy `sbd-emea` users (including
+  `auth0|6ab5332a6029bedc6a60283e`, with its linked passwordless and Google identities),
+  1 orphan unlinked `email|` stub, and 1 orphan standalone `google-oauth2` user. The
+  external Gmail accounts themselves are untouched. The `sbd-emea` and
+  `Username-Password-Authentication` connections still exist in tenant config, but no
+  code path uses them.
+- **UK** (`sbd-uk-temp1.uk.auth0.com`): not inventoried or pruned yet. UK env values are
+  `sensitive` and unreadable, so a UK Management credential is required.
+
+Everything below that describes the legacy `sbd-emea` carve-out is **historical**.
+
 ## EU brand/region passwords on FR/DE (1 October)
 
 Mark Luvaas confirmed on 1 October that each brand gets its own password, and that

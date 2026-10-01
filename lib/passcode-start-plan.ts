@@ -65,7 +65,8 @@ export interface PlanPasscodeStartParams {
  * imports.
  */
 function permits(kind: PasscodeStartResolutionKind): boolean {
-  return kind === "resolved" || kind === "shared-default"
+  // Model 4 only: "shared-default" (no bound credential) never permits a send.
+  return kind === "resolved"
 }
 
 export function planPasscodeStart({
@@ -76,17 +77,14 @@ export function planPasscodeStart({
 }: PlanPasscodeStartParams & {
   /**
    * EU (FR/DE): a passcode may only sign in to a password this storefront's
-   * brand already holds (or a legacy shared account). A passwordless code would
-   * otherwise create or open an account with no enrollment in this brand.
+   * brand already holds. There is no legacy shared exception. A passwordless
+   * code would otherwise open an account with no enrollment in this brand.
    */
   brandScoped?: boolean
 }): PasscodeStartPlan {
   if (brandScoped) {
     if (resolutionKind === "resolved" && resolvedConnectionName) {
       return { flow: "database", dbConnectionName: resolvedConnectionName, permitsChallenge: true }
-    }
-    if (resolutionKind === "shared-default" && baseFlow === "database") {
-      return { flow: "database", dbConnectionName: undefined, permitsChallenge: true }
     }
     return { flow: baseFlow, dbConnectionName: undefined, permitsChallenge: false }
   }

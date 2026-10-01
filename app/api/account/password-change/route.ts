@@ -11,7 +11,8 @@ import {
 } from "@/lib/auth0-regions"
 import { passwordRealmExchange } from "@/lib/auth0-password-grant"
 import { applyPasswordUpdate } from "@/lib/apply-password-update"
-import { SITE_MARKET } from "@/lib/site"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import { selectPasswordVerifier } from "@/lib/password-verifier"
 import {
   mapPasswordUpdateError,
   planPasswordUpdate,
@@ -166,13 +167,32 @@ export async function POST(request: NextRequest) {
     //    using the password-realm grant (server-to-server; the secret never
     //    reaches the browser). A null result means the current password is
     //    wrong (or the account is blocked) → one generic auth failure.
+    //    The verifying client is chosen from the TARGET credential's brand (same
+    //    region tenant), not the storefront: a storefront client only enables
+    //    its own brand connection.
+    const verifier = selectPasswordVerifier({
+      targetConnectionKey: target.connectionKey,
+      siteBrand: SITE_BRAND,
+      storefront: { clientId, clientSecret },
+      env: process.env,
+    })
+    if (!verifier) {
+      return NextResponse.json(
+        {
+          error:
+            "This password can't be changed from this storefront yet. Change it on that brand's site.",
+          code: "verifier-unavailable",
+        },
+        { status: 503 },
+      )
+    }
     const firstHop = (request.headers.get("x-forwarded-for") ?? "")
       .split(",")[0]
       .trim()
     const verified = await passwordRealmExchange({
       domain,
-      clientId,
-      clientSecret,
+      clientId: verifier.clientId,
+      clientSecret: verifier.clientSecret,
       firstHop,
       username: target.email,
       password: currentPassword,

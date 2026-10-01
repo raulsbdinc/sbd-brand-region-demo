@@ -4,10 +4,7 @@ import {
   regionFromCookieHeader,
   resolveRegionAuthConfig,
 } from "@/lib/auth0-regions"
-import {
-  resolveSigninCredential,
-  resolveSharedLoginAlias,
-} from "@/lib/credential-resolver"
+import { resolveSigninCredential } from "@/lib/credential-resolver"
 import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
 import {
   passwordRealmExchange,
@@ -88,58 +85,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
   }
 
-  let tokenResponse: VerifiedTokenResponse | null = null
-
-  if (resolution.kind === "resolved") {
-    // RESOLVED non-shared (case 3 / case 4): attempt ONLY the selected realm,
-    // with the email exactly as typed. No shared attempt, no alias fallback —
-    // this credential is authoritative for this email on this storefront.
-    tokenResponse = await passwordRealmExchange({
-      domain,
-      clientId,
-      clientSecret,
-      firstHop,
-      username: email,
-      password,
-      connectionKey: resolution.connectionKey,
-    })
-  } else {
-    // SHARED-DEFAULT (cases 1 & 2, and unknown emails). ATTEMPT 1 — the typed
-    // email against the SHARED connection, exactly as before.
-    tokenResponse = await passwordRealmExchange({
-      domain,
-      clientId,
-      clientSecret,
-      firstHop,
-      username: email,
-      password,
-      connectionKey: "shared",
-    })
-
-    // ATTEMPT 2 — SHARED login-alias fallback: treat a VERIFIED alternate email
-    // as an alias for the account's ONE shared credential — resolve it to the
-    // primary login email and let Auth0 verify the single real password against
-    // that. resolveSharedLoginAlias resolves against the SAME shared connection
-    // the rest of the credential architecture uses (the live defect was a
-    // divergent connection constant here), creates NO second password/identity,
-    // and fails CLOSED on an unknown/unverified/ambiguous/unavailable address
-    // (only "resolved" retries). It self-gates on Management config, so a
-    // shared-primary login pays no extra cost.
-    if (!tokenResponse) {
-      const alias = await resolveSharedLoginAlias(email)
-      if (alias.kind === "resolved") {
-        tokenResponse = await passwordRealmExchange({
-          domain,
-          clientId,
-          clientSecret,
-          firstHop,
-          username: alias.primaryEmail,
-          password,
-          connectionKey: "shared",
-        })
-      }
-    }
+  // Model 4 only: the resolution is "resolved" here (the gate above rejects
+  // everything else). Attempt ONLY the bound brand/per-email realm with the
+  // email as typed. There is no shared attempt and no shared login alias.
+  if (resolution.kind !== "resolved") {
+    return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
   }
+  const tokenResponse: VerifiedTokenResponse | null = await passwordRealmExchange({
+    domain,
+    clientId,
+    clientSecret,
+    firstHop,
+    username: email,
+    password,
+    connectionKey: resolution.connectionKey,
+  })
 
   // STEP 4 — If neither attempt produced a token, collapse EVERY cause (wrong
   // password, unknown user, unverified/unknown alias, blocked) to one generic
