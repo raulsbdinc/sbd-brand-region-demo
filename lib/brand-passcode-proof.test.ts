@@ -97,7 +97,10 @@ const verify = readFileSync(new URL("../app/api/signin/passcode/verify/route.ts"
 test("start: brand-resolved EU passcode is sent via the email connection, not /otp/challenge", () => {
   assert.match(start, /brandProof\s*=[\s\S]*brandScoped[\s\S]*resolution\.kind === "resolved"/)
   assert.match(start, /if \(brandProof\) \{\s*await startEmailPasscode\(creds, email\)/)
-  assert.match(start, /flow: "brand-proof", email, iat: Date\.now\(\), brand: SITE_BRAND, preExistingPasswordlessSubs/)
+  assert.match(start, /flow: "brand-proof", email, iat, brand: SITE_BRAND, preExistingPasswordlessSubs/)
+  // Resend within a valid same-email/brand handoff keeps the ORIGINAL snapshot + iat.
+  assert.match(start, /carryForwardProofSnapshot\(\{[\s\S]*flow: "brand-proof"[\s\S]*brand: SITE_BRAND/)
+  assert.match(start, /carried\?\.preExistingPasswordlessSubs \?\? \(await snapshotPasswordlessSubsFor\(email\)\)/)
 })
 
 test("start: passwordless snapshot is taken BEFORE the challenge is sent", () => {

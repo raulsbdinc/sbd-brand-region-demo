@@ -20,10 +20,14 @@ export { HANDOFF_TTL_SECONDS }
 
 export const HANDOFF_COOKIE_NAME = "__pc_ho"
 
+/** Model 4 second-brand enrollment email-code proof (pre-send snapshot). */
+export const ENROLL_PROOF_COOKIE = "__m4p_otp"
+
 export interface HandoffPayload extends Omit<HandoffCodecPayload, "flow"> {
   /** "brand-proof": EU brand passcode delivered via the email connection as
-   *  mailbox proof; verify re-resolves the brand-enrolled canonical. */
-  flow: PasscodeFlow | "brand-proof"
+   *  mailbox proof; verify re-resolves the brand-enrolled canonical.
+   *  "brand-enroll-proof": Model 4 enrollment email-code proof. */
+  flow: PasscodeFlow | "brand-proof" | "brand-enroll-proof"
 }
 
 export function handoffKey(): string {

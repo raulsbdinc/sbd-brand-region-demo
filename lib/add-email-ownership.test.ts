@@ -5,7 +5,6 @@ import {
   enumerateOwnershipCandidates,
   hydrateOwnershipCandidates,
   planAddEmailOwnership,
-  selectTransientEmailStubIds,
   collectIdentityOwnedEmails,
   addEmailRejectionCopy,
   mapAddEmailGuardResponse,
@@ -149,44 +148,6 @@ test("an account that does not actually own the email is ignored", () => {
     lookupOk: true,
   })
   assert.equal(decision.ok, true)
-})
-
-// ============================================================================
-// selectTransientEmailStubIds — cleanup only ever removes the OTP artifact.
-// ============================================================================
-
-test("selects a pure passwordless stub whose root email is the target", () => {
-  const ids = selectTransientEmailStubIds({
-    email: "brand-new@example.com",
-    candidates: [
-      { userId: "auth0|stub", rootEmail: "brand-new@example.com", identityProviders: ["email"] },
-    ],
-  })
-  assert.deepEqual(ids, ["auth0|stub"])
-})
-
-test("NEVER selects a real account (has a database/social identity)", () => {
-  const ids = selectTransientEmailStubIds({
-    email: "josem18519@mapsguy.com",
-    candidates: [
-      {
-        userId: "auth0|C",
-        rootEmail: "josem18519@mapsguy.com",
-        identityProviders: ["auth0", "email"],
-      },
-    ],
-  })
-  assert.deepEqual(ids, [])
-})
-
-test("does not select a stub whose root email is a different address", () => {
-  const ids = selectTransientEmailStubIds({
-    email: "target@example.com",
-    candidates: [
-      { userId: "auth0|other", rootEmail: "other@example.com", identityProviders: ["email"] },
-    ],
-  })
-  assert.deepEqual(ids, [])
 })
 
 // ============================================================================

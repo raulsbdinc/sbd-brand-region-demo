@@ -14,7 +14,6 @@ import {
   readBindings,
   connectionIdForKey,
   guardAddEmailOwnership,
-  purgeTransientEmailStub,
 } from "@/lib/credential-resolver"
 import { planModel3Completion } from "@/lib/account-model"
 import { requireAccountUser } from "@/lib/account-guard"
@@ -81,22 +80,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "That code isn't right. Please try again." }, { status: 400 })
   }
 
-  // The emailed code was proof only — the second per-email credential is a fresh
-  // DB identity created below, so this transient passwordless stub is disposable
-  // and nothing downstream references it. Purge it now so a successful link (or
-  // the ownership-guard/link-failure paths) never leaves an orphan email|… user
-  // behind. purgeTransientEmailStub only deletes all-passwordless standalone
-  // records, so the signed-in primary (a real DB identity) is never touched.
-  await purgeTransientEmailStub(email)
-
+  // No record is ever deleted here: any passwordless account the code step may
+  // have touched (pre-existing or not) is preserved.
+  //
   // Canonical-ownership guard. Mailbox control is now proven, so this is not an
   // enumeration oracle. The submitted address may already belong to a DIFFERENT
   // canonical customer — linking it would silently attach a second person's
   // mailbox to this account. Allow ONLY when every existing owner resolves to
   // THIS account (unowned, or the same canonical parent — the Model 4 cross-brand
-  // / partial-retry case). On rejection, purge the transient passwordless stub
-  // the code step minted so no standalone/linked passwordless identity is left
-  // behind, and return neutral copy.
+  // / partial-retry case). A refusal returns neutral copy and mutates nothing.
   const ownership = await guardAddEmailOwnership({ email, currentUserId: sub })
   if (!ownership.ok) {
     const res = NextResponse.json(
