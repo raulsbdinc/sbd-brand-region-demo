@@ -16,12 +16,13 @@
 //   "Allowed Callback URLs" list is the safety net for that inference.
 
 import { Auth0Client } from "@auth0/nextjs-auth0/server"
-import { authCallbackHandler } from "@/lib/auth-callback"
+import { authCallbackHandler, brandBeforeSessionSaved } from "@/lib/auth-callback"
 
 export const auth0 = new Auth0Client({
   // Land failed sign-ins (e.g. a blocked/deactivated user) on /auth-error
   // instead of dumping the raw Auth0 error. See lib/auth-callback.ts.
   onCallback: authCallbackHandler,
+  beforeSessionSaved: brandBeforeSessionSaved,
   authorizationParameters: {
     // Request the standard OIDC profile and, when AUTH0_AUDIENCE is set, a
     // JWT access token for that explicitly configured SBD API.

@@ -262,12 +262,15 @@ export function CustomerProfile({
 
   // Is the account service reachable? Decides whether editable sections are
   // active or gracefully read-only. No developer wording is derived from this.
-  const { data: status } = useSWR<{
+  const { data: status, error: statusError } = useSWR<{
     authConfigured: boolean
     managementConfigured: boolean
     hardDeleteEnabled: boolean
   }>("/api/account/status", fetcher)
   const live = Boolean(status?.managementConfigured)
+  // Until status resolves, `live` is false — indistinguishable from "service
+  // unavailable". Show an honest loading state instead of failure copy.
+  const statusLoading = !status && !statusError
 
   // Derive the account's ACTUAL password topology from the Management-backed
   // login-methods response — NOT from the session user. `app_metadata` (where
@@ -359,6 +362,16 @@ export function CustomerProfile({
         passwordModelResolved={passwordModelResolved}
       />
 
+      {statusLoading ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mt-8 flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-6 text-sm text-muted-foreground"
+        >
+          <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+          Loading your account…
+        </div>
+      ) : (
       <div className="mt-8 space-y-5">
         <DetailsSection
           live={live}
@@ -404,6 +417,7 @@ export function CustomerProfile({
 
         <DeleteSection live={live} onClosed={() => logout()} />
       </div>
+      )}
 
       {/* Low-key link to the engineer-facing view. */}
       <div className="mt-8 border-t border-border pt-4 text-center">
@@ -743,6 +757,8 @@ function EmailSection({
     >
       {error ? (
         <Note>{UNAVAILABLE_COPY}</Note>
+      ) : live && !data ? (
+        <Note>Loading…</Note>
       ) : (
         <ul className="space-y-2">
           {accountEmail ? (
@@ -1070,6 +1086,8 @@ function BrandPasswordSection({
         <Note>{UNAVAILABLE_COPY}</Note>
       ) : !live ? (
         <Note>Sign in to manage your brand passwords.</Note>
+      ) : !methodsData ? (
+        <Note>Loading…</Note>
       ) : rows.length === 0 ? (
         <Note>No brand password is available to manage on this account yet.</Note>
       ) : (
@@ -2401,6 +2419,8 @@ function CommunicationSection({ live }: { live: boolean }) {
     >
       {!live || error ? (
         <Note>{UNAVAILABLE_COPY}</Note>
+      ) : !data ? (
+        <Note>Loading…</Note>
       ) : (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-background px-4 py-3">
@@ -3877,6 +3897,8 @@ function SignInSection({
     >
       {!live || error ? (
         <Note>{UNAVAILABLE_COPY}</Note>
+      ) : !data ? (
+        <Note>Loading…</Note>
       ) : (
         <ul className="space-y-2">
           {/* 1 — Password credentials (real Model 3 & 4 arrangements + Add).

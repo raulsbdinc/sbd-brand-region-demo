@@ -8,6 +8,7 @@ import {
 import { resolveExistingAccountByEmail } from "@/lib/credential-resolver"
 import { brandAccessEnforced, identitiesAuthorizeBrand } from "@/lib/brand-access"
 import { resolveConnectionNames } from "@/lib/credential-model"
+import { clearBrandPending, isBrandPending } from "@/lib/brand-session-gate"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   planGoogleReconcile,
@@ -54,6 +55,22 @@ export interface GoogleReconcileHandoff extends Record<string, unknown> {
   verifiedEmails: string[]
 }
 
+/** End the current session (all chunks) and land on a fixed, safe error page. */
+function endSession(
+  request: NextRequest,
+  reason: "link_unavailable" | "link_ambiguous",
+): NextResponse {
+  const url = new URL("/auth-error", request.url)
+  url.searchParams.set("reason", reason)
+  const res = NextResponse.redirect(url)
+  for (const c of request.cookies.getAll()) {
+    if (c.name === SESSION_COOKIE_NAME || c.name.startsWith(SESSION_COOKIE_NAME)) {
+      res.cookies.set(c.name, "", { path: "/", maxAge: 0 })
+    }
+  }
+  return res
+}
+
 export async function GET(request: NextRequest) {
   const profile = () => NextResponse.redirect(new URL("/profile", request.url))
 
@@ -73,17 +90,25 @@ export async function GET(request: NextRequest) {
   if (!currentSub) return NextResponse.redirect(new URL("/", request.url))
 
   const management = isManagementConfigured()
+  const enforceBrand = brandAccessEnforced(SITE_MARKET)
+  const isGoogle = currentSub.startsWith("google-oauth2|")
+
+  // EU: without the Management API we cannot prove brand enrollment, so the
+  // pending session is ended rather than opened (and the proxy can't loop).
+  if (enforceBrand && !management) return endSession(request, "link_unavailable")
 
   // Build the session facts the planner needs. Identity shape requires the
   // Management record; when Management is off the planner short-circuits to
   // "proceed" before it is ever consulted, so we only fetch when configured.
+  // EU fetches it for every sub: brand access is decided from real identities.
   let record: Auth0User | null = null
-  if (management && currentSub.startsWith("google-oauth2|")) {
+  if (management && (isGoogle || enforceBrand)) {
     try {
       record = await getUser(currentSub)
     } catch {
-      // Can't inspect the record → we cannot prove a duplicate. Leave the
-      // Google session as-is (there is nothing safe to link onto).
+      // EU: an unverifiable session fails CLOSED. Elsewhere: we cannot prove a
+      // duplicate, so leave the Google session as-is (nothing safe to link onto).
+      if (enforceBrand) return endSession(request, "link_unavailable")
       return profile()
     }
   }
@@ -137,7 +162,7 @@ export async function GET(request: NextRequest) {
   // THIS storefront's brand (or a legacy shared account). It never provisions
   // a brand, and never links into an account that lacks this brand's password.
   let brandDenied = false
-  if (brandAccessEnforced(SITE_MARKET) && currentSub.startsWith("google-oauth2|")) {
+  if (enforceBrand) {
     const names = resolveConnectionNames()
     const connections = {
       brand: SITE_BRAND === "dewalt" ? names.dewalt : SITE_BRAND === "stanley" ? names.stanley : undefined,
@@ -157,20 +182,22 @@ export async function GET(request: NextRequest) {
   }
 
   if (brandDenied) {
-    if (google.identityCount === 1) await deleteStandaloneGoogleDuplicate(currentSub)
-    const url = new URL("/auth-error", request.url)
-    url.searchParams.set("reason", "link_unavailable")
-    const res = NextResponse.redirect(url)
-    for (const c of request.cookies.getAll()) {
-      if (c.name === SESSION_COOKIE_NAME || c.name.startsWith(SESSION_COOKIE_NAME)) {
-        res.cookies.set(c.name, "", { path: "/", maxAge: 0 })
-      }
+    if (isGoogle && google.identityCount === 1) {
+      await deleteStandaloneGoogleDuplicate(currentSub)
     }
-    return res
+    return endSession(request, "link_unavailable")
   }
 
   if (decision.action === "proceed") {
-    return profile()
+    const res = profile()
+    // Brand verified server-side: lift the proxy's pending gate on this session.
+    if (session && isBrandPending(session.user)) {
+      await auth0.updateSession(request, res, {
+        ...session,
+        user: clearBrandPending(session.user),
+      })
+    }
+    return res
   }
 
   if (decision.action === "fail-closed") {

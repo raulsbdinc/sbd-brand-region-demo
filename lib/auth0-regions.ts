@@ -31,7 +31,7 @@ import {
   isValidAuthRegion,
 } from "./regions"
 import { COUNTRY_AUTH_OVERRIDES } from "./brands"
-import { authCallbackHandler } from "./auth-callback"
+import { authCallbackHandler, brandBeforeSessionSaved } from "./auth-callback"
 
 // PER-COUNTRY APP OVERRIDES
 // -------------------------
@@ -139,6 +139,7 @@ export function getRegionAuth0Client(regionId: string): Auth0Client {
     // single un-chunked session cookie, return to /live, and the shared friendly
     // callback-error handler.
     onCallback: authCallbackHandler,
+    beforeSessionSaved: brandBeforeSessionSaved,
     authorizationParameters: {
       scope: "openid profile email",
       ...(c.audience ? { audience: c.audience } : {}),
