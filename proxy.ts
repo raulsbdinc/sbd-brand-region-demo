@@ -6,9 +6,15 @@ import { NextRequest, NextResponse } from "next/server"
 import { isAuthConfigured } from "./lib/auth0"
 import { brandAccessEnforced } from "./lib/brand-access"
 import {
+  GOOGLE_LINK_COMPLETE_PATH,
+  cookieValue,
   decideBrandSessionGate,
   sessionProbeRequest,
 } from "./lib/brand-session-gate"
+import {
+  GOOGLE_LINK_COOKIE_NAME,
+  decodeGoogleLinkHandoff,
+} from "./lib/google-link-handoff"
 import { SITE_MARKET } from "./lib/site"
 import {
   getRegionAuth0Client,
@@ -45,7 +51,17 @@ export async function proxy(request: Request) {
       user = null
     }
     const { pathname } = new URL(request.url)
-    const gate = decideBrandSessionGate({ market: SITE_MARKET, user, pathname })
+    const linkIntent =
+      pathname === GOOGLE_LINK_COMPLETE_PATH &&
+      decodeGoogleLinkHandoff(
+        cookieValue(request.headers.get("cookie"), GOOGLE_LINK_COOKIE_NAME),
+      ) !== null
+    const gate = decideBrandSessionGate({
+      market: SITE_MARKET,
+      user,
+      pathname,
+      linkIntent,
+    })
     if (gate.action === "redirect") {
       return NextResponse.redirect(new URL(gate.location, request.url))
     }

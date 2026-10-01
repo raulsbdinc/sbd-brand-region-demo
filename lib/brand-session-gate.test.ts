@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs"
 import {
   BRAND_PENDING_CLAIM,
   BRAND_RECONCILE_PATH,
+  GOOGLE_LINK_COMPLETE_PATH,
+  cookieValue,
   brandSessionUser,
   clearBrandPending,
   decideBrandSessionGate,
@@ -140,4 +142,64 @@ test("profile shows a loading state until account status resolves", () => {
   assert.match(profile, /const statusLoading = !status && !statusError/)
   assert.match(profile, /statusLoading \? \(/)
   assert.match(profile, /Loading your account…/)
+})
+
+// Connect Google (signed-in link) return leg — PR74 live blocker.
+const pendingUser = { sub: "google-oauth2|1", [BRAND_PENDING_CLAIM]: true }
+
+test("link complete: pending session WITH verified link intent reaches the route (fr/de)", () => {
+  for (const market of ["fr", "de"]) {
+    assert.deepEqual(
+      decideBrandSessionGate({ market, user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH, linkIntent: true }),
+      { action: "allow" },
+    )
+  }
+})
+
+test("link complete: pending session WITHOUT link intent is sent to reconcile, never the route", () => {
+  assert.deepEqual(
+    decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH }),
+    { action: "redirect", location: BRAND_RECONCILE_PATH },
+  )
+  assert.deepEqual(
+    decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH, linkIntent: false }),
+    { action: "redirect", location: BRAND_RECONCILE_PATH },
+  )
+})
+
+test("link intent is scoped to the complete path only — no other API/page/profile opens", () => {
+  for (const pathname of ["/api/account/status", "/api/account/identities/google/start", "/auth/profile", "/auth/access-token", "/api/account/identities/google/completeX"]) {
+    assert.equal(
+      decideBrandSessionGate({ market: "fr", user: pendingUser, pathname, linkIntent: true }).action,
+      "deny",
+      pathname,
+    )
+  }
+  assert.equal(decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: "/api/me", linkIntent: true }).action, "anonymous")
+  assert.equal(decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: "/profile", linkIntent: true }).action, "redirect")
+})
+
+test("cookieValue parses one cookie from a raw header", () => {
+  assert.equal(cookieValue("a=1; __gl_ho=abc.def; b=2", "__gl_ho"), "abc.def")
+  assert.equal(cookieValue("a=1", "__gl_ho"), undefined)
+  assert.equal(cookieValue(null, "__gl_ho"), undefined)
+  assert.equal(cookieValue("x__gl_ho=bad", "__gl_ho"), undefined)
+})
+
+test("wiring: proxy derives link intent from the SIGNED handoff, not cookie presence", () => {
+  const proxy = readFileSync(new URL("../proxy.ts", import.meta.url), "utf8")
+  assert.match(proxy, /decodeGoogleLinkHandoff\(/)
+  assert.match(proxy, /pathname === GOOGLE_LINK_COMPLETE_PATH/)
+  assert.match(proxy, /linkIntent,/)
+})
+
+test("wiring: link start is NOT reachable while pending; complete re-mints a non-pending primary", () => {
+  const start = readFileSync(new URL("../app/api/account/identities/google/start/route.ts", import.meta.url), "utf8")
+  assert.match(start, /requireAccountUser\(\)/)
+  assert.match(start, /encodeGoogleLinkHandoff\(\{ primarySub: guard\.user\.sub/)
+  const complete = readFileSync(new URL("../app/api/account/identities/google/complete/route.ts", import.meta.url), "utf8")
+  assert.match(complete, /currentSub === primarySub\) \{\s*return finish\("linked", await restorePrimary\(primarySub\)\)/)
+  const core = readFileSync(new URL("./google-link-core.ts", import.meta.url), "utf8")
+  const minted = core.slice(core.indexOf("export async function mintPrimarySessionCookie"))
+  assert.doesNotMatch(minted.slice(0, minted.indexOf("generateSessionCookie(")), new RegExp(BRAND_PENDING_CLAIM))
 })

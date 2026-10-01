@@ -19,7 +19,7 @@ import {
   recoverySuccessMessage,
 } from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
-import { brandRegionNotice } from "@/lib/brand-region-notice"
+import { accountExistsNotice, brandRegionNotice } from "@/lib/brand-region-notice"
 import { perEmailAccountsEnabled } from "@/lib/uk-feature-flags"
 import {
   crossBrandCollisionMessage,
@@ -1638,9 +1638,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         {createExists ? (
           <div className="mt-6">
             <p role="alert" className={alertClass}>
-              {
-                "You may already have a Stanley Black & Decker account with this address. One account works across DeWalt, Stanley and our other brands, so try signing in instead."
-              }
+              {accountExistsNotice(SITE_MARKET)}
             </p>
             <button
               type="button"
