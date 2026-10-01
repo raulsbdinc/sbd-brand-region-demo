@@ -67,22 +67,54 @@ function isStaticAsset(pathname: string): boolean {
   return /\.[a-z0-9]{2,5}$/i.test(pathname) && !pathname.startsWith("/api/")
 }
 
+/** Return leg of the signed-in "Connect Google" link flow. Auth0's callback
+ *  marks the Google session PENDING like any other, so this route is reachable
+ *  while pending ONLY with a valid signed link-intent handoff — which is minted
+ *  solely by /api/account/identities/google/start for an already-authorized
+ *  session. Without that proof it is gated like everything else. */
+export const GOOGLE_LINK_COMPLETE_PATH = "/api/account/identities/google/complete"
+
 export function decideBrandSessionGate(input: {
   market: string
   user: Record<string, unknown> | null | undefined
   pathname: string
+  /** A verified, unexpired Google-link handoff cookie is present. */
+  linkIntent?: boolean
 }): BrandSessionGateDecision {
-  const { market, user, pathname } = input
+  const { market, user, pathname, linkIntent = false } = input
   if (!brandAccessEnforced(market)) return { action: "allow" }
   if (!isBrandPending(user)) return { action: "allow" }
   if (isAllowedWhilePending(pathname) || isStaticAsset(pathname)) {
     return { action: "allow" }
+  }
+  if (pathname === GOOGLE_LINK_COMPLETE_PATH) {
+    return linkIntent
+      ? { action: "allow" }
+      : { action: "redirect", location: BRAND_RECONCILE_PATH }
   }
   if (pathname === "/api/me") return { action: "anonymous" }
   if (pathname.startsWith("/api/") || pathname.startsWith("/auth/")) {
     return { action: "deny" }
   }
   return { action: "redirect", location: BRAND_RECONCILE_PATH }
+}
+
+/** Read one cookie value from a raw Cookie header (undefined if absent). */
+export function cookieValue(header: string | null, name: string): string | undefined {
+  if (!header) return undefined
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=")
+    if (eq < 0) continue
+    if (part.slice(0, eq).trim() === name) {
+      const raw = part.slice(eq + 1).trim()
+      try {
+        return decodeURIComponent(raw)
+      } catch {
+        return raw
+      }
+    }
+  }
+  return undefined
 }
 
 /** A body-free copy (URL + headers/cookies only) for reading the session in

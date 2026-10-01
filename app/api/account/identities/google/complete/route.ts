@@ -86,7 +86,11 @@ export async function GET(request: NextRequest) {
   if (!currentSub) return finish("error", await restorePrimary(primarySub))
 
   // OUTCOME 1 — the Action already linked (emails matched). Already primary.
-  if (currentSub === primarySub) return finish("linked")
+  // The SDK callback session is brand-PENDING on EU storefronts, so re-mint the
+  // primary (non-pending) session the handoff proves was already authorized.
+  if (currentSub === primarySub) {
+    return finish("linked", await restorePrimary(primarySub))
+  }
 
   // From here the session belongs to some OTHER user; we must inspect it and,
   // whatever happens, restore the primary session before redirecting. Without
