@@ -11,8 +11,17 @@ export interface IdentityLike {
   connection?: string
 }
 
-/** Whether a market enforces brand enrollment on alternative sign-in routes. */
+/** Whether a market enforces brand+region enrollment before a session is
+ *  usable. Every live Model 4 storefront (FR, DE, UK) does: Google or a
+ *  passcode can never open a brand the account holds no password for. */
 export function brandAccessEnforced(market: string): boolean {
+  return market === "fr" || market === "de" || market === "uk"
+}
+
+/** EU only: the EU tenant has no native database OTP on the brand connections,
+ *  so an enrolled customer's passcode is sent on the passwordless connection as
+ *  mailbox proof. UK keeps its native brand-connection database challenge. */
+export function brandPasscodeUsesMailboxProof(market: string): boolean {
   return market === "fr" || market === "de"
 }
 

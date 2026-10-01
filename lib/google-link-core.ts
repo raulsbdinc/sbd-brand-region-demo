@@ -25,6 +25,10 @@ import {
   resolveRegionAuthConfig,
   regionFromCookieHeader,
 } from "@/lib/auth0-regions"
+import { identitiesAuthorizeBrand } from "@/lib/brand-access"
+import { brandVerifiedUser } from "@/lib/brand-session-gate"
+import { resolveConnectionNames } from "@/lib/credential-model"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 
 // Mirror the password route exactly so a restored session is byte-compatible.
 export const SESSION_TTL_SECONDS = 60 * 60
@@ -130,18 +134,25 @@ export async function mintPrimarySessionCookie(
     const { secret } = resolveRegionAuthConfig(region)
     if (!secret) return null
     const now = Math.floor(Date.now() / 1000)
+    // Callers only restore a primary whose brand enrollment they already
+    // checked; the stamp is still re-derived from the record's identities.
+    const names = resolveConnectionNames(process.env)
+    const owns = identitiesAuthorizeBrand(primary.identities, {
+      brand: SITE_BRAND === "dewalt" ? names.dewalt : SITE_BRAND === "stanley" ? names.stanley : undefined,
+    })
+    const baseUser = {
+      sub: primary.user_id as string,
+      email: primary.email,
+      email_verified: primary.email_verified,
+      name: primary.name,
+      nickname: primary.nickname,
+      picture: primary.picture,
+      given_name: primary.given_name,
+      family_name: primary.family_name,
+      updated_at: primary.updated_at,
+    }
     const session = {
-      user: {
-        sub: primary.user_id,
-        email: primary.email,
-        email_verified: primary.email_verified,
-        name: primary.name,
-        nickname: primary.nickname,
-        picture: primary.picture,
-        given_name: primary.given_name,
-        family_name: primary.family_name,
-        updated_at: primary.updated_at,
-      },
+      user: owns ? brandVerifiedUser(baseUser, SITE_MARKET, SITE_BRAND) : baseUser,
       tokenSet: { accessToken: "", idToken: "", expiresAt: now + SESSION_TTL_SECONDS },
       internal: { sid: crypto.randomUUID(), createdAt: now },
     }

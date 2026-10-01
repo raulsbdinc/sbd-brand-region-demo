@@ -15,7 +15,7 @@ import {
   GOOGLE_LINK_COOKIE_NAME,
   decodeGoogleLinkHandoff,
 } from "./lib/google-link-handoff"
-import { SITE_MARKET } from "./lib/site"
+import { SITE_BRAND, SITE_MARKET } from "./lib/site"
 import {
   getRegionAuth0Client,
   regionFromCookieHeader,
@@ -58,6 +58,7 @@ export async function proxy(request: Request) {
       ) !== null
     const gate = decideBrandSessionGate({
       market: SITE_MARKET,
+      brand: SITE_BRAND,
       user,
       pathname,
       linkIntent,

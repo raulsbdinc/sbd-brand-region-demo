@@ -4,12 +4,15 @@ import { readFileSync } from "node:fs"
 import {
   BRAND_PENDING_CLAIM,
   BRAND_RECONCILE_PATH,
+  BRAND_VERIFIED_CLAIM,
   GOOGLE_LINK_COMPLETE_PATH,
   cookieValue,
   brandSessionUser,
+  brandVerifiedUser,
   clearBrandPending,
   decideBrandSessionGate,
   isBrandPending,
+  isBrandVerified,
   sessionProbeRequest,
 } from "./brand-session-gate.ts"
 
@@ -49,7 +52,9 @@ test("wiring: proxy reads the session from the body-free probe, never the origin
 
 const sdkUser = { sub: "google-oauth2|123", email: "a@example.com" }
 
-for (const market of ["fr", "de"]) {
+const brand = "dewalt"
+
+for (const market of ["fr", "de", "uk"]) {
   const pending = brandSessionUser(sdkUser, market)
 
   test(`${market}: SDK callback session is marked pending`, () => {
@@ -57,14 +62,14 @@ for (const market of ["fr", "de"]) {
   })
 
   test(`${market}: pending session cannot open /profile (redirect to reconcile)`, () => {
-    assert.deepEqual(decideBrandSessionGate({ market, user: pending, pathname: "/profile" }), {
+    assert.deepEqual(decideBrandSessionGate({ market, brand, user: pending, pathname: "/profile" }), {
       action: "redirect",
       location: BRAND_RECONCILE_PATH,
     })
   })
 
   test(`${market}: pending session gets NO user from /api/me`, () => {
-    assert.deepEqual(decideBrandSessionGate({ market, user: pending, pathname: "/api/me" }), {
+    assert.deepEqual(decideBrandSessionGate({ market, brand, user: pending, pathname: "/api/me" }), {
       action: "anonymous",
     })
   })
@@ -78,7 +83,7 @@ for (const market of ["fr", "de"]) {
     "/api/account/password-reset",
   ]) {
     test(`${market}: pending session denied on ${p}`, () => {
-      assert.deepEqual(decideBrandSessionGate({ market, user: pending, pathname: p }), {
+      assert.deepEqual(decideBrandSessionGate({ market, brand, user: pending, pathname: p }), {
         action: "deny",
       })
     })
@@ -86,38 +91,90 @@ for (const market of ["fr", "de"]) {
 
   for (const p of [BRAND_RECONCILE_PATH, "/link-google", "/auth/logout", "/auth/callback", "/auth-error"]) {
     test(`${market}: pending session may reach ${p}`, () => {
-      assert.deepEqual(decideBrandSessionGate({ market, user: pending, pathname: p }), {
+      assert.deepEqual(decideBrandSessionGate({ market, brand, user: pending, pathname: p }), {
         action: "allow",
       })
     })
   }
 
-  test(`${market}: reconciled (cleared) session is allowed everywhere`, () => {
-    const cleared = clearBrandPending(pending)
-    assert.equal(BRAND_PENDING_CLAIM in cleared, false)
-    assert.equal(cleared.sub, sdkUser.sub)
+  test(`${market}: session verified for THIS brand+region is allowed everywhere`, () => {
+    const verified = brandVerifiedUser(pending, market, brand)
+    assert.equal(BRAND_PENDING_CLAIM in verified, false)
+    assert.equal(verified.sub, sdkUser.sub)
+    assert.equal(isBrandVerified(verified, market, brand), true)
     for (const p of ["/profile", "/api/me", "/auth/profile", "/api/account/profile"]) {
-      assert.deepEqual(decideBrandSessionGate({ market, user: cleared, pathname: p }), {
+      assert.deepEqual(decideBrandSessionGate({ market, brand, user: verified, pathname: p }), {
         action: "allow",
       })
     }
   })
 
-  test(`${market}: forged pending:false-free session without the claim is allowed (password/passcode routes)`, () => {
-    assert.deepEqual(
-      decideBrandSessionGate({ market, user: sdkUser, pathname: "/profile" }),
-      { action: "allow" },
-    )
+  test(`${market}: merely cleared (unstamped) session is still held — fails closed`, () => {
+    const cleared = clearBrandPending(pending)
+    assert.equal(decideBrandSessionGate({ market, brand, user: cleared, pathname: "/profile" }).action, "redirect")
+    assert.equal(decideBrandSessionGate({ market, brand, user: cleared, pathname: "/api/me" }).action, "anonymous")
+  })
+
+  test(`${market}: claim-free legacy/new-Google session gets NO profile or API access`, () => {
+    assert.deepEqual(decideBrandSessionGate({ market, brand, user: sdkUser, pathname: "/profile" }), {
+      action: "redirect",
+      location: BRAND_RECONCILE_PATH,
+    })
+    assert.equal(decideBrandSessionGate({ market, brand, user: sdkUser, pathname: "/api/me" }).action, "anonymous")
+    assert.equal(decideBrandSessionGate({ market, brand, user: sdkUser, pathname: "/api/account/passwords" }).action, "deny")
+  })
+
+  test(`${market}: other-brand verification never opens this brand`, () => {
+    const stanley = brandVerifiedUser(sdkUser, market, "stanley")
+    assert.equal(decideBrandSessionGate({ market, brand, user: stanley, pathname: "/profile" }).action, "redirect")
+    assert.equal(decideBrandSessionGate({ market, brand, user: stanley, pathname: "/api/me" }).action, "anonymous")
+  })
+
+  test(`${market}: signed-out visitors are unaffected`, () => {
+    assert.deepEqual(decideBrandSessionGate({ market, brand, user: null, pathname: "/profile" }), { action: "allow" })
   })
 }
 
-test("uk: callback sessions are not marked and are never gated (UK unchanged)", () => {
-  const u = brandSessionUser(sdkUser, "uk")
-  assert.equal(isBrandPending(u), false)
-  assert.deepEqual(
-    decideBrandSessionGate({ market: "uk", user: { ...sdkUser, [BRAND_PENDING_CLAIM]: true }, pathname: "/profile" }),
-    { action: "allow" },
-  )
+test("cross-region: EU enrollment stamp never grants UK scope (and vice versa)", () => {
+  const fr = brandVerifiedUser(sdkUser, "fr", brand)
+  assert.equal(decideBrandSessionGate({ market: "uk", brand, user: fr, pathname: "/profile" }).action, "redirect")
+  assert.equal(decideBrandSessionGate({ market: "uk", brand, user: fr, pathname: "/api/me" }).action, "anonymous")
+  const uk = brandVerifiedUser(sdkUser, "uk", brand)
+  assert.equal(decideBrandSessionGate({ market: "fr", brand, user: uk, pathname: "/profile" }).action, "redirect")
+})
+
+test("regression (live UK bug): unbound new google-oauth2 session on DeWalt UK gets no profile/API user", () => {
+  const fresh = brandSessionUser({ sub: "google-oauth2|104581052827520216143", email: "g@example.com" }, "uk")
+  assert.equal(isBrandPending(fresh), true)
+  for (const [p, action] of [
+    ["/profile", "redirect"],
+    ["/api/me", "anonymous"],
+    ["/api/account/status", "deny"],
+    ["/api/account/passwords", "deny"],
+    ["/api/account/login-methods", "deny"],
+    ["/auth/access-token", "deny"],
+  ] as const) {
+    assert.equal(decideBrandSessionGate({ market: "uk", brand, user: fresh, pathname: p }).action, action, p)
+  }
+})
+
+test("unenforced markets stamp nothing and are never gated", () => {
+  assert.equal(isBrandPending(brandSessionUser(sdkUser, "us")), false)
+  assert.equal(BRAND_VERIFIED_CLAIM in brandVerifiedUser(sdkUser, "us", brand), false)
+  assert.deepEqual(decideBrandSessionGate({ market: "us", brand, user: sdkUser, pathname: "/profile" }), { action: "allow" })
+})
+
+test("wiring: every session minter stamps only after a THIS-brand check", () => {
+  const pw = readFileSync(new URL("../app/api/signin/password/route.ts", import.meta.url), "utf8")
+  assert.match(pw, /resolution\.connectionKey === SITE_BRAND\s*\?\s*brandVerifiedUser\(/)
+  const pv = readFileSync(new URL("../app/api/signin/passcode/verify/route.ts", import.meta.url), "utf8")
+  assert.match(pv, /handoff\.flow === "database"\s*\?\s*brandVerifiedUser\(/)
+  const ps = readFileSync(new URL("../app/api/signin/passcode/start/route.ts", import.meta.url), "utf8")
+  assert.match(ps, /resolution\.connectionKey === SITE_BRAND/)
+  const core = readFileSync(new URL("./google-link-core.ts", import.meta.url), "utf8")
+  assert.match(core, /owns \? brandVerifiedUser\(/)
+  const rec = readFileSync(new URL("../app/api/signin/google/reconcile/route.ts", import.meta.url), "utf8")
+  assert.match(rec, /enforceBrand && !isBrandVerified\(/)
 })
 
 test("wiring: callback hook marks, proxy enforces, reconcile clears only after authorization", () => {
@@ -150,7 +207,7 @@ const pendingUser = { sub: "google-oauth2|1", [BRAND_PENDING_CLAIM]: true }
 test("link complete: pending session WITH verified link intent reaches the route (fr/de)", () => {
   for (const market of ["fr", "de"]) {
     assert.deepEqual(
-      decideBrandSessionGate({ market, user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH, linkIntent: true }),
+      decideBrandSessionGate({ brand, market, user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH, linkIntent: true }),
       { action: "allow" },
     )
   }
@@ -158,11 +215,11 @@ test("link complete: pending session WITH verified link intent reaches the route
 
 test("link complete: pending session WITHOUT link intent is sent to reconcile, never the route", () => {
   assert.deepEqual(
-    decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH }),
+    decideBrandSessionGate({ brand, market: "fr", user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH }),
     { action: "redirect", location: BRAND_RECONCILE_PATH },
   )
   assert.deepEqual(
-    decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH, linkIntent: false }),
+    decideBrandSessionGate({ brand, market: "fr", user: pendingUser, pathname: GOOGLE_LINK_COMPLETE_PATH, linkIntent: false }),
     { action: "redirect", location: BRAND_RECONCILE_PATH },
   )
 })
@@ -170,13 +227,13 @@ test("link complete: pending session WITHOUT link intent is sent to reconcile, n
 test("link intent is scoped to the complete path only — no other API/page/profile opens", () => {
   for (const pathname of ["/api/account/status", "/api/account/identities/google/start", "/auth/profile", "/auth/access-token", "/api/account/identities/google/completeX"]) {
     assert.equal(
-      decideBrandSessionGate({ market: "fr", user: pendingUser, pathname, linkIntent: true }).action,
+      decideBrandSessionGate({ brand, market: "fr", user: pendingUser, pathname, linkIntent: true }).action,
       "deny",
       pathname,
     )
   }
-  assert.equal(decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: "/api/me", linkIntent: true }).action, "anonymous")
-  assert.equal(decideBrandSessionGate({ market: "fr", user: pendingUser, pathname: "/profile", linkIntent: true }).action, "redirect")
+  assert.equal(decideBrandSessionGate({ brand, market: "fr", user: pendingUser, pathname: "/api/me", linkIntent: true }).action, "anonymous")
+  assert.equal(decideBrandSessionGate({ brand, market: "fr", user: pendingUser, pathname: "/profile", linkIntent: true }).action, "redirect")
 })
 
 test("cookieValue parses one cookie from a raw header", () => {

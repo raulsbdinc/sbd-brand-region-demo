@@ -18,7 +18,8 @@ import {
   resolveBrandPasscodeAccount,
 } from "@/lib/credential-resolver"
 import { completeBrandPasscodeVerify } from "@/lib/brand-passcode-verify"
-import { SITE_BRAND } from "@/lib/site"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import { brandVerifiedUser } from "@/lib/brand-session-gate"
 import { mintPrimarySessionCookie } from "@/lib/google-link-core"
 import { resolveRegionAuthConfig, regionFromCookieHeader } from "@/lib/auth0-regions"
 import {
@@ -132,8 +133,15 @@ export async function POST(request: NextRequest) {
   // unknown. It is guaranteed present here (the passwordless guard already
   // rejected a missing/`email|…` sub), so pin it explicitly for the type.
   const sub = typeof claims.sub === "string" ? claims.sub : ""
+  // A database challenge is only ever issued on THIS brand's realm on enforced
+  // storefronts (see start route), so it proves enrollment. A passwordless code
+  // proves only the mailbox: leave it unstamped for the proxy gate to hold.
+  const user =
+    handoff.flow === "database"
+      ? brandVerifiedUser({ ...claims, sub }, SITE_MARKET, SITE_BRAND)
+      : { ...claims, sub }
   const session = {
-    user: { ...claims, sub },
+    user,
     tokenSet: {
       accessToken: tokens.access_token,
       idToken: tokens.id_token,

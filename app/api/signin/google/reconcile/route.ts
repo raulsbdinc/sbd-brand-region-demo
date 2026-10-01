@@ -8,7 +8,12 @@ import {
 import { resolveExistingAccountByEmail } from "@/lib/credential-resolver"
 import { brandAccessEnforced, identitiesAuthorizeBrand } from "@/lib/brand-access"
 import { resolveConnectionNames } from "@/lib/credential-model"
-import { clearBrandPending, isBrandPending } from "@/lib/brand-session-gate"
+import {
+  brandVerifiedUser,
+  clearBrandPending,
+  isBrandPending,
+  isBrandVerified,
+} from "@/lib/brand-session-gate"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   planGoogleReconcile,
@@ -158,9 +163,9 @@ export async function GET(request: NextRequest) {
     existing,
   })
 
-  // EU (FR/DE): Google may only open an account that is already enrolled in
-  // THIS storefront's brand (or a legacy shared account). It never provisions
-  // a brand, and never links into an account that lacks this brand's password.
+  // FR/DE/UK: Google may only open an account that already holds THIS
+  // storefront's brand+region password. It never provisions a brand, and never
+  // links into an account that lacks this brand's password.
   let brandDenied = false
   if (enforceBrand) {
     const names = resolveConnectionNames()
@@ -190,8 +195,14 @@ export async function GET(request: NextRequest) {
 
   if (decision.action === "proceed") {
     const res = profile()
-    // Brand verified server-side: lift the proxy's pending gate on this session.
-    if (session && isBrandPending(session.user)) {
+    // Brand verified server-side (enforced markets only): stamp the session for
+    // THIS market+brand so the proxy lets it through. Unenforced: just clear.
+    if (session && enforceBrand && !isBrandVerified(session.user, SITE_MARKET, SITE_BRAND)) {
+      await auth0.updateSession(request, res, {
+        ...session,
+        user: brandVerifiedUser(session.user, SITE_MARKET, SITE_BRAND),
+      })
+    } else if (session && isBrandPending(session.user)) {
       await auth0.updateSession(request, res, {
         ...session,
         user: clearBrandPending(session.user),

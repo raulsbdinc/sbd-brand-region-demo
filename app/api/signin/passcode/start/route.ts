@@ -21,7 +21,7 @@ import {
   snapshotPasswordlessSubsFor,
 } from "@/lib/credential-resolver"
 import { planPasscodeStart } from "@/lib/passcode-start-plan"
-import { brandAccessEnforced } from "@/lib/brand-access"
+import { brandAccessEnforced, brandPasscodeUsesMailboxProof } from "@/lib/brand-access"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   HANDOFF_COOKIE_NAME,
@@ -72,20 +72,27 @@ export async function POST(request: NextRequest) {
   // address can't satisfy. Doing so sent nothing and the failure was swallowed
   // for anti-enumeration, so the customer never received a code.
   const baseFlow = await resolvePasscodeFlow(email)
+  const brandScoped = brandAccessEnforced(SITE_MARKET)
+  // On an enforced storefront only THIS brand's realm counts as enrollment.
+  const ownsSiteBrand =
+    resolution.kind === "resolved" &&
+    (!brandScoped || resolution.connectionKey === SITE_BRAND)
   const { flow, dbConnectionName, permitsChallenge } = planPasscodeStart({
     baseFlow,
-    resolutionKind: resolution.kind,
+    // Another brand's realm is not enrollment here: treat it as unbound.
+    resolutionKind: ownsSiteBrand ? "resolved" : resolution.kind === "resolved" ? "shared-default" : resolution.kind,
     resolvedConnectionName:
-      resolution.kind === "resolved" ? resolution.connectionName : undefined,
-    brandScoped: brandAccessEnforced(SITE_MARKET),
+      ownsSiteBrand && resolution.kind === "resolved" ? resolution.connectionName : undefined,
+    brandScoped,
   })
 
   // The EU tenant does not support native database OTP on the brand
   // connections, so a brand-enrolled (Model 4) customer's code goes out on the
   // passwordless email connection as mailbox proof. Verify consumes it and then
   // re-resolves the brand-enrolled canonical; no session comes from the code.
-  const brandScoped = brandAccessEnforced(SITE_MARKET)
+  // UK keeps the native database challenge on its own brand connection.
   const brandProof =
+    brandPasscodeUsesMailboxProof(SITE_MARKET) &&
     brandScoped &&
     permitsChallenge &&
     flow === "database" &&
