@@ -13,9 +13,12 @@ import { NextResponse, type NextRequest } from "next/server"
 import { generateSessionCookie } from "@auth0/nextjs-auth0/testing"
 import { resolvePasswordlessCreds, verifyEmailPasscode } from "@/lib/auth0-passwordless"
 import {
-  purgeTransientEmailStub,
+  linkPasswordlessStub,
+  readPasswordlessStub,
   resolveBrandPasscodeAccount,
 } from "@/lib/credential-resolver"
+import { completeBrandPasscodeVerify } from "@/lib/brand-passcode-verify"
+import { SITE_BRAND } from "@/lib/site"
 import { mintPrimarySessionCookie } from "@/lib/google-link-core"
 import { resolveRegionAuthConfig, regionFromCookieHeader } from "@/lib/auth0-regions"
 import {
@@ -24,7 +27,7 @@ import {
   passwordlessSubIsRealAccount,
   type TokenSet,
 } from "@/lib/auth0-passcode-signin"
-import { HANDOFF_COOKIE_NAME, decodeHandoff } from "@/lib/passcode-handoff"
+import { HANDOFF_COOKIE_NAME, decodeHandoff, handoffKey } from "@/lib/passcode-handoff"
 import { applySessionCookie, SESSION_TTL_SECONDS } from "@/lib/session-cookie"
 
 export const runtime = "nodejs"
@@ -56,25 +59,32 @@ export async function POST(request: NextRequest) {
   const creds = resolvePasswordlessCreds(cookieHeader)
   if (!creds) return fail()
 
-  // EU brand passcode: the code proves mailbox ownership only. Consume it at
-  // the IdP (single-use), drop the transient email|… stub it may mint, then
-  // re-resolve — NOW, server-side — the single account enrolled in THIS brand
-  // for the address, and open THAT canonical. The code's own sub is never used.
+  // EU brand passcode: the code proves mailbox ownership only. The bridge
+  // checks the handoff's brand, consumes the code at the IdP (single-use),
+  // re-resolves the brand canonical fresh, and links ONLY a provably new,
+  // unowned email|… stub minted by this challenge. It never deletes or
+  // transfers any existing record (see lib/brand-passcode-verify.ts).
   if (handoff.flow === "brand-proof") {
-    try {
-      await verifyEmailPasscode(creds, handoff.email, code)
-    } catch {
-      return fail()
-    }
-    await purgeTransientEmailStub(handoff.email)
-    const canonical = await resolveBrandPasscodeAccount(handoff.email).catch(() => null)
-    if (!canonical) return fail()
-    const cookieValue = await mintPrimarySessionCookie(canonical, cookieHeader)
-    if (!cookieValue) return fail()
+    const result = await completeBrandPasscodeVerify(
+      {
+        rawHandoff: request.cookies.get(HANDOFF_COOKIE_NAME)?.value,
+        key: handoffKey(),
+        code,
+        siteBrand: SITE_BRAND,
+      },
+      {
+        verifyOtp: (email, otp) => verifyEmailPasscode(creds, email, otp),
+        resolveCanonical: (email) => resolveBrandPasscodeAccount(email),
+        readStub: readPasswordlessStub,
+        linkStub: linkPasswordlessStub,
+        mintSession: (canonical) => mintPrimarySessionCookie(canonical, cookieHeader),
+      },
+    )
+    if (!result.ok) return fail()
     const response = NextResponse.json({ ok: true })
     applySessionCookie(
       response.cookies,
-      cookieValue,
+      result.cookieValue,
       request.cookies.getAll().map((c) => c.name),
       { maxAge: SESSION_TTL_SECONDS },
     )

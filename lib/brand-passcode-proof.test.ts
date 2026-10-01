@@ -97,15 +97,19 @@ const verify = readFileSync(new URL("../app/api/signin/passcode/verify/route.ts"
 test("start: brand-resolved EU passcode is sent via the email connection, not /otp/challenge", () => {
   assert.match(start, /brandProof\s*=[\s\S]*brandScoped[\s\S]*resolution\.kind === "resolved"/)
   assert.match(start, /if \(brandProof\) \{\s*await startEmailPasscode\(creds, email\)/)
-  assert.match(start, /flow: brandProof \? "brand-proof" : flow/)
+  assert.match(start, /flow: "brand-proof", email, iat: Date\.now\(\), brand: SITE_BRAND, preExistingPasswordlessSubs/)
 })
 
-test("verify: consumes code, purges stub, re-resolves canonical, mints canonical session", () => {
+test("start: passwordless snapshot is taken BEFORE the challenge is sent", () => {
+  const iSnap = start.indexOf("snapshotPasswordlessSubsFor(email)")
+  const iSend = start.indexOf("if (brandProof) {")
+  assert.ok(iSnap > 0 && iSend > iSnap)
+})
+
+test("verify: brand-proof branch delegates to the non-destructive bridge, never purges", () => {
   const branch = verify.slice(verify.indexOf('handoff.flow === "brand-proof"'))
-  const iVerify = branch.indexOf("verifyEmailPasscode(")
-  const iPurge = branch.indexOf("purgeTransientEmailStub(")
-  const iResolve = branch.indexOf("resolveBrandPasscodeAccount(")
-  const iMint = branch.indexOf("mintPrimarySessionCookie(")
-  assert.ok(iVerify > 0 && iPurge > iVerify && iResolve > iPurge && iMint > iResolve)
-  assert.doesNotMatch(branch.slice(0, iMint), /claims\.sub/)
+  assert.match(branch, /completeBrandPasscodeVerify\(/)
+  assert.match(branch, /siteBrand: SITE_BRAND/)
+  assert.doesNotMatch(verify, /purgeTransientEmailStub|deleteUser\(/)
+  assert.doesNotMatch(branch.slice(0, branch.indexOf("applySessionCookie(")), /claims\.sub/)
 })

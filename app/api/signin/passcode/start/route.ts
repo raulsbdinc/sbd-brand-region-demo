@@ -16,10 +16,13 @@ import {
   resolvePasscodeFlow,
   startDatabaseChallenge,
 } from "@/lib/auth0-passcode-signin"
-import { resolveSigninCredential } from "@/lib/credential-resolver"
+import {
+  resolveSigninCredential,
+  snapshotPasswordlessSubsFor,
+} from "@/lib/credential-resolver"
 import { planPasscodeStart } from "@/lib/passcode-start-plan"
 import { brandAccessEnforced } from "@/lib/brand-access"
-import { SITE_MARKET } from "@/lib/site"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
@@ -87,6 +90,12 @@ export async function POST(request: NextRequest) {
     !!dbConnectionName &&
     resolution.kind === "resolved"
 
+  // Recorded BEFORE the challenge is sent, so verify can tell a stub minted by
+  // THIS challenge from any pre-existing email-only account (never touched).
+  const preExistingPasswordlessSubs = brandProof
+    ? await snapshotPasswordlessSubsFor(email)
+    : undefined
+
   let authSession: string | undefined
   // AMBIGUOUS or UNAVAILABLE — fail CLOSED: issue NO challenge on ANY realm. We
   // still set the handoff (with no auth_session) below so the verify step fails
@@ -112,7 +121,11 @@ export async function POST(request: NextRequest) {
   const response = generic()
   response.cookies.set(
     HANDOFF_COOKIE_NAME,
-    encodeHandoff({ flow: brandProof ? "brand-proof" : flow, email, authSession, iat: Date.now() }),
+    encodeHandoff(
+      brandProof
+        ? { flow: "brand-proof", email, iat: Date.now(), brand: SITE_BRAND, preExistingPasswordlessSubs }
+        : { flow, email, authSession, iat: Date.now() },
+    ),
     {
       httpOnly: true,
       secure: true,
