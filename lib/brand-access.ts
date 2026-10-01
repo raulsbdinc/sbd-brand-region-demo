@@ -17,17 +17,17 @@ export function brandAccessEnforced(market: string): boolean {
 }
 
 /**
- * True when the account holds this brand's password identity, or a legacy
- * shared-account identity. Fails closed when no brand connection is configured.
+ * True ONLY when the account holds this brand's own password identity (Model 4
+ * enrollment). A legacy shared-connection identity grants nothing — there is
+ * no grandfathering. Fails closed when no brand connection is configured. The
+ * `shared` field is accepted for call-site compatibility and deliberately
+ * ignored.
  */
 export function identitiesAuthorizeBrand(
   identities: IdentityLike[] | undefined,
   connections: { brand?: string; shared?: string },
 ): boolean {
   const brand = connections.brand?.trim()
-  const shared = connections.shared?.trim()
   if (!brand) return false
-  return (identities ?? []).some(
-    (id) => id.connection === brand || (!!shared && id.connection === shared),
-  )
+  return (identities ?? []).some((id) => id.connection === brand)
 }

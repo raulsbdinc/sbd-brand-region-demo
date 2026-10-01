@@ -124,17 +124,15 @@ export function isBrandAllowed(key: ConnectionKey, brand: BrandId): boolean {
 
 export type EnvLike = Record<string, string | undefined>
 
-/** Fallback used for the shared connection when no env var is present. */
-export const SHARED_CONNECTION_FALLBACK = "sbd-eu"
-
 /**
  * Resolve the tenant connection NAME for each key from env.
- *   shared    → AUTH0_SHARED_CONNECTION | AUTH0_CONNECTION |
- *               NEXT_PUBLIC_AUTH0_CONNECTION | "sbd-eu"
+ *   shared    → ALWAYS undefined. Model 4 only: the legacy shared connection
+ *               is retired, so no sign-in, reset, enrollment or brand-access
+ *               decision can ever target it (even if old env vars remain).
  *   per-email → AUTH0_PER_EMAIL_CONNECTION
  *   dewalt    → AUTH0_DEWALT_CONNECTION
  *   stanley   → AUTH0_STANLEY_CONNECTION
- * A key with no configured name (and no fallback) resolves to `undefined`.
+ * A key with no configured name resolves to `undefined` (no fallback).
  */
 export function resolveConnectionNames(
   env: EnvLike = process.env as EnvLike,
@@ -147,12 +145,7 @@ export function resolveConnectionNames(
     return undefined
   }
   return {
-    shared: pick(
-      env.AUTH0_SHARED_CONNECTION,
-      env.AUTH0_CONNECTION,
-      env.NEXT_PUBLIC_AUTH0_CONNECTION,
-      SHARED_CONNECTION_FALLBACK,
-    ),
+    shared: undefined,
     "per-email": pick(env.AUTH0_PER_EMAIL_CONNECTION),
     dewalt: pick(env.AUTH0_DEWALT_CONNECTION),
     stanley: pick(env.AUTH0_STANLEY_CONNECTION),
@@ -168,7 +161,7 @@ export function resolveConnectionIds(
 ): Record<ConnectionKey, string | undefined> {
   const t = (v: string | undefined) => v?.trim() || undefined
   return {
-    shared: t(env.AUTH0_SHARED_CONNECTION_ID),
+    shared: undefined,
     "per-email": t(env.AUTH0_PER_EMAIL_CONNECTION_ID),
     dewalt: t(env.AUTH0_DEWALT_CONNECTION_ID),
     stanley: t(env.AUTH0_STANLEY_CONNECTION_ID),
@@ -801,7 +794,9 @@ export type SigninRealmDecisionKind =
 export function signinResolutionPermitsRealmOperation(
   kind: SigninRealmDecisionKind,
 ): boolean {
-  return kind === "resolved" || kind === "shared-default"
+  // Model 4 only: "shared-default" no longer permits anything (no legacy
+  // shared attempt). Only a positively resolved, bound credential does.
+  return kind === "resolved"
 }
 
 // --- Reset-binding validation (authenticated password reset) ----------------

@@ -176,11 +176,8 @@ test("selectorForRecovery: Model 3/4 resolved binding -> that exact credential",
   )
 })
 
-test("selectorForRecovery: shared-default -> the shared credential (Model 1/2)", () => {
-  assert.deepEqual(
-    selectorForRecovery({ kind: "shared-default" }),
-    { scope: "shared" },
-  )
+test("selectorForRecovery: shared-default -> null (Model 4 only, no legacy shared reset)", () => {
+  assert.equal(selectorForRecovery({ kind: "shared-default" }), null)
 })
 
 test("selectorForRecovery: fails closed on ambiguous/unavailable/no-binding", () => {

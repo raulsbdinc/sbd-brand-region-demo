@@ -29,18 +29,18 @@ test("linked alternate with a resolved per-brand binding stays passwordless", ()
   assert.equal(plan.permitsChallenge, true)
 })
 
-// DIRECT SHARED DATABASE EMAIL — cases 1 & 2 unchanged.
-// A root/primary database email resolves to the database flow with a
-// shared-default resolution: it keeps the database challenge on the DEFAULT
-// (shared) connection, i.e. no refinement.
-test("direct shared database email issues a database challenge on the shared connection", () => {
-  const plan = planPasscodeStart({
-    baseFlow: "database",
-    resolutionKind: "shared-default",
-  })
-  assert.equal(plan.flow, "database")
-  assert.equal(plan.dbConnectionName, undefined)
-  assert.equal(plan.permitsChallenge, true)
+// Model 4 only: an email with no bound brand credential ("shared-default")
+// never gets a challenge on any default/shared connection.
+test("no bound credential (shared-default) never issues a database challenge", () => {
+  for (const brandScoped of [false, true]) {
+    const plan = planPasscodeStart({
+      baseFlow: "database",
+      resolutionKind: "shared-default",
+      brandScoped,
+    })
+    assert.equal(plan.dbConnectionName, undefined)
+    assert.equal(plan.permitsChallenge, false)
+  }
 })
 
 // A database-flow email that ALSO resolves to a non-shared credential refines

@@ -101,9 +101,13 @@ test("a brand gate with no brand connection configured fails closed", () => {
 
 // --- Legacy shared users ----------------------------------------------------
 
-test("legacy shared sbd-emea users keep working (not converted, not locked out)", () => {
-  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], dewalt), true)
-  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], stanley), true)
+test("Model 4 only: a legacy shared sbd-emea identity grants NO brand access (no grandfathering)", () => {
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], dewalt), false)
+  assert.equal(identitiesAuthorizeBrand([{ connection: "sbd-emea" }], stanley), false)
+  assert.equal(
+    identitiesAuthorizeBrand([{ connection: "sbd-emea" }, { connection: "google-oauth2" }], dewalt),
+    false,
+  )
 })
 
 // --- Per-email stays UK-only and off ---------------------------------------

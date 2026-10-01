@@ -200,17 +200,19 @@ export type SigninCredentialResolution =
  * Resolve the database connection to authenticate a submitted email against on
  * THIS storefront, as a DISCRIMINATED result:
  *   • "resolved"       → attempt ONLY the returned non-shared realm.
- *   • "shared-default" → make the ordinary shared attempt (cases 1 & 2, and
- *                        unknown emails — a neutral shared attempt is fine).
+ *   • "shared-default" → NO Model 4 credential matched. Model 4 only: there is
+ *                        no shared/legacy attempt any more, so callers MUST
+ *                        fail closed (signinResolutionPermitsRealmOperation is
+ *                        false). The kind name is kept for plumbing stability.
  *   • "ambiguous"      → the email collides across credentials; the caller MUST
  *                        fail closed and attempt NO realm.
  *   • "unavailable"    → a Management lookup failed while Management is
  *                        configured, so the candidate set is incomplete and
  *                        absence of a collision cannot be proven; the caller
  *                        MUST fail closed and attempt NO realm.
- * Management-not-configured collapses to "shared-default" so cases 1 & 2 keep
- * working with no Management API. `siteBrand` defaults to this deployment's
- * brand and is overridable only for tests/tooling.
+ * Management-not-configured collapses to "unavailable" (fail closed): a
+ * Model 4 credential can only be proven through Management. `siteBrand`
+ * defaults to this deployment's brand and is overridable only for tests.
  *
  * ACCOUNT OWNERSHIP: candidate records are passed to the pure resolver WITHOUT
  * flattening, so a binding on one account can only be validated by an identity
@@ -220,7 +222,7 @@ export async function resolveSigninCredential(
   email: string,
   siteBrand: BrandId = SITE_BRAND,
 ): Promise<SigninCredentialResolution> {
-  if (!isManagementConfigured()) return { kind: "shared-default" }
+  if (!isManagementConfigured()) return { kind: "unavailable" }
 
   const normalized = normalizeEmail(email)
   const { candidates: users, ok } = await gatherCandidates(email)
@@ -262,7 +264,9 @@ export async function resolveSigninCredential(
   if (resolution.kind === "shared-default") return { kind: "shared-default" }
 
   const connectionName = names[resolution.connectionKey]
-  if (!connectionName) return { kind: "shared-default" }
+  if (!connectionName || resolution.connectionKey === "shared") {
+    return { kind: "shared-default" }
+  }
 
   return {
     kind: "resolved",
@@ -377,6 +381,8 @@ export type SharedLoginAliasResult =
 export async function resolveSharedLoginAlias(
   email: string,
 ): Promise<SharedLoginAliasResult> {
+  // Model 4 only: there is no shared credential, so no shared login alias.
+  if (!resolveConnectionNames().shared) return { kind: "none" }
   if (!isManagementConfigured()) return { kind: "none" }
 
   const { candidates: users, ok } = await gatherCandidates(email)
