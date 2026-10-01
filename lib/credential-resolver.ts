@@ -37,8 +37,13 @@ import {
   listUsersPage,
   isManagementConfigured,
   deleteUser,
+  linkIdentity,
   type Auth0User,
 } from "@/lib/auth0-management"
+import {
+  snapshotPasswordlessSubs,
+  type PasswordlessStub,
+} from "@/lib/brand-passcode-verify"
 import {
   collectIdentityOwnedEmails,
   enumerateOwnershipCandidates,
@@ -73,6 +78,7 @@ import {
   toManagementUserId,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
+import { selectBrandPasscodeAccount } from "@/lib/brand-passcode-proof"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import type { BrandId, CountryId } from "@/lib/types"
 
@@ -266,6 +272,82 @@ export async function resolveSigninCredential(
     connectionName,
     binding: resolution.binding,
   }
+}
+
+/**
+ * The canonical account a brand passcode sign-in should open, re-resolved
+ * server-side AFTER the emailed code has been consumed. Returns the single
+ * account enrolled in THIS storefront's brand for `email` (binding + backing
+ * identity), or null — never an email-only match, never another brand.
+ */
+export async function resolveBrandPasscodeAccount(
+  email: string,
+  siteBrand: BrandId = SITE_BRAND,
+): Promise<string | null> {
+  if (!isManagementConfigured()) return null
+  if (siteBrand !== "dewalt" && siteBrand !== "stanley") return null
+  const resolution = await resolveSigninCredential(email, siteBrand).catch(() => null)
+  if (!resolution || resolution.kind !== "resolved" || resolution.connectionKey !== siteBrand) {
+    return null
+  }
+  const { candidates: users, ok } = await gatherCandidates(email)
+  if (!ok) return null
+  return selectBrandPasscodeAccount({
+    email,
+    brandKey: siteBrand,
+    candidates: users.map((user) => ({
+      accountId: user.user_id ?? "",
+      bindings: readBindings(user),
+      identities: mapIdentities(user),
+    })),
+  })
+}
+
+/**
+ * Every passwordless (`email|…`) account sub that exists for `email` RIGHT NOW.
+ * Called before a brand passcode challenge is sent; null when the lookup fails
+ * (verify then cannot prove any stub new and fails closed). Read-only.
+ */
+export async function snapshotPasswordlessSubsFor(email: string): Promise<string[] | null> {
+  if (!isManagementConfigured()) return null
+  const normalized = normalizeEmail(email)
+  if (!normalized) return null
+  try {
+    const users = await getUsersByEmail(normalized)
+    return snapshotPasswordlessSubs(
+      users.map((u) => ({
+        userId: u.user_id ?? "",
+        identities: (u.identities ?? []).map((id) => ({
+          provider: id.provider,
+          userId: String(id.user_id),
+        })),
+      })),
+    )
+  } catch {
+    return null
+  }
+}
+
+/** Read-only view of an account for the brand-passcode new-stub check. */
+export async function readPasswordlessStub(sub: string): Promise<PasswordlessStub | null> {
+  try {
+    const user = await getUser(sub)
+    return {
+      userId: user.user_id ?? "",
+      rootEmail: user.email ?? "",
+      identities: (user.identities ?? []).map((id) => ({
+        provider: id.provider,
+        userId: String(id.user_id),
+      })),
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Link a provably-new passwordless identity under the brand canonical. */
+export async function linkPasswordlessStub(canonical: string, stubUserId: string): Promise<void> {
+  await linkIdentity(canonical, { provider: "email", user_id: stubUserId })
 }
 
 // --- Shared login-alias resolution (Model 2 verified alternate emails) ------

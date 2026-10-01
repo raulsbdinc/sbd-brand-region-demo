@@ -11,7 +11,15 @@
 
 import { NextResponse, type NextRequest } from "next/server"
 import { generateSessionCookie } from "@auth0/nextjs-auth0/testing"
-import { resolvePasswordlessCreds } from "@/lib/auth0-passwordless"
+import { resolvePasswordlessCreds, verifyEmailPasscode } from "@/lib/auth0-passwordless"
+import {
+  linkPasswordlessStub,
+  readPasswordlessStub,
+  resolveBrandPasscodeAccount,
+} from "@/lib/credential-resolver"
+import { completeBrandPasscodeVerify } from "@/lib/brand-passcode-verify"
+import { SITE_BRAND } from "@/lib/site"
+import { mintPrimarySessionCookie } from "@/lib/google-link-core"
 import { resolveRegionAuthConfig, regionFromCookieHeader } from "@/lib/auth0-regions"
 import {
   verifyDatabaseOtp,
@@ -19,7 +27,7 @@ import {
   passwordlessSubIsRealAccount,
   type TokenSet,
 } from "@/lib/auth0-passcode-signin"
-import { HANDOFF_COOKIE_NAME, decodeHandoff } from "@/lib/passcode-handoff"
+import { HANDOFF_COOKIE_NAME, decodeHandoff, handoffKey } from "@/lib/passcode-handoff"
 import { applySessionCookie, SESSION_TTL_SECONDS } from "@/lib/session-cookie"
 
 export const runtime = "nodejs"
@@ -50,6 +58,39 @@ export async function POST(request: NextRequest) {
   const cookieHeader = request.headers.get("cookie")
   const creds = resolvePasswordlessCreds(cookieHeader)
   if (!creds) return fail()
+
+  // EU brand passcode: the code proves mailbox ownership only. The bridge
+  // checks the handoff's brand, consumes the code at the IdP (single-use),
+  // re-resolves the brand canonical fresh, and links ONLY a provably new,
+  // unowned email|… stub minted by this challenge. It never deletes or
+  // transfers any existing record (see lib/brand-passcode-verify.ts).
+  if (handoff.flow === "brand-proof") {
+    const result = await completeBrandPasscodeVerify(
+      {
+        rawHandoff: request.cookies.get(HANDOFF_COOKIE_NAME)?.value,
+        key: handoffKey(),
+        code,
+        siteBrand: SITE_BRAND,
+      },
+      {
+        verifyOtp: (email, otp) => verifyEmailPasscode(creds, email, otp),
+        resolveCanonical: (email) => resolveBrandPasscodeAccount(email),
+        readStub: readPasswordlessStub,
+        linkStub: linkPasswordlessStub,
+        mintSession: (canonical) => mintPrimarySessionCookie(canonical, cookieHeader),
+      },
+    )
+    if (!result.ok) return fail()
+    const response = NextResponse.json({ ok: true })
+    applySessionCookie(
+      response.cookies,
+      result.cookieValue,
+      request.cookies.getAll().map((c) => c.name),
+      { maxAge: SESSION_TTL_SECONDS },
+    )
+    response.cookies.set(HANDOFF_COOKIE_NAME, "", { path: "/", maxAge: 0 })
+    return response
+  }
 
   // Exchange the code the way the resolved flow requires.
   let claims: Record<string, unknown>
