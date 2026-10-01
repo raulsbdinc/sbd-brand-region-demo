@@ -31,20 +31,19 @@ import {
   type ProvisioningContext,
   type ProvisionRejectReason,
 } from "@/lib/credential-provisioning"
-import { SITE_BRAND } from "@/lib/site"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import { validateRegistrationPassword } from "@/lib/password-policy"
 import { BRANDS } from "@/lib/brands"
 import type { BrandId } from "@/lib/types"
 
-/** Minimum length we enforce before calling Auth0 (Auth0's policy is the real gate). */
-const MIN_PASSWORD_LENGTH = 8
-
-/** A light pre-check; the connection's own policy is enforced by Auth0 on create. */
+/**
+ * Pre-check against THIS market's connection policy (the same helper the
+ * browser uses), so FR/DE get exactly the sbd-emea-temp1 rule and UK its own.
+ */
 function localPasswordError(password: string): string | null {
-  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
-    return `Use at least ${MIN_PASSWORD_LENGTH} characters.`
-  }
-  if (password.length > 128) return "That password is too long."
-  return null
+  if (typeof password !== "string" || !password) return "Enter a password."
+  const check = validateRegistrationPassword(password, [], SITE_MARKET)
+  return check.ok ? null : `${check.failures[0]}.`
 }
 
 /** Customer-facing brand name (e.g. "DeWalt"), never an internal key. */

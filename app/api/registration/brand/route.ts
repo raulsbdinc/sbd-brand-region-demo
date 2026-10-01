@@ -124,6 +124,7 @@ export async function POST(request: NextRequest) {
         email: plan.email,
         password,
         brand: plan.brand,
+        market: SITE_MARKET,
       },
       realManagementDeps,
     )
