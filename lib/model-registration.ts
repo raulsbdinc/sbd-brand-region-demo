@@ -73,13 +73,15 @@ function readBindingsFrom(user: Auth0User): CredentialBinding[] {
 }
 
 /**
- * Pre-check against the UK connection policy (Model 3/4 are UK-only): 15
- * characters, 3 of 4 classes, no fragment of the credential's email. Auth0
- * still enforces its own rule on create.
+ * Pre-check against THIS market's connection policy. Model 3 (per-email) is
+ * UK-only, so it defaults to "uk". Model 4 (per-brand) also runs on FR/DE, whose
+ * sbd-emea-temp1 connections only require 15 characters (CIAM-16) — the brand
+ * executors therefore pass the real SITE_MARKET so the server never applies the
+ * UK 3-of-4 rule to an EU password the EU guidance accepts.
  */
-function passwordError(password: unknown, email?: string): string | null {
+function passwordError(password: unknown, email?: string, market: string = "uk"): string | null {
   if (typeof password !== "string") return "Enter a password."
-  const check = validateRegistrationPassword(password, email ? [email] : [], "uk")
+  const check = validateRegistrationPassword(password, email ? [email] : [], market)
   if (!check.ok) return `${check.failures[0]}.`
   return null
 }
@@ -491,11 +493,13 @@ export async function executeBrandRegistration(
     email: string
     password: string
     brand: BrandId
+    /** Deployment market whose connection policy applies (defaults to "uk"). */
+    market?: string
   },
   deps: ManagementDeps,
 ): Promise<ExecOutcome> {
   const { connectionKey, connectionName, email, password, brand } = params
-  const pwErr = passwordError(password, email)
+  const pwErr = passwordError(password, email, params.market)
   if (pwErr) return { ok: false, status: 400, error: pwErr }
 
   try {
@@ -568,12 +572,13 @@ async function linkCredentialToPrimary(
     useCase: DemoUseCase
     brand?: BrandId
     duplicateMessage: string
+    market?: string
   },
   deps: ManagementDeps,
 ): Promise<ExecOutcome> {
   const { primaryUserId, connectionKey, connectionName, connectionId, email, password, useCase, brand } =
     params
-  const pwErr = passwordError(password, email)
+  const pwErr = passwordError(password, email, params.market)
   if (pwErr) return { ok: false, status: 400, error: pwErr }
 
   let primary: Auth0User
@@ -659,6 +664,8 @@ export async function executeBrandLink(
     email: string
     password: string
     brand: BrandId
+    /** Deployment market whose connection policy applies (defaults to "uk"). */
+    market?: string
   },
   deps: ManagementDeps,
 ): Promise<ExecOutcome> {

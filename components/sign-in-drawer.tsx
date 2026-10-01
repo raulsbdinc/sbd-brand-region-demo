@@ -19,6 +19,7 @@ import {
   recoverySuccessMessage,
 } from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import { brandRegionNotice } from "@/lib/brand-region-notice"
 import { perEmailAccountsEnabled } from "@/lib/uk-feature-flags"
 import {
   crossBrandCollisionMessage,
@@ -1735,9 +1736,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
             before authentication is the user-enumeration hole the passcode
             challenge avoids, and we don't reintroduce it here. */}
         <p className="mt-3 rounded-md border border-[var(--brand-input-border)] bg-[var(--brand-surface-muted)] px-3 py-2 font-sans text-[12px] font-[500] leading-[17px] [color:var(--brand-description-color)]">
-          {
-            "One Stanley Black & Decker account works across DeWalt, Stanley and our other brands. You\u2019ll sign in separately on each site."
-          }
+          {brandRegionNotice(SITE_MARKET)}
         </p>
 
         {body}
