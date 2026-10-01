@@ -52,10 +52,12 @@ export function drawerSignupFlow(
 ): DrawerSignupFlow {
   if (!accountModelSelectionAvailable(market)) return "shared"
   if (!brandConnectionKey(brand)) return "shared"
-  const model = choice ?? defaultUkSignupModel(brand, perEmailEnabled)
+  // A password per email exists only on UK, whatever the caller passes.
+  const perEmailHere = market === "uk" && perEmailEnabled
+  const model = choice ?? defaultUkSignupModel(brand, perEmailHere)
   // With the per-email setup switched off, a stale or forged per-email choice
   // falls back to the brand password — never to a shared cross-brand password.
-  if (model === "per-email" && !perEmailEnabled) return "per-brand"
+  if (model === "per-email" && !perEmailHere) return "per-brand"
   return model
 }
 

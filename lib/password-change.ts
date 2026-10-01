@@ -399,6 +399,8 @@ export function validateNewPassword(
   emails: string[] = [],
 ): PasswordPolicyResult {
   if (market === "uk") return validateRegistrationPassword(password, emails, "uk")
+  // FR/DE: exactly the sbd-emea-temp1 connection policy (CIAM-16).
+  if (market === "fr" || market === "de") return validateRegistrationPassword(password, emails, market)
   const failures: string[] = []
   if (password.length < PASSWORD_MIN_LENGTH) {
     failures.push(`At least ${PASSWORD_MIN_LENGTH} characters`)

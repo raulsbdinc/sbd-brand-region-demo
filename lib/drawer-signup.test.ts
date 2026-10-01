@@ -19,12 +19,12 @@ import {
 
 // --- Which storefront posts where -------------------------------------------
 
-test("flag on: drawerSignupFlow: DeWalt UK is per-email, Stanley UK is per-brand, EU stays shared", () => {
+test("flag on: drawerSignupFlow: DeWalt UK is per-email, Stanley UK is per-brand, EU is per-brand", () => {
   assert.equal(drawerSignupFlow("uk", "dewalt", undefined, true), "per-email")
   assert.equal(drawerSignupFlow("uk", "stanley"), "per-brand")
-  // France/Germany (Models 1/2) keep the untouched shared signup, on either brand.
-  assert.equal(drawerSignupFlow("fr", "dewalt"), "shared")
-  assert.equal(drawerSignupFlow("de", "stanley"), "shared")
+  // France/Germany now run a separate password per brand only.
+  assert.equal(drawerSignupFlow("fr", "dewalt"), "per-brand")
+  assert.equal(drawerSignupFlow("de", "stanley"), "per-brand")
   assert.equal(drawerSignupFlow("us", "dewalt"), "shared")
   // A UK brand with no brand connection fails closed to shared.
   assert.equal(drawerSignupFlow("uk", "craftsman"), "shared")

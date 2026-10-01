@@ -8,6 +8,58 @@ changes.
 
 Secrets are deliberately absent. See "Credentials" at the bottom.
 
+## EU brand/region passwords on FR/DE (1 October)
+
+Mark Luvaas confirmed on 1 October that each brand gets its own password, and that
+the DeWalt password is the same across DeWalt France and DeWalt Germany. The three
+EU storefronts now run that single setup, the same one UK already uses. The
+password-per-email option exists only on UK, behind `NEXT_PUBLIC_UK_PER_EMAIL_ACCOUNTS`
+(off), and every per-email server route refuses outside UK.
+
+**Tenant:** `sbd-emea-temp1.eu.auth0.com` (EU region). This is not `sbd-eu-temp` and
+not the UK tenant.
+
+| Connection | ID | Enabled for |
+|---|---|---|
+| `sbd-emea` (legacy shared, untouched) | `con_KU8eqdaKcyqe1qX2` | all three EU apps |
+| `sbd-emea-dewalt` (DeWalt Europe) | `con_vUYiMvZKqQcj8RS6` | DeWalt FR `L9LW9i6o…`, DeWalt DE `jXsDL8Kc…`, runtime Management app `H2HvXE…` |
+| `sbd-emea-stanley` (Stanley Europe) | `con_63h8fslyRhfnebma` | Stanley FR `pqKEUgMu…`, runtime Management app `H2HvXE…` |
+
+Both brand connections copy `sbd-emea`'s password policy: a minimum of 15
+characters, no required character classes in Auth0, and `disable_signup: true`. All
+accounts are created server-side through Management, so nobody can sign up for a
+brand from Auth0's own pages.
+
+**Vercel env** (production, for `sbd-demo-dewalt-fr`, `sbd-demo-dewalt-de` and
+`sbd-demo-stanley-fr`): `AUTH0_DEWALT_CONNECTION=sbd-emea-dewalt`,
+`AUTH0_DEWALT_CONNECTION_ID=con_vUYiMvZKqQcj8RS6`,
+`AUTH0_STANLEY_CONNECTION=sbd-emea-stanley`,
+`AUTH0_STANLEY_CONNECTION_ID=con_63h8fslyRhfnebma`.
+
+**Password guidance (CIAM-16).** FR/DE show the same rule Auth0 enforces: at least
+15 characters, plus the app-side 3-of-4 character safeguard that UK already uses.
+The form checks the password before any code is emailed. Auth0's policy was not
+changed. The boundary is tested: 14 characters is rejected and 15 passes.
+
+**Behaviour.**
+- **DeWalt across markets:** an account created on DeWalt FR can sign in on DeWalt
+  DE with the same email and password, and the reverse. Both markets share one
+  connection and one canonical user, so a reset from either market changes both.
+- **Stanley:** Stanley FR only accepts the `sbd-emea-stanley` credential. Adding
+  Stanley to an existing DeWalt customer needs its own new password plus an
+  ownership code, then links to the same canonical user. A DeWalt password never
+  grants Stanley access, and resetting the Stanley password never touches DeWalt.
+- **Google and passcode** can't bypass brand enrollment (`lib/brand-access.ts`). On
+  a brand storefront they only sign in a customer who already holds that brand's
+  password.
+- **Legacy shared `sbd-emea` users** (4 existed on 1 October) are not converted,
+  merged, relinked or deleted. They can still sign in with their existing password,
+  because the password route tries the shared connection first. To get brand
+  passwords they enroll explicitly: create the brand password on that storefront,
+  prove ownership with a code, and the new identity links to the same user. Linking
+  never happens automatically from a matching email.
+- **Sessions** stay local to each storefront. There is no cross-domain SSO.
+
 ## Model 3 / Model 4 registration + Google reconcile (28 August)
 
 Adds the customer-facing journeys that CREATE and LINK the case-3 (per-email)

@@ -23,15 +23,17 @@ test("Stanley UK exposes Model 4 (per-brand) only", () => {
   assert.deepEqual(v, { perEmail: false, perBrand: true })
 })
 
-test("EU storefronts expose NEITHER model (single Account password)", () => {
+test("EU storefronts show brand passwords only, never per-email (even with the UK flag on)", () => {
   for (const market of ["fr", "de"] as const) {
     for (const brand of ["dewalt", "stanley"] as const) {
-      const v = profilePasswordModelVisibility({ market, brand })
-      assert.deepEqual(
-        v,
-        { perEmail: false, perBrand: false },
-        `${brand} ${market} must show neither per-email nor per-brand controls`,
-      )
+      for (const perEmailEnabled of [false, true]) {
+        const v = profilePasswordModelVisibility({ market, brand, perEmailEnabled })
+        assert.deepEqual(
+          v,
+          { perEmail: false, perBrand: true },
+          `${brand} ${market} must show brand-password controls only`,
+        )
+      }
     }
   }
 })

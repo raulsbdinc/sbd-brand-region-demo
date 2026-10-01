@@ -38,12 +38,12 @@ import {
 
 // --- UK password policy: 15 characters + 3 of 4 --------------------------------
 
-test("UK minimum is 15 characters; EU stays at 8", () => {
+test("UK minimum is 15 characters; FR/DE follow the sbd-emea policy (15); default stays 8", () => {
   assert.equal(UK_PASSWORD_MIN_LENGTH, 15)
   assert.equal(passwordMinLength("uk"), 15)
-  assert.equal(passwordMinLength("fr"), PASSWORD_MIN_LENGTH)
-  assert.equal(passwordMinLength("de"), 8)
-  assert.equal(passwordMinLength(), 8)
+  assert.equal(passwordMinLength("fr"), 15)
+  assert.equal(passwordMinLength("de"), 15)
+  assert.equal(passwordMinLength(), PASSWORD_MIN_LENGTH)
 })
 
 test("UK guidance text says 15 characters and 3 of 4 classes", () => {
@@ -51,15 +51,15 @@ test("UK guidance text says 15 characters and 3 of 4 classes", () => {
   assert.match(uk, /At least 15 characters/)
   assert.match(uk, /at least 3 of/)
   assert.doesNotMatch(uk, /At least 8/)
-  assert.match(passwordRequirementsText("fr"), /At least 8 characters/)
+  assert.match(passwordRequirementsText("fr"), /At least 15 characters/)
 })
 
 test("UK pre-OTP validation rejects the exact 8-char repro shape", () => {
   const r = validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "uk")
   assert.equal(r.ok, false)
   assert.ok(r.failures.includes("At least 15 characters"))
-  // EU unchanged: the same password still passes there.
-  assert.equal(validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "fr").ok, true)
+  // FR/DE (CIAM-16): the real EU policy also rejects it.
+  assert.equal(validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "fr").ok, false)
 })
 
 test("UK keeps the 3-of-4 app-side safeguard even at 15+ chars", () => {
@@ -79,7 +79,9 @@ test("recovery reset submit is gated by the UK policy before the code is used", 
   assert.equal(canSubmitRecoveryReset({ ...base, next: "Abcdef1!", confirm: "Abcdef1!" }), false)
   const good = "Stronger-Pass-2026"
   assert.equal(canSubmitRecoveryReset({ ...base, next: good, confirm: good }), true)
-  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "Abcdef1!", confirm: "Abcdef1!" }), true)
+  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "Abcdef1!", confirm: "Abcdef1!" }), false)
+  const euMin = "a".repeat(15)
+  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: euMin, confirm: euMin }), true)
 })
 
 // --- Explicit Model 3 / Model 4 choice on BOTH UK sites ----------------------
@@ -210,5 +212,5 @@ test("DeWalt recovery preset overrides DeWalt's Model 3 default; note never name
 test("normal new-account entry keeps the site defaults (explicit choice preserved)", () => {
   assert.equal(drawerSignupFlow("uk", "dewalt", undefined, true), "per-email")
   assert.equal(drawerSignupFlow("uk", "stanley", undefined, true), "per-brand")
-  assert.equal(drawerSignupFlow("fr", "dewalt", recoverySignupPreset("dewalt").model), "shared", "EU unaffected")
+  assert.equal(drawerSignupFlow("fr", "dewalt", recoverySignupPreset("dewalt").model), "per-brand", "EU is brand-password only")
 })

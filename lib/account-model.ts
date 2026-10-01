@@ -134,7 +134,31 @@ export function crossBrandConfirmMessage(
  * market keeps the existing shared (Model 1/2) registration untouched.
  */
 export function accountModelSelectionAvailable(market: CountryId): boolean {
-  return market === "uk"
+  return market === "uk" || market === "fr" || market === "de"
+}
+
+/**
+ * EU (FR/DE) brand realms are enabled ONLY on their own brand's applications in
+ * sbd-emea-temp1 (sbd-emea-dewalt → DeWalt FR + DE; sbd-emea-stanley → Stanley
+ * FR). A storefront therefore cannot verify the OTHER brand's password, so
+ * second-brand ownership is proven with an emailed one-time code only. UK keeps
+ * both proofs.
+ */
+export function brandRealmsIsolated(market: CountryId): boolean {
+  return market === "fr" || market === "de"
+}
+
+/** Which storefronts a brand password works on, in plain customer language. */
+export function brandPasswordScopeLine(brand: BrandId, market: CountryId): string {
+  if (market === "fr" || market === "de") {
+    if (brand === "dewalt") {
+      return "Your DeWalt password works on DeWalt France and DeWalt Germany. Stanley uses its own separate password."
+    }
+    if (brand === "stanley") {
+      return "Your Stanley password is separate from your DeWalt password and only works on Stanley."
+    }
+  }
+  return ""
 }
 
 // --- Coherence: an account never mixes model 3 and model 4 ------------------
@@ -271,7 +295,8 @@ export function planModel3Registration(
   input: Model3RegistrationInput,
   ctx: RegistrationContext,
 ): Model3Resolution {
-  if (!accountModelSelectionAvailable(ctx.market)) {
+  // A password per email exists only on the UK storefronts (behind its flag).
+  if (ctx.market !== "uk") {
     return { ok: false, reason: "market-unavailable" }
   }
 
@@ -666,7 +691,7 @@ export type Model3CompletionResolution =
 export function planModel3Completion(
   ctx: Model3CompletionContext,
 ): Model3CompletionResolution {
-  if (!accountModelSelectionAvailable(ctx.market)) {
+  if (ctx.market !== "uk") {
     return { ok: false, reason: "market-unavailable" }
   }
 
@@ -736,7 +761,7 @@ export type BrandSignupExistingDecision =
 
 /** Guidance when the existing brand account's email has not been confirmed yet. */
 export function unverifiedBrandAccountMessage(): string {
-  return "This email already has an account on the other UK storefront, but its email address hasn't been confirmed yet. Use the confirmation link we emailed when that account was created (or sign in there and resend it from your profile), then come back to add this brand. Nothing has been changed."
+  return "This email already has an account with our other brand, but its email address hasn't been confirmed yet. Use the confirmation link we emailed when that account was created (or sign in there and resend it from your profile), then come back to add this brand. Nothing has been changed."
 }
 
 /**
@@ -758,6 +783,8 @@ export function planBrandSignupForExistingAccount(params: {
   connectionKey: "dewalt" | "stanley"
   email: string
   account: { bindings: CredentialBinding[]; verifiedEmails: string[] }
+  /** False where brand realms are isolated (EU): email-code proof only. */
+  passwordProofAvailable?: boolean
 }): BrandSignupExistingDecision {
   const { bindings } = params.account
   const hasPerBrand = bindings.some(
@@ -773,7 +800,10 @@ export function planBrandSignupForExistingAccount(params: {
   const email = normalizeEmail(params.email)
   const verified = params.account.verifiedEmails.some((e) => normalizeEmail(e) === email)
   if (!email || !verified) return { kind: "verification-required" }
-  return { kind: "proof-required", proofOptions: ["password", "email-code"] }
+  return {
+    kind: "proof-required",
+    proofOptions: params.passwordProofAvailable === false ? ["email-code"] : ["password", "email-code"],
+  }
 }
 
 /** Whether a submitted proof method was actually offered for this account. */
@@ -781,6 +811,7 @@ export function brandProofMethodAllowed(
   offered: readonly unknown[] | undefined,
   method: BrandProofMethod,
 ): boolean {
-  if (method === "password") return true
+  // Legacy handoffs predating proofOptions only ever offered password proof.
+  if (method === "password") return !Array.isArray(offered) || offered.includes("password")
   return Array.isArray(offered) && offered.includes("email-code")
 }

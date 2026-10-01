@@ -27,14 +27,44 @@ export const PASSWORD_MIN_LENGTH = 8
 export const UK_PASSWORD_MIN_LENGTH = 15
 export const PASSWORD_MAX_LENGTH = 128
 
+// EU (FR/DE, CIAM-16): the sbd-emea-temp1 DB connections (sbd-emea,
+// sbd-emea-dewalt, sbd-emea-stanley) enforce password_options.complexity
+// { min_length: 15, character_types: [], max_length_exceeded: "error" } with the
+// dictionary, history and personal-data rules all inactive (read via the
+// Management API, 1 Oct). So the ONLY rules are: at least 15 characters, and
+// at most 72 bytes (Auth0's bcrypt input limit, rejected rather than
+// truncated). Guidance and validation must say exactly that — nothing more.
+export const EU_PASSWORD_MIN_LENGTH = 15
+export const EU_PASSWORD_MAX_BYTES = 72
+
+/** Whether this market runs the EU (sbd-emea-temp1) connection policy. */
+export function isEuPolicyMarket(market?: string): boolean {
+  return market === "fr" || market === "de"
+}
+
 /** Minimum password length for a market's database connections. */
 export function passwordMinLength(market?: string): number {
+  if (isEuPolicyMarket(market)) return EU_PASSWORD_MIN_LENGTH
   return market === "uk" ? UK_PASSWORD_MIN_LENGTH : PASSWORD_MIN_LENGTH
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length
 }
 
 /** Human-readable policy for a market, shown as helper text and in errors. */
 export function passwordRequirementsText(market?: string): string {
+  if (isEuPolicyMarket(market)) {
+    return `At least ${EU_PASSWORD_MIN_LENGTH} characters. Any mix of letters, numbers, spaces and symbols is fine.`
+  }
   return `At least ${passwordMinLength(market)} characters, including at least 3 of: lowercase, uppercase, numbers, and special characters. Don't include part of your email address.`
+}
+
+function euPasswordFailures(pw: string): string[] {
+  const failures: string[] = []
+  if (pw.length < EU_PASSWORD_MIN_LENGTH) failures.push(`At least ${EU_PASSWORD_MIN_LENGTH} characters`)
+  if (utf8ByteLength(pw) > EU_PASSWORD_MAX_BYTES) failures.push("Too long — use a shorter password")
+  return failures
 }
 
 /** Default (EU/FR/DE) policy text. */
@@ -90,6 +120,10 @@ export function validateRegistrationPassword(
   market?: string,
 ): PasswordPolicyResult {
   const pw = typeof password === "string" ? password : ""
+  if (isEuPolicyMarket(market)) {
+    const failures = euPasswordFailures(pw)
+    return { ok: failures.length === 0, failures }
+  }
   const failures: string[] = []
   const min = passwordMinLength(market)
   if (pw.length < min) failures.push(`At least ${min} characters`)
@@ -137,6 +171,11 @@ export function newPasswordChecklist(
 ): { ok: boolean; text: string }[] {
   if (market === "uk") return ukPasswordChecklist(password, emails)
   const pw = typeof password === "string" ? password : ""
+  if (isEuPolicyMarket(market)) {
+    const rows = [{ ok: pw.length >= EU_PASSWORD_MIN_LENGTH, text: `At least ${EU_PASSWORD_MIN_LENGTH} characters` }]
+    if (utf8ByteLength(pw) > EU_PASSWORD_MAX_BYTES) rows.push({ ok: false, text: "Too long — use a shorter password" })
+    return rows
+  }
   return [
     { ok: pw.length >= PASSWORD_MIN_LENGTH, text: `At least ${PASSWORD_MIN_LENGTH} characters` },
     { ok: /[a-z]/.test(pw) && /[A-Z]/.test(pw), text: "Upper and lowercase letters" },

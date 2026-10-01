@@ -71,11 +71,11 @@ test("flag off: a stale or forged per-email choice falls back to the BRAND passw
   }
 })
 
-test("flag off: EU signup is untouched (still the shared account)", () => {
+test("EU signup is per-brand only; a forged per-email choice falls back to the brand password", () => {
   for (const market of ["fr", "de"] as const) {
     for (const brand of UK_BRANDS) {
-      assert.equal(drawerSignupFlow(market, brand, undefined, false), "shared")
-      assert.equal(drawerSignupFlow(market, brand, undefined, true), "shared")
+      assert.equal(drawerSignupFlow(market, brand, undefined, false), "per-brand")
+      assert.equal(drawerSignupFlow(market, brand, "per-email", false), "per-brand")
     }
   }
 })

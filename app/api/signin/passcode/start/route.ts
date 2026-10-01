@@ -18,6 +18,8 @@ import {
 } from "@/lib/auth0-passcode-signin"
 import { resolveSigninCredential } from "@/lib/credential-resolver"
 import { planPasscodeStart } from "@/lib/passcode-start-plan"
+import { brandAccessEnforced } from "@/lib/brand-access"
+import { SITE_MARKET } from "@/lib/site"
 import {
   HANDOFF_COOKIE_NAME,
   HANDOFF_TTL_SECONDS,
@@ -70,6 +72,7 @@ export async function POST(request: NextRequest) {
     resolutionKind: resolution.kind,
     resolvedConnectionName:
       resolution.kind === "resolved" ? resolution.connectionName : undefined,
+    brandScoped: brandAccessEnforced(SITE_MARKET),
   })
 
   let authSession: string | undefined

@@ -6,6 +6,9 @@ import {
   type Auth0User,
 } from "@/lib/auth0-management"
 import { resolveExistingAccountByEmail } from "@/lib/credential-resolver"
+import { brandAccessEnforced, identitiesAuthorizeBrand } from "@/lib/brand-access"
+import { resolveConnectionNames } from "@/lib/credential-model"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   planGoogleReconcile,
   type ExistingAccountFacts,
@@ -129,6 +132,42 @@ export async function GET(request: NextRequest) {
     google,
     existing,
   })
+
+  // EU (FR/DE): Google may only open an account that is already enrolled in
+  // THIS storefront's brand (or a legacy shared account). It never provisions
+  // a brand, and never links into an account that lacks this brand's password.
+  let brandDenied = false
+  if (brandAccessEnforced(SITE_MARKET) && currentSub.startsWith("google-oauth2|")) {
+    const names = resolveConnectionNames()
+    const connections = {
+      brand: SITE_BRAND === "dewalt" ? names.dewalt : SITE_BRAND === "stanley" ? names.stanley : undefined,
+      shared: names.shared,
+    }
+    if (decision.action === "proceed") {
+      brandDenied = !identitiesAuthorizeBrand(record?.identities, connections)
+    } else if (decision.action !== "fail-closed") {
+      let primary: Auth0User | null = null
+      try {
+        primary = await getUser(decision.primaryUserId)
+      } catch {
+        primary = null
+      }
+      brandDenied = !identitiesAuthorizeBrand(primary?.identities, connections)
+    }
+  }
+
+  if (brandDenied) {
+    if (google.identityCount === 1) await deleteStandaloneGoogleDuplicate(currentSub)
+    const url = new URL("/auth-error", request.url)
+    url.searchParams.set("reason", "link_unavailable")
+    const res = NextResponse.redirect(url)
+    for (const c of request.cookies.getAll()) {
+      if (c.name === SESSION_COOKIE_NAME || c.name.startsWith(SESSION_COOKIE_NAME)) {
+        res.cookies.set(c.name, "", { path: "/", maxAge: 0 })
+      }
+    }
+    return res
+  }
 
   if (decision.action === "proceed") {
     return profile()
