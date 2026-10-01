@@ -84,3 +84,11 @@ export function decideBrandSessionGate(input: {
   }
   return { action: "redirect", location: BRAND_RECONCILE_PATH }
 }
+
+/** A body-free copy (URL + headers/cookies only) for reading the session in
+ *  the proxy. Wrapping the ORIGINAL request (`new NextRequest(request)`)
+ *  transfers its body stream, so a later rebuild of a POST by the SDK
+ *  middleware or the route throws "body ... disturbed or locked" → HTTP 500. */
+export function sessionProbeRequest(request: Request): Request {
+  return new Request(request.url, { method: "GET", headers: request.headers })
+}

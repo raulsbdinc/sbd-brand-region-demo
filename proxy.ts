@@ -5,7 +5,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isAuthConfigured } from "./lib/auth0"
 import { brandAccessEnforced } from "./lib/brand-access"
-import { decideBrandSessionGate } from "./lib/brand-session-gate"
+import {
+  decideBrandSessionGate,
+  sessionProbeRequest,
+} from "./lib/brand-session-gate"
 import { SITE_MARKET } from "./lib/site"
 import {
   getRegionAuth0Client,
@@ -34,7 +37,9 @@ export async function proxy(request: Request) {
   if (brandAccessEnforced(SITE_MARKET)) {
     let user: Record<string, unknown> | null = null
     try {
-      const session = await client.getSession(new NextRequest(request))
+      const session = await client.getSession(
+        new NextRequest(sessionProbeRequest(request)),
+      )
       user = (session?.user as Record<string, unknown> | undefined) ?? null
     } catch {
       user = null

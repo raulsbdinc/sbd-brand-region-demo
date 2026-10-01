@@ -8,7 +8,42 @@ import {
   clearBrandPending,
   decideBrandSessionGate,
   isBrandPending,
+  sessionProbeRequest,
 } from "./brand-session-gate.ts"
+
+function signupPost(): Request {
+  return new Request("https://sbd-demo-dewalt-fr.vercel.app/api/registration/brand", {
+    method: "POST",
+    headers: { cookie: "__session=abc; sbd_region=eu", "content-type": "application/json" },
+    body: JSON.stringify({ email: "fresh@example.com", password: "abcdefghijklmno" }),
+  })
+}
+
+test("regression (PR73 500): wrapping the original POST locks its body for the next handler", () => {
+  const original = signupPost()
+  new Request(original)
+  assert.throws(() => new Request(original))
+})
+
+test("session probe keeps the POST body intact for the SDK middleware and the route", async () => {
+  const original = signupPost()
+  const probe = sessionProbeRequest(original)
+  assert.equal(probe.method, "GET")
+  assert.equal(probe.body, null)
+  assert.equal(probe.headers.get("cookie"), "__session=abc; sbd_region=eu")
+  assert.equal(original.bodyUsed, false)
+  const rebuiltBySdk = new Request(original)
+  assert.deepEqual(await rebuiltBySdk.json(), {
+    email: "fresh@example.com",
+    password: "abcdefghijklmno",
+  })
+})
+
+test("wiring: proxy reads the session from the body-free probe, never the original request", () => {
+  const proxy = readFileSync(new URL("../proxy.ts", import.meta.url), "utf8")
+  assert.match(proxy, /getSession\(\s*new NextRequest\(sessionProbeRequest\(request\)\)/)
+  assert.doesNotMatch(proxy, /new NextRequest\(request\)/)
+})
 
 const sdkUser = { sub: "google-oauth2|123", email: "a@example.com" }
 
