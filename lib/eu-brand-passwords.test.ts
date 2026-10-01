@@ -121,9 +121,9 @@ test("per-email is never enabled outside UK, even if the flag is forced on", () 
 
 // --- UK regression ---------------------------------------------------------
 
-test("UK is unchanged: 15-char policy, per-brand by default, brand gate not applied", () => {
+test("UK: 15-char policy, per-brand by default, and the Model 4 brand gate IS enforced", () => {
   assert.equal(passwordMinLength("uk"), 15)
   assert.equal(drawerSignupFlow("uk", "dewalt", undefined, false), "per-brand")
   assert.equal(drawerSignupFlow("uk", "stanley", undefined, false), "per-brand")
-  assert.equal(brandAccessEnforced("uk"), false)
+  assert.equal(brandAccessEnforced("uk"), true)
 })

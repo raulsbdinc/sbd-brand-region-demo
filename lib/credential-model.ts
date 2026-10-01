@@ -80,7 +80,7 @@ export const CONNECTION_KEY_META: Record<ConnectionKey, ConnectionKeyMeta> = {
   shared: {
     key: "shared",
     label: "Email & password",
-    scope: "One password for DeWalt France, DeWalt Germany and Stanley France.",
+    scope: "Older sign-in record. Brand sites use their own brand password.",
     allowedBrands: null,
     useCase: "shared-account",
   },

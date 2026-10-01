@@ -6,6 +6,8 @@ import {
 } from "@/lib/auth0-regions"
 import { resolveSigninCredential } from "@/lib/credential-resolver"
 import { signinResolutionPermitsRealmOperation } from "@/lib/credential-model"
+import { brandVerifiedUser } from "@/lib/brand-session-gate"
+import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
   passwordRealmExchange,
   type VerifiedTokenResponse,
@@ -125,8 +127,14 @@ export async function POST(request: NextRequest) {
   // id_token) to satisfy the session shape.
   const sub = typeof claims.sub === "string" ? claims.sub : ""
 
+  // Verified for this storefront only when the password was checked on THIS
+  // brand's realm; anything else stays unstamped and the proxy gate holds it.
+  const user =
+    resolution.connectionKey === SITE_BRAND
+      ? brandVerifiedUser({ ...claims, sub }, SITE_MARKET, SITE_BRAND)
+      : { ...claims, sub }
   const session = {
-    user: { ...claims, sub },
+    user,
     tokenSet: {
       accessToken: tokenResponse.access_token,
       idToken: tokenResponse.id_token,

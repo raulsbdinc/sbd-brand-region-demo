@@ -1638,7 +1638,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         {createExists ? (
           <div className="mt-6">
             <p role="alert" className={alertClass}>
-              {accountExistsNotice(SITE_MARKET)}
+              {accountExistsNotice(SITE_MARKET, SITE_BRAND)}
             </p>
             <button
               type="button"
@@ -1734,7 +1734,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
             before authentication is the user-enumeration hole the passcode
             challenge avoids, and we don't reintroduce it here. */}
         <p className="mt-3 rounded-md border border-[var(--brand-input-border)] bg-[var(--brand-surface-muted)] px-3 py-2 font-sans text-[12px] font-[500] leading-[17px] [color:var(--brand-description-color)]">
-          {brandRegionNotice(SITE_MARKET)}
+          {brandRegionNotice(SITE_MARKET, SITE_BRAND)}
         </p>
 
         {body}

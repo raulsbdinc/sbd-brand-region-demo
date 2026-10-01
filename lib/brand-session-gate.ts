@@ -56,6 +56,37 @@ export function clearBrandPending<T extends Record<string, unknown>>(user: T): T
   return rest as T
 }
 
+/** Positive proof that THIS storefront's brand+region enrollment was verified
+ *  server-side for the session. Absence (including any session minted before
+ *  this claim existed) means "not verified" — the gate fails closed. */
+export const BRAND_VERIFIED_CLAIM = "sbd_brand_verified"
+
+export function brandScopeKey(market: string, brand: string): string {
+  return `${market}:${brand}`
+}
+
+/** Stamp a session user as verified for this market+brand. Only call this
+ *  after a server-side check that the account holds this brand's password. */
+export function brandVerifiedUser<T extends Record<string, unknown>>(
+  user: T,
+  market: string,
+  brand: string,
+): T {
+  if (!brandAccessEnforced(market)) return user
+  return { ...clearBrandPending(user), [BRAND_VERIFIED_CLAIM]: brandScopeKey(market, brand) }
+}
+
+export function isBrandVerified(
+  user: Record<string, unknown> | null | undefined,
+  market: string,
+  brand: string,
+): boolean {
+  return (
+    !isBrandPending(user) &&
+    user?.[BRAND_VERIFIED_CLAIM] === brandScopeKey(market, brand)
+  )
+}
+
 function isAllowedWhilePending(pathname: string): boolean {
   return PENDING_ALLOWED_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),
@@ -76,14 +107,17 @@ export const GOOGLE_LINK_COMPLETE_PATH = "/api/account/identities/google/complet
 
 export function decideBrandSessionGate(input: {
   market: string
+  /** This storefront's brand — the verified stamp must match market+brand. */
+  brand: string
   user: Record<string, unknown> | null | undefined
   pathname: string
   /** A verified, unexpired Google-link handoff cookie is present. */
   linkIntent?: boolean
 }): BrandSessionGateDecision {
-  const { market, user, pathname, linkIntent = false } = input
+  const { market, brand, user, pathname, linkIntent = false } = input
   if (!brandAccessEnforced(market)) return { action: "allow" }
-  if (!isBrandPending(user)) return { action: "allow" }
+  if (!user) return { action: "allow" }
+  if (isBrandVerified(user, market, brand)) return { action: "allow" }
   if (isAllowedWhilePending(pathname) || isStaticAsset(pathname)) {
     return { action: "allow" }
   }
