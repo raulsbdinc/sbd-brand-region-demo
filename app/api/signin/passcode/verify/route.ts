@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
   const creds = resolvePasswordlessCreds(cookieHeader)
   if (!creds) return fail()
 
-  // EU brand passcode: the code proves mailbox ownership only. The bridge
+  // EU/UK brand passcode: the code proves mailbox ownership only. The bridge
   // checks the handoff's brand, consumes the code at the IdP (single-use),
   // re-resolves the brand canonical fresh, and links ONLY a provably new,
   // unowned email|… stub minted by this challenge. It never deletes or
