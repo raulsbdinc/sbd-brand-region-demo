@@ -428,15 +428,16 @@ test("Model 1/2 shared with a provider-less identity qualifies the PATCH id", ()
 // --- New-password policy + submit gating ------------------------------------
 
 test("validateNewPassword enforces length + character classes", () => {
-  assert.equal(validateNewPassword("short1A").ok, false) // 7 chars
-  assert.equal(validateNewPassword("alllowercase1").ok, false) // no upper
-  assert.equal(validateNewPassword("ALLUPPERCASE1").ok, false) // no lower
-  assert.equal(validateNewPassword("NoNumbersHere").ok, false) // no digit
-  assert.equal(validateNewPassword("GoodPass1").ok, true)
+  assert.equal(validateNewPassword("Short!a").ok, false) // 7 chars
+  assert.equal(validateNewPassword("alllowercase1!").ok, false) // no upper
+  assert.equal(validateNewPassword("ALLUPPERCASE1!").ok, false) // no lower
+  assert.equal(validateNewPassword("NoSpecialHere1").ok, false) // no special
+  assert.equal(validateNewPassword("NoDigits!Here").ok, true) // digit is optional
+  assert.equal(validateNewPassword("Maple!ab").ok, true)
 })
 
 test("canSubmitPasswordChange gates on all four rules (mismatch, reuse, policy, presence)", () => {
-  const base = { current: "OldPass1", next: "NewPass1", confirm: "NewPass1" }
+  const base = { current: "OldPass1", next: "NewPass!a", confirm: "NewPass!a" }
   assert.equal(canSubmitPasswordChange(base), true)
   // missing current
   assert.equal(canSubmitPasswordChange({ ...base, current: "" }), false)
@@ -447,7 +448,7 @@ test("canSubmitPasswordChange gates on all four rules (mismatch, reuse, policy, 
   )
   // new == current (no-op change)
   assert.equal(
-    canSubmitPasswordChange({ current: "NewPass1", next: "NewPass1", confirm: "NewPass1" }),
+    canSubmitPasswordChange({ current: "NewPass!a", next: "NewPass!a", confirm: "NewPass!a" }),
     false,
   )
   // new fails policy

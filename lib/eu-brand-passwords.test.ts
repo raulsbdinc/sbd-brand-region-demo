@@ -37,19 +37,20 @@ test("FR/DE minimum length is 8, and the guidance says so", () => {
   }
 })
 
-test("FR/DE true boundary: 7 characters rejected, 8 lowercase accepted (before any code is sent)", () => {
+test("FR/DE true boundary: 7 characters rejected, valid 8 without a digit accepted (before any code is sent)", () => {
   for (const m of ["fr", "de"]) {
-    const r7 = validateRegistrationPassword("abcdefg", ["jane@example.com"], m)
+    const r7 = validateRegistrationPassword("Jane!ab", ["jane@example.com"], m)
     assert.equal(r7.ok, false, `${m}: 7 chars must fail`)
     assert.deepEqual(r7.failures, ["At least 8 characters"])
-    const r8 = validateRegistrationPassword("abcdefgh", ["jane@example.com"], m)
-    assert.equal(r8.ok, true, `${m}: 8 lowercase chars must pass`)
+    const r8 = validateRegistrationPassword("Jane!abc", ["jane@example.com"], m)
+    assert.equal(r8.ok, true, `${m}: valid 8 chars with a name substring must pass`)
   }
 })
 
-test("FR/DE keep no character-class rule and the 72-byte cap", () => {
+test("FR/DE use the same class rule as UK and the 72-byte cap", () => {
   assert.equal(validateRegistrationPassword("Abcdef1!", [], "fr").ok, true)
-  assert.equal(validateRegistrationPassword("a".repeat(73), [], "de").ok, false)
+  assert.equal(validateRegistrationPassword("abcdefgh", [], "fr").ok, false)
+  assert.equal(validateRegistrationPassword("Aa!" + "a".repeat(70), [], "de").ok, false)
 })
 
 // --- DeWalt shared across FR and DE ----------------------------------------

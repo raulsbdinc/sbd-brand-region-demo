@@ -1,6 +1,6 @@
 // CIAM-16 regression (live on PR71/abdb602): the FR/DE drawer said "At least N
 // characters. Any mix…" and the browser accepted N lowercase characters, but
-// POST /api/registration/brand answered 400 "At least 3 of: lowercase,
+// POST /api/registration/brand answered 400 "(historical) At least 3 of: lowercase,
 // uppercase…" because the brand executors hardcoded the UK policy. These tests
 // drive the SAME server executors the routes call (with a fake Auth0 tenant)
 // on the precise minimum-length lowercase case, prove the client gate agrees, and pin the
@@ -21,8 +21,9 @@ import {
 import { brandRegionNotice } from "./brand-region-notice.ts"
 import type { Auth0User } from "./auth0-management.ts"
 
+const EIGHT_VALID = "Maple!ab"
 const EIGHT_LOWER = "abcdefgh"
-const SEVEN_LOWER = "abcdefg"
+const SEVEN_VALID = "Maple!a"
 
 function fakeTenant() {
   const users = new Map<string, Auth0User>()
@@ -81,13 +82,13 @@ for (const site of [
 ] as const) {
   const label = `${site.brand} ${site.market.toUpperCase()}`
 
-  test(`${label}: guidance, client gate and server create agree on exactly 8 lowercase`, async () => {
+  test(`${label}: guidance, client gate and server create agree on exactly 8 characters with no digit`, async () => {
     assert.equal(
       passwordRequirementsText(site.market),
-      "At least 8 characters. Any mix of letters, numbers, spaces and symbols is fine.",
+      "At least 8 characters, with at least one uppercase letter, one lowercase letter and one special character (such as ! @ # ? or %). Numbers are optional.",
     )
     const email = `ciam16-${site.brand}-${site.market}@mailinator.com`
-    assert.equal(validateRegistrationPassword(EIGHT_LOWER, [email], site.market).ok, true)
+    assert.equal(validateRegistrationPassword(EIGHT_VALID, [email], site.market).ok, true)
 
     const t = fakeTenant()
     const outcome = await executeBrandRegistration(
@@ -95,19 +96,19 @@ for (const site of [
         connectionKey: site.key,
         connectionName: site.conn,
         email,
-        password: EIGHT_LOWER,
+        password: EIGHT_VALID,
         brand: site.brand,
         market: site.market,
       },
       t.deps,
     )
     assert.equal(outcome.ok, true, JSON.stringify(outcome))
-    assert.deepEqual(t.created, [{ connection: site.conn, email, password: EIGHT_LOWER }])
+    assert.deepEqual(t.created, [{ connection: site.conn, email, password: EIGHT_VALID }])
   })
 
   test(`${label}: 7 characters is rejected by client AND server with zero tenant writes`, async () => {
     const email = `ciam16-short-${site.brand}-${site.market}@mailinator.com`
-    const client = validateRegistrationPassword(SEVEN_LOWER, [email], site.market)
+    const client = validateRegistrationPassword(SEVEN_VALID, [email], site.market)
     assert.equal(client.ok, false)
     assert.deepEqual(client.failures, ["At least 8 characters"])
 
@@ -117,7 +118,7 @@ for (const site of [
         connectionKey: site.key,
         connectionName: site.conn,
         email,
-        password: SEVEN_LOWER,
+        password: SEVEN_VALID,
         brand: site.brand,
         market: site.market,
       },
@@ -128,23 +129,23 @@ for (const site of [
   })
 }
 
-test("FR second-brand link (Stanley under existing DeWalt primary) accepts 8 lowercase", async () => {
+test("FR second-brand link (Stanley under existing DeWalt primary) accepts 8 characters with no digit", async () => {
   const t = fakeTenant()
   const email = "ciam16-link@mailinator.com"
   const first = await executeBrandRegistration(
-    { connectionKey: "dewalt", connectionName: "sbd-emea-dewalt", email, password: EIGHT_LOWER, brand: "dewalt", market: "fr" },
+    { connectionKey: "dewalt", connectionName: "sbd-emea-dewalt", email, password: EIGHT_VALID, brand: "dewalt", market: "fr" },
     t.deps,
   )
   assert.equal(first.ok, true)
   const primaryUserId = (first as { primaryUserId: string }).primaryUserId
   const link = await executeBrandLink(
-    { primaryUserId, connectionKey: "stanley", connectionName: "sbd-emea-stanley", email, password: "zyxwvuts", brand: "stanley", market: "fr" },
+    { primaryUserId, connectionKey: "stanley", connectionName: "sbd-emea-stanley", email, password: "Zyxw!uts", brand: "stanley", market: "fr" },
     t.deps,
   )
   assert.equal(link.ok, true, JSON.stringify(link))
 })
 
-test("UK keeps 3-of-4: 8 lowercase is rejected by the UK policy", async () => {
+test("8 lowercase only is rejected on UK too (same rule everywhere)", async () => {
   const t = fakeTenant()
   const outcome = await executeBrandRegistration(
     { connectionKey: "dewalt", connectionName: "sbd-demo-dewalt", email: "uk@mailinator.com", password: EIGHT_LOWER, brand: "dewalt", market: "uk" },
