@@ -1,9 +1,9 @@
-// CIAM-16 regression (live on PR71/abdb602): the FR/DE drawer said "At least 15
-// characters. Any mix…" and the browser accepted 15 lowercase characters, but
+// CIAM-16 regression (live on PR71/abdb602): the FR/DE drawer said "At least N
+// characters. Any mix…" and the browser accepted N lowercase characters, but
 // POST /api/registration/brand answered 400 "At least 3 of: lowercase,
 // uppercase…" because the brand executors hardcoded the UK policy. These tests
 // drive the SAME server executors the routes call (with a fake Auth0 tenant)
-// on the precise 15-lowercase case, prove the client gate agrees, and pin the
+// on the precise minimum-length lowercase case, prove the client gate agrees, and pin the
 // route wiring so a route can't silently fall back to the UK rule again.
 
 import { test } from "node:test"
@@ -21,8 +21,8 @@ import {
 import { brandRegionNotice } from "./brand-region-notice.ts"
 import type { Auth0User } from "./auth0-management.ts"
 
-const FIFTEEN_LOWER = "abcdefghijklmno"
-const FOURTEEN_LOWER = "abcdefghijklmn"
+const EIGHT_LOWER = "abcdefgh"
+const SEVEN_LOWER = "abcdefg"
 
 function fakeTenant() {
   const users = new Map<string, Auth0User>()
@@ -81,13 +81,13 @@ for (const site of [
 ] as const) {
   const label = `${site.brand} ${site.market.toUpperCase()}`
 
-  test(`${label}: guidance, client gate and server create agree on exactly 15 lowercase`, async () => {
+  test(`${label}: guidance, client gate and server create agree on exactly 8 lowercase`, async () => {
     assert.equal(
       passwordRequirementsText(site.market),
-      "At least 15 characters. Any mix of letters, numbers, spaces and symbols is fine.",
+      "At least 8 characters. Any mix of letters, numbers, spaces and symbols is fine.",
     )
     const email = `ciam16-${site.brand}-${site.market}@mailinator.com`
-    assert.equal(validateRegistrationPassword(FIFTEEN_LOWER, [email], site.market).ok, true)
+    assert.equal(validateRegistrationPassword(EIGHT_LOWER, [email], site.market).ok, true)
 
     const t = fakeTenant()
     const outcome = await executeBrandRegistration(
@@ -95,21 +95,21 @@ for (const site of [
         connectionKey: site.key,
         connectionName: site.conn,
         email,
-        password: FIFTEEN_LOWER,
+        password: EIGHT_LOWER,
         brand: site.brand,
         market: site.market,
       },
       t.deps,
     )
     assert.equal(outcome.ok, true, JSON.stringify(outcome))
-    assert.deepEqual(t.created, [{ connection: site.conn, email, password: FIFTEEN_LOWER }])
+    assert.deepEqual(t.created, [{ connection: site.conn, email, password: EIGHT_LOWER }])
   })
 
-  test(`${label}: 14 characters is rejected by client AND server with zero tenant writes`, async () => {
+  test(`${label}: 7 characters is rejected by client AND server with zero tenant writes`, async () => {
     const email = `ciam16-short-${site.brand}-${site.market}@mailinator.com`
-    const client = validateRegistrationPassword(FOURTEEN_LOWER, [email], site.market)
+    const client = validateRegistrationPassword(SEVEN_LOWER, [email], site.market)
     assert.equal(client.ok, false)
-    assert.deepEqual(client.failures, ["At least 15 characters"])
+    assert.deepEqual(client.failures, ["At least 8 characters"])
 
     const t = fakeTenant()
     const outcome = await executeBrandRegistration(
@@ -117,37 +117,37 @@ for (const site of [
         connectionKey: site.key,
         connectionName: site.conn,
         email,
-        password: FOURTEEN_LOWER,
+        password: SEVEN_LOWER,
         brand: site.brand,
         market: site.market,
       },
       t.deps,
     )
-    assert.deepEqual(outcome, { ok: false, status: 400, error: "At least 15 characters." })
+    assert.deepEqual(outcome, { ok: false, status: 400, error: "At least 8 characters." })
     assert.equal(t.created.length, 0)
   })
 }
 
-test("FR second-brand link (Stanley under existing DeWalt primary) accepts 15 lowercase", async () => {
+test("FR second-brand link (Stanley under existing DeWalt primary) accepts 8 lowercase", async () => {
   const t = fakeTenant()
   const email = "ciam16-link@mailinator.com"
   const first = await executeBrandRegistration(
-    { connectionKey: "dewalt", connectionName: "sbd-emea-dewalt", email, password: FIFTEEN_LOWER, brand: "dewalt", market: "fr" },
+    { connectionKey: "dewalt", connectionName: "sbd-emea-dewalt", email, password: EIGHT_LOWER, brand: "dewalt", market: "fr" },
     t.deps,
   )
   assert.equal(first.ok, true)
   const primaryUserId = (first as { primaryUserId: string }).primaryUserId
   const link = await executeBrandLink(
-    { primaryUserId, connectionKey: "stanley", connectionName: "sbd-emea-stanley", email, password: "zyxwvutsrqponml", brand: "stanley", market: "fr" },
+    { primaryUserId, connectionKey: "stanley", connectionName: "sbd-emea-stanley", email, password: "zyxwvuts", brand: "stanley", market: "fr" },
     t.deps,
   )
   assert.equal(link.ok, true, JSON.stringify(link))
 })
 
-test("UK is unchanged: 15 lowercase is still rejected by the UK policy", async () => {
+test("UK keeps 3-of-4: 8 lowercase is rejected by the UK policy", async () => {
   const t = fakeTenant()
   const outcome = await executeBrandRegistration(
-    { connectionKey: "dewalt", connectionName: "sbd-demo-dewalt", email: "uk@mailinator.com", password: FIFTEEN_LOWER, brand: "dewalt", market: "uk" },
+    { connectionKey: "dewalt", connectionName: "sbd-demo-dewalt", email: "uk@mailinator.com", password: EIGHT_LOWER, brand: "dewalt", market: "uk" },
     t.deps,
   )
   assert.equal(outcome.ok, false)

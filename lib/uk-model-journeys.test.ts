@@ -38,49 +38,49 @@ import {
 
 // --- UK password policy: 15 characters + 3 of 4 --------------------------------
 
-test("UK minimum is 15 characters; FR/DE follow the sbd-emea policy (15); default stays 8", () => {
-  assert.equal(UK_PASSWORD_MIN_LENGTH, 15)
-  assert.equal(passwordMinLength("uk"), 15)
-  assert.equal(passwordMinLength("fr"), 15)
-  assert.equal(passwordMinLength("de"), 15)
+test("Minimum is 8 characters on UK, FR and DE", () => {
+  assert.equal(UK_PASSWORD_MIN_LENGTH, 8)
+  assert.equal(passwordMinLength("uk"), 8)
+  assert.equal(passwordMinLength("fr"), 8)
+  assert.equal(passwordMinLength("de"), 8)
   assert.equal(passwordMinLength(), PASSWORD_MIN_LENGTH)
 })
 
-test("UK guidance text says 15 characters and 3 of 4 classes", () => {
+test("UK guidance text says 8 characters and 3 of 4 classes, never 15", () => {
   const uk = passwordRequirementsText("uk")
-  assert.match(uk, /At least 15 characters/)
+  assert.match(uk, /At least 8 characters/)
   assert.match(uk, /at least 3 of/)
-  assert.doesNotMatch(uk, /At least 8/)
-  assert.match(passwordRequirementsText("fr"), /At least 15 characters/)
+  assert.doesNotMatch(uk, /15/)
+  assert.match(passwordRequirementsText("fr"), /At least 8 characters/)
 })
 
-test("UK pre-OTP validation rejects the exact 8-char repro shape", () => {
-  const r = validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "uk")
-  assert.equal(r.ok, false)
-  assert.ok(r.failures.includes("At least 15 characters"))
-  // FR/DE (CIAM-16): the real EU policy also rejects it.
-  assert.equal(validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "fr").ok, false)
+test("UK pre-OTP boundary: 7 characters rejected, valid 8 characters accepted", () => {
+  const r7 = validateRegistrationPassword("Abcde1!", ["someone@mailinator.com"], "uk")
+  assert.equal(r7.ok, false)
+  assert.deepEqual(r7.failures, ["At least 8 characters"])
+  assert.equal(validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "uk").ok, true)
 })
 
-test("UK keeps the 3-of-4 app-side safeguard even at 15+ chars", () => {
-  assert.equal(validateRegistrationPassword("abcdefghijklmnopq", [], "uk").ok, false)
-  assert.equal(validateRegistrationPassword("abcdefghijklmnoP1", [], "uk").ok, true)
+test("UK keeps the 3-of-4 and no-email-fragment safeguards at 8 characters", () => {
+  assert.equal(validateRegistrationPassword("abcdefgh", [], "uk").ok, false)
+  assert.equal(validateRegistrationPassword("abcdefG1", [], "uk").ok, true)
+  assert.equal(validateRegistrationPassword("Janedoe1!", ["janedoe@example.com"], "uk").ok, false)
 })
 
-test("UK checklist shows 15-char, 3-of-4 and email rows", () => {
+test("UK checklist shows 8-char, 3-of-4 and email rows", () => {
   const rows = ukPasswordChecklist("short", ["x@y.com"])
-  assert.equal(rows[0].text, "At least 15 characters")
+  assert.equal(rows[0].text, "At least 8 characters")
   assert.equal(rows[0].ok, false)
   assert.equal(rows.length, 3)
 })
 
 test("recovery reset submit is gated by the UK policy before the code is used", () => {
   const base = { code: "123456", market: "uk", email: "a@b.com" }
-  assert.equal(canSubmitRecoveryReset({ ...base, next: "Abcdef1!", confirm: "Abcdef1!" }), false)
-  const good = "Stronger-Pass-2026"
-  assert.equal(canSubmitRecoveryReset({ ...base, next: good, confirm: good }), true)
-  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "Abcdef1!", confirm: "Abcdef1!" }), false)
-  const euMin = "a".repeat(15)
+  assert.equal(canSubmitRecoveryReset({ ...base, next: "Abcde1!", confirm: "Abcde1!" }), false)
+  assert.equal(canSubmitRecoveryReset({ ...base, next: "abcdefgh", confirm: "abcdefgh" }), false)
+  assert.equal(canSubmitRecoveryReset({ ...base, next: "Abcdef1!", confirm: "Abcdef1!" }), true)
+  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "abcdefg", confirm: "abcdefg" }), false)
+  const euMin = "a".repeat(8)
   assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: euMin, confirm: euMin }), true)
 })
 

@@ -389,7 +389,7 @@ export interface PasswordPolicyResult {
 
 /**
  * Validate a candidate new password. EU/FR/DE (default): the baseline below.
- * UK: the UK connection policy (15 characters, 3 of 4 classes, no email
+ * UK: the UK connection policy (8 characters, 3 of 4 classes, no email
  * fragment) from lib/password-policy, so resets and profile changes match
  * signup and Auth0.
  */
