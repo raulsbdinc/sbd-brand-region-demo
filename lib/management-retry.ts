@@ -41,3 +41,88 @@ function headerSeconds(value: string | null): number | null {
 function clampDelay(ms: number): number {
   return Math.min(Math.max(ms, 200), 5000)
 }
+
+/** Longest a single provider HTTP attempt may take before it is aborted. */
+export const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000
+
+/**
+ * Total time one Management call may spend, including 429 waits, when the
+ * caller supplies no tighter deadline. Keeps background reads bounded too.
+ */
+export const MANAGEMENT_DEFAULT_CALL_BUDGET_MS = 30_000
+
+/** A provider attempt that ran out of time, or a deadline already spent. */
+export class ProviderTimeoutError extends Error {
+  readonly status = 504
+  constructor(message: string) {
+    super(message)
+    this.name = "ProviderTimeoutError"
+  }
+}
+
+/**
+ * Run one provider request with a hard time limit. The signal passed to `send`
+ * is aborted when the limit is reached, and the returned promise rejects with
+ * ProviderTimeoutError even if `send` ignores the signal.
+ */
+export async function sendBounded(
+  send: (signal: AbortSignal) => Promise<Response>,
+  timeoutMs: number,
+): Promise<Response> {
+  if (timeoutMs <= 0) throw new ProviderTimeoutError("Provider deadline already reached")
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      // Reject first so the race settles with the timeout, not the abort error.
+      reject(new ProviderTimeoutError(`Provider request exceeded ${timeoutMs} ms`))
+      controller.abort()
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([send(controller.signal), timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Send a Management request, waiting out a 429 only while the wait still fits
+ * inside the deadline. Returns the final Response (ok, a non-retryable error,
+ * or the last 429 when no further wait fits). Throws ProviderTimeoutError when
+ * the deadline is spent or an attempt times out; network errors propagate.
+ */
+export async function sendWithRetryBudget(params: {
+  send: (signal: AbortSignal) => Promise<Response>
+  /** Absolute epoch-ms deadline. Defaults to now + MANAGEMENT_DEFAULT_CALL_BUDGET_MS. */
+  deadlineAt?: number
+  attemptTimeoutMs?: number
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}): Promise<Response> {
+  const now = params.now ?? Date.now
+  const sleep =
+    params.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const attemptTimeoutMs = params.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS
+  const deadlineAt = params.deadlineAt ?? now() + MANAGEMENT_DEFAULT_CALL_BUDGET_MS
+
+  for (let attempt = 0; ; attempt++) {
+    const remaining = deadlineAt - now()
+    if (remaining <= 0) throw new ProviderTimeoutError("Provider deadline already reached")
+
+    const res = await sendBounded(params.send, Math.min(attemptTimeoutMs, remaining))
+    if (res.ok) return res
+
+    const delay = managementRetryDelayMs({
+      status: res.status,
+      attempt,
+      retryAfterHeader: res.headers.get("retry-after"),
+      rateLimitResetHeader: res.headers.get("x-ratelimit-reset"),
+      nowMs: now(),
+    })
+    if (delay === null || now() + delay >= deadlineAt) return res
+
+    await res.body?.cancel().catch(() => {})
+    await sleep(delay)
+  }
+}
