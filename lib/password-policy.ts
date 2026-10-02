@@ -17,24 +17,21 @@
 // Kept import-free so lib/model-registration (unit-tested under node:test) and
 // the client registration form both validate identically.
 
-// UK: the sbd-uk-temp1 DB connections (sbd-demo-per-email, sbd-demo-stanley,
-// sbd-demo-dewalt) all enforce password_options.complexity.min_length = 15
-// (read-only GET /api/v2/connections, 29 Sep). An 8-character password passed
-// the old 8-char check, cost the customer an OTP, and was then rejected by
-// Auth0. The 3-of-4 character-class and no-email-fragment rules are kept as
-// app-side safeguards on top of Auth0's length rule. EU/FR/DE keep 8.
+// Model 4 POC minimum length is 8 on ALL five storefronts (EU and UK). The
+// Auth0 brand connections must carry the same min_length (sbd-emea-dewalt /
+// sbd-emea-stanley on sbd-emea-temp1, sbd-demo-dewalt / sbd-demo-stanley on
+// sbd-uk-temp1); otherwise a password the form accepts is rejected by Auth0
+// after a one-time code has already been used.
+// UK: the 3-of-4 character-class and no-email-fragment rules stay as app-side
+// safeguards on top of the length rule.
 export const PASSWORD_MIN_LENGTH = 8
-export const UK_PASSWORD_MIN_LENGTH = 15
+export const UK_PASSWORD_MIN_LENGTH = 8
 export const PASSWORD_MAX_LENGTH = 128
 
-// EU (FR/DE, CIAM-16): the sbd-emea-temp1 DB connections (sbd-emea,
-// sbd-emea-dewalt, sbd-emea-stanley) enforce password_options.complexity
-// { min_length: 15, character_types: [], max_length_exceeded: "error" } with the
-// dictionary, history and personal-data rules all inactive (read via the
-// Management API, 1 Oct). So the ONLY rules are: at least 15 characters, and
-// at most 72 bytes (Auth0's bcrypt input limit, rejected rather than
-// truncated). Guidance and validation must say exactly that — nothing more.
-export const EU_PASSWORD_MIN_LENGTH = 15
+// EU (FR/DE, CIAM-16): no required character classes; the only rules are a
+// minimum length and at most 72 bytes (Auth0's bcrypt input limit, rejected
+// rather than truncated). Guidance and validation must say exactly that.
+export const EU_PASSWORD_MIN_LENGTH = 8
 export const EU_PASSWORD_MAX_BYTES = 72
 
 /** Whether this market runs the EU (sbd-emea-temp1) connection policy. */

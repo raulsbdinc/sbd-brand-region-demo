@@ -28,28 +28,28 @@ const stanley = { brand: names.stanley, shared: names.shared }
 
 // --- CIAM-16: guidance, client validation and Auth0 policy agree ------------
 
-test("FR/DE minimum length is the real sbd-emea policy (15), and the guidance says so", () => {
-  assert.equal(EU_PASSWORD_MIN_LENGTH, 15)
+test("FR/DE minimum length is 8, and the guidance says so", () => {
+  assert.equal(EU_PASSWORD_MIN_LENGTH, 8)
   for (const m of ["fr", "de"]) {
-    assert.equal(passwordMinLength(m), 15)
-    assert.match(passwordRequirementsText(m), /At least 15 characters/)
-    assert.doesNotMatch(passwordRequirementsText(m), /At least 8/)
+    assert.equal(passwordMinLength(m), 8)
+    assert.match(passwordRequirementsText(m), /At least 8 characters/)
+    assert.doesNotMatch(passwordRequirementsText(m), /15/)
   }
 })
 
-test("FR/DE true boundary: 14 characters rejected, 15 accepted (before any code is sent)", () => {
+test("FR/DE true boundary: 7 characters rejected, 8 lowercase accepted (before any code is sent)", () => {
   for (const m of ["fr", "de"]) {
-    const r14 = validateRegistrationPassword("Abcdefghij12!x", ["jane@example.com"], m)
-    assert.equal(r14.ok, false, `${m}: 14 chars must fail`)
-    assert.ok(r14.failures.includes("At least 15 characters"))
-    const r15 = validateRegistrationPassword("Abcdefghij12!xy", ["jane@example.com"], m)
-    assert.equal(r15.ok, true, `${m}: 15 chars must pass`)
+    const r7 = validateRegistrationPassword("abcdefg", ["jane@example.com"], m)
+    assert.equal(r7.ok, false, `${m}: 7 chars must fail`)
+    assert.deepEqual(r7.failures, ["At least 8 characters"])
+    const r8 = validateRegistrationPassword("abcdefgh", ["jane@example.com"], m)
+    assert.equal(r8.ok, true, `${m}: 8 lowercase chars must pass`)
   }
 })
 
-test("FR/DE reject the previously-advertised 8-character shape", () => {
-  assert.equal(validateRegistrationPassword("Abcdef1!", [], "fr").ok, false)
-  assert.equal(validateRegistrationPassword("Abcdef1!", [], "de").ok, false)
+test("FR/DE keep no character-class rule and the 72-byte cap", () => {
+  assert.equal(validateRegistrationPassword("Abcdef1!", [], "fr").ok, true)
+  assert.equal(validateRegistrationPassword("a".repeat(73), [], "de").ok, false)
 })
 
 // --- DeWalt shared across FR and DE ----------------------------------------
@@ -121,8 +121,8 @@ test("per-email is never enabled outside UK, even if the flag is forced on", () 
 
 // --- UK regression ---------------------------------------------------------
 
-test("UK: 15-char policy, per-brand by default, and the Model 4 brand gate IS enforced", () => {
-  assert.equal(passwordMinLength("uk"), 15)
+test("UK: 8-char policy, per-brand by default, and the Model 4 brand gate IS enforced", () => {
+  assert.equal(passwordMinLength("uk"), 8)
   assert.equal(drawerSignupFlow("uk", "dewalt", undefined, false), "per-brand")
   assert.equal(drawerSignupFlow("uk", "stanley", undefined, false), "per-brand")
   assert.equal(brandAccessEnforced("uk"), true)

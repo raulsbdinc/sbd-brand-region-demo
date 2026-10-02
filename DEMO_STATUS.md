@@ -58,8 +58,8 @@ not the UK tenant.
 | `sbd-emea-dewalt` (DeWalt Europe) | `con_vUYiMvZKqQcj8RS6` | DeWalt FR `L9LW9i6o…`, DeWalt DE `jXsDL8Kc…`, runtime Management app `H2HvXE…` |
 | `sbd-emea-stanley` (Stanley Europe) | `con_63h8fslyRhfnebma` | Stanley FR `pqKEUgMu…`, runtime Management app `H2HvXE…` |
 
-Both brand connections copy `sbd-emea`'s password policy: a minimum of 15
-characters, no required character classes in Auth0, and `disable_signup: true`. All
+Both brand connections use a minimum of 8 characters (Model 4 POC policy;
+the Auth0 `min_length` must match), no required character classes in Auth0, and `disable_signup: true`. All
 accounts are created server-side through Management, so nobody can sign up for a
 brand from Auth0's own pages.
 
@@ -69,10 +69,12 @@ brand from Auth0's own pages.
 `AUTH0_STANLEY_CONNECTION=sbd-emea-stanley`,
 `AUTH0_STANLEY_CONNECTION_ID=con_63h8fslyRhfnebma`.
 
-**Password guidance (CIAM-16).** FR/DE show the same rule Auth0 enforces: at least
-15 characters, plus the app-side 3-of-4 character safeguard that UK already uses.
-The form checks the password before any code is emailed. Auth0's policy was not
-changed. The boundary is tested: 14 characters is rejected and 15 passes.
+**Password guidance (CIAM-16).** FR/DE show the rule Auth0 enforces: at least
+8 characters, any mix of characters (no class rule), at most 72 bytes. UK requires
+at least 8 characters plus the app-side 3-of-4 class and no-email-fragment
+safeguards. The form and the server check the password before any code is
+emailed. The boundary is tested on every market: 7 characters is rejected and 8
+passes (8 lowercase on FR/DE; 8 with 3 of 4 classes on UK).
 
 **Behaviour.**
 - **DeWalt across markets:** an account created on DeWalt FR can sign in on DeWalt
@@ -127,7 +129,7 @@ changed. The boundary is tested: 14 characters is rejected and 15 passes.
   shared-account line. Checked live on 1 October on DeWalt FR, DeWalt DE and
   Stanley FR. The old unmounted `components/recovery-center.tsx` ("Recover your SBD
   account") was deleted so it can't be remounted by mistake. Password policy
-  (15 characters minimum, plus the 3-of-4 character safeguard) is unchanged. The
+  is now 8 characters minimum on all five storefronts (UK adds the 3-of-4 safeguard). The
   legacy carve-out above is also unchanged: a legacy `sbd-emea` customer resets
   the shared password, and a brand-only customer resets only that brand's password.
 

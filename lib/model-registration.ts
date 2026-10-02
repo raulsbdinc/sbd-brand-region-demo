@@ -75,7 +75,7 @@ function readBindingsFrom(user: Auth0User): CredentialBinding[] {
 /**
  * Pre-check against THIS market's connection policy. Model 3 (per-email) is
  * UK-only, so it defaults to "uk". Model 4 (per-brand) also runs on FR/DE, whose
- * sbd-emea-temp1 connections only require 15 characters (CIAM-16) — the brand
+ * sbd-emea-temp1 connections only require a minimum length (CIAM-16) — the brand
  * executors therefore pass the real SITE_MARKET so the server never applies the
  * UK 3-of-4 rule to an EU password the EU guidance accepts.
  */
