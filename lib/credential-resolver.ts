@@ -38,6 +38,7 @@ import {
   isManagementConfigured,
   linkIdentity,
   type Auth0User,
+  type ManagementCallOptions,
 } from "@/lib/auth0-management"
 import {
   snapshotPasswordlessSubs,
@@ -124,13 +125,14 @@ function luceneEscapePhrase(value: string): string {
  */
 async function gatherCandidates(
   email: string,
+  opts?: ManagementCallOptions,
 ): Promise<{ candidates: Auth0User[]; ok: boolean }> {
   const typed = email.toLowerCase()
   const q = luceneEscapePhrase(typed)
   const query = `app_metadata.login_alias_emails:"${q}" OR app_metadata.credential_bindings.email:"${q}" OR email:"${q}"`
   const results = await Promise.allSettled([
-    getUsersByEmail(typed),
-    searchUsersStrict(query),
+    getUsersByEmail(typed, opts),
+    searchUsersStrict(query, opts),
   ])
   return aggregateCandidateLookups(results)
 }
@@ -221,11 +223,12 @@ export type SigninCredentialResolution =
 export async function resolveSigninCredential(
   email: string,
   siteBrand: BrandId = SITE_BRAND,
+  opts?: ManagementCallOptions,
 ): Promise<SigninCredentialResolution> {
   if (!isManagementConfigured()) return { kind: "unavailable" }
 
   const normalized = normalizeEmail(email)
-  const { candidates: users, ok } = await gatherCandidates(email)
+  const { candidates: users, ok } = await gatherCandidates(email, opts)
 
   // Incomplete candidate set (a lookup failed while Management is configured):
   // we cannot prove a case-3/4 credential or collision is absent → fail closed.

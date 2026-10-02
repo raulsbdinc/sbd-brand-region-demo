@@ -20,7 +20,7 @@
 // a client component.
 
 import "server-only"
-import { managementRetryDelayMs } from "@/lib/management-retry"
+import { ProviderTimeoutError, sendWithRetryBudget } from "@/lib/management-retry"
 import {
   CONNECTION_KEY_META,
   connectionKeyForName,
@@ -85,7 +85,7 @@ export { ManagementError }
  * Fetch (and cache) a Management API access token via client_credentials.
  * Tokens are cached in module memory until shortly before they expire.
  */
-async function getMgmtToken(): Promise<string> {
+async function getMgmtToken(signal?: AbortSignal): Promise<string> {
   if (!isManagementConfigured()) {
     throw new ManagementError("Management API is not configured", 501)
   }
@@ -106,6 +106,7 @@ async function getMgmtToken(): Promise<string> {
     }),
     // Never cache the token request at the fetch layer.
     cache: "no-store",
+    signal,
   })
 
   if (!res.ok) {
@@ -140,49 +141,54 @@ async function safeText(res: Response): Promise<string> {
  * Low-level authenticated request to the Management API. Returns parsed JSON
  * (or `null` for empty 204 responses). Throws `ManagementError` on non-2xx.
  */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+export interface ManagementCallOptions {
+  /** Absolute epoch-ms deadline. Interactive routes pass one shared deadline. */
+  deadlineAt?: number
 }
 
 async function mgmtFetch<T>(
   pathAndQuery: string,
   init?: RequestInit,
+  opts?: ManagementCallOptions,
 ): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    const token = await getMgmtToken()
-    const res = await fetch(`https://${tenantDomain()}/api/v2${pathAndQuery}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        ...(init?.headers ?? {}),
+  let res: Response
+  try {
+    res = await sendWithRetryBudget({
+      deadlineAt: opts?.deadlineAt,
+      send: async (signal) => {
+        const token = await getMgmtToken(signal)
+        return fetch(`https://${tenantDomain()}/api/v2${pathAndQuery}`, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            ...(init?.headers ?? {}),
+          },
+          cache: "no-store",
+          signal,
+        })
       },
-      cache: "no-store",
     })
-
-    if (!res.ok) {
-      const delay = managementRetryDelayMs({
-        status: res.status,
-        attempt,
-        retryAfterHeader: res.headers.get("retry-after"),
-        rateLimitResetHeader: res.headers.get("x-ratelimit-reset"),
-        nowMs: Date.now(),
-      })
-      const detail = await safeText(res)
-      if (delay !== null) {
-        await sleep(delay)
-        continue
-      }
-      throw new ManagementError(
-        `Management API ${init?.method ?? "GET"} ${pathAndQuery} failed (${res.status}). ${detail}`,
-        res.status,
-      )
-    }
-
-    if (res.status === 204) return null as T
-    const text = await res.text()
-    return (text ? JSON.parse(text) : null) as T
+  } catch (err) {
+    if (err instanceof ManagementError) throw err
+    const timedOut = err instanceof ProviderTimeoutError
+    throw new ManagementError(
+      `Management API ${init?.method ?? "GET"} ${pathAndQuery} ${timedOut ? "timed out" : "network failure"}.`,
+      timedOut ? 504 : 502,
+    )
   }
+
+  if (!res.ok) {
+    const detail = await safeText(res)
+    throw new ManagementError(
+      `Management API ${init?.method ?? "GET"} ${pathAndQuery} failed (${res.status}). ${detail}`,
+      res.status,
+    )
+  }
+
+  if (res.status === 204) return null as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : null) as T
 }
 
 // --- Typed surface used by the account routes ------------------------------
@@ -242,9 +248,14 @@ export function getUser(userId: string): Promise<Auth0User> {
  * Returns every matching record; a caller filtering to a single account should
  * disambiguate (e.g. prefer a blocked user, or require a unique match).
  */
-export function getUsersByEmail(email: string): Promise<Auth0User[]> {
+export function getUsersByEmail(
+  email: string,
+  opts?: ManagementCallOptions,
+): Promise<Auth0User[]> {
   return mgmtFetch<Auth0User[]>(
     `/users-by-email?email=${encodeURIComponent(email.toLowerCase())}`,
+    undefined,
+    opts,
   )
 }
 
@@ -261,9 +272,14 @@ export function getUsersByEmail(email: string): Promise<Auth0User[]> {
  * than mistake a failed lookup for "no matching account". Callers that want the
  * legacy neutral-empty behavior should use {@link searchUsers} instead.
  */
-export function searchUsersStrict(query: string): Promise<Auth0User[]> {
+export function searchUsersStrict(
+  query: string,
+  opts?: ManagementCallOptions,
+): Promise<Auth0User[]> {
   return mgmtFetch<Auth0User[]>(
     `/users?search_engine=v3&q=${encodeURIComponent(query)}`,
+    undefined,
+    opts,
   )
 }
 

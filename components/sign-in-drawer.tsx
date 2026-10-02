@@ -75,6 +75,23 @@ const INPUT_CLASS =
 // (>=8 chars, >=3 of the 4 char types, and no part of the email address).
 const PASSWORD_REQUIREMENTS = passwordRequirementsText(SITE_MARKET)
 
+// The server bounds its own provider work well below this, so the browser only
+// gives up if the network itself stalls.
+const SIGNIN_CLIENT_TIMEOUT_MS = 20_000
+const SIGNIN_REFUSED_MESSAGE = "That email or password isn't right."
+const SIGNIN_UNAVAILABLE_MESSAGE =
+  "We couldn't reach the sign-in service. Please try again in a moment."
+
+/** Shows a credential refusal only for 401; throttling and outages keep their own copy. */
+async function signinErrorMessage(res: Response): Promise<string> {
+  if (res.status === 401) return SIGNIN_REFUSED_MESSAGE
+  try {
+    const body = (await res.json()) as { error?: unknown }
+    if (typeof body.error === "string" && body.error) return body.error
+  } catch {}
+  return SIGNIN_UNAVAILABLE_MESSAGE
+}
+
 /** Mask a local part for display: `jane@x.com` -> `j•••@x.com`. */
 function maskEmail(value: string): string {
   const [local, domain] = value.split("@")
@@ -335,9 +352,10 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
+        signal: AbortSignal.timeout(SIGNIN_CLIENT_TIMEOUT_MS),
       })
       if (!res.ok) {
-        setPasswordError("That email or password isn't right.")
+        setPasswordError(await signinErrorMessage(res))
         setSigningIn(false)
         return
       }
@@ -349,7 +367,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       // the profile route paints with the new session on first paint.
       window.location.assign("/profile")
     } catch {
-      setPasswordError("That email or password isn't right.")
+      setPasswordError(SIGNIN_UNAVAILABLE_MESSAGE)
       setSigningIn(false)
     }
   }
@@ -472,6 +490,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
+        signal: AbortSignal.timeout(SIGNIN_CLIENT_TIMEOUT_MS),
       })
       if (signIn.ok) {
         // Full document navigation, same reasoning as the password path: tears
