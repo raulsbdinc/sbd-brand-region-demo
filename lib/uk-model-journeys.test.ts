@@ -46,12 +46,12 @@ test("Minimum is 8 characters on UK, FR and DE", () => {
   assert.equal(passwordMinLength(), PASSWORD_MIN_LENGTH)
 })
 
-test("UK guidance text says 8 characters and 3 of 4 classes, never 15", () => {
+test("UK guidance text is the shared rule: 8 characters, upper, lower, special, never 15 or 3-of-4", () => {
   const uk = passwordRequirementsText("uk")
   assert.match(uk, /At least 8 characters/)
-  assert.match(uk, /at least 3 of/)
-  assert.doesNotMatch(uk, /15/)
-  assert.match(passwordRequirementsText("fr"), /At least 8 characters/)
+  assert.match(uk, /Numbers are optional/)
+  assert.doesNotMatch(uk, /15|3 of/)
+  assert.equal(passwordRequirementsText("fr"), uk)
 })
 
 test("UK pre-OTP boundary: 7 characters rejected, valid 8 characters accepted", () => {
@@ -61,27 +61,28 @@ test("UK pre-OTP boundary: 7 characters rejected, valid 8 characters accepted", 
   assert.equal(validateRegistrationPassword("Abcdef1!", ["someone@mailinator.com"], "uk").ok, true)
 })
 
-test("UK keeps the 3-of-4 and no-email-fragment safeguards at 8 characters", () => {
+test("UK applies the shared rule: no 3-of-4, no email-fragment restriction", () => {
   assert.equal(validateRegistrationPassword("abcdefgh", [], "uk").ok, false)
-  assert.equal(validateRegistrationPassword("abcdefG1", [], "uk").ok, true)
-  assert.equal(validateRegistrationPassword("Janedoe1!", ["janedoe@example.com"], "uk").ok, false)
+  assert.equal(validateRegistrationPassword("abcdefG1", [], "uk").ok, false) // no special
+  assert.equal(validateRegistrationPassword("Maple!ab", [], "uk").ok, true) // no digit
+  assert.equal(validateRegistrationPassword("Janedoe1!", ["janedoe@example.com"], "uk").ok, true)
 })
 
-test("UK checklist shows 8-char, 3-of-4 and email rows", () => {
+test("UK checklist shows the four shared rows", () => {
   const rows = ukPasswordChecklist("short", ["x@y.com"])
   assert.equal(rows[0].text, "At least 8 characters")
   assert.equal(rows[0].ok, false)
-  assert.equal(rows.length, 3)
+  assert.equal(rows.length, 4)
 })
 
-test("recovery reset submit is gated by the UK policy before the code is used", () => {
+test("recovery reset submit is gated by the shared policy before the code is used", () => {
   const base = { code: "123456", market: "uk", email: "a@b.com" }
   assert.equal(canSubmitRecoveryReset({ ...base, next: "Abcde1!", confirm: "Abcde1!" }), false)
   assert.equal(canSubmitRecoveryReset({ ...base, next: "abcdefgh", confirm: "abcdefgh" }), false)
-  assert.equal(canSubmitRecoveryReset({ ...base, next: "Abcdef1!", confirm: "Abcdef1!" }), true)
-  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "abcdefg", confirm: "abcdefg" }), false)
-  const euMin = "a".repeat(8)
-  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: euMin, confirm: euMin }), true)
+  assert.equal(canSubmitRecoveryReset({ ...base, next: "Maple!ab", confirm: "Maple!ab" }), true)
+  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "Maple!a", confirm: "Maple!a" }), false)
+  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "abcdefgh", confirm: "abcdefgh" }), false)
+  assert.equal(canSubmitRecoveryReset({ ...base, market: "fr", next: "Maple!ab", confirm: "Maple!ab" }), true)
 })
 
 // --- Explicit Model 3 / Model 4 choice on BOTH UK sites ----------------------

@@ -11,6 +11,7 @@ import {
   type Auth0User,
 } from "@/lib/auth0-management"
 import { validateSharedSignupRequest } from "@/lib/account-model"
+import { validatePassword } from "@/lib/password-policy"
 
 export const runtime = "nodejs"
 
@@ -121,6 +122,16 @@ export async function POST(request: NextRequest) {
   if (contract !== null) {
     return NextResponse.json<{ status: SignupStatus }>(
       { status: "error" },
+      { status: 400 },
+    )
+  }
+
+  // Shared password rule, checked before any tenant call so a direct request
+  // that bypasses the form is refused the same way. Decided from the password
+  // alone, so it reveals nothing about whether the email exists.
+  if (!validatePassword(password).ok) {
+    return NextResponse.json<{ status: SignupStatus }>(
+      { status: "weak_password" },
       { status: 400 },
     )
   }

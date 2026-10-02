@@ -374,41 +374,21 @@ export function planPasswordUpdate(
 }
 
 // --- New-password policy (pure, client + server share it) -------------------
-// A minimal, honest local policy that mirrors Auth0's common "good" policy
-// (≥8 chars, at least one lower, one upper, and one number). The tenant remains
-// the authority — a create/update still fails closed on the server if Auth0's
-// configured policy is stricter — but validating locally lets us disable submit
-// and show inline guidance without a noisy round-trip.
+// Delegates to the single shared rule in lib/password-policy (8+ characters,
+// lowercase, uppercase, special, numbers optional, at most 72 bytes), so
+// recovery and account-page changes match signup, enrollment and Auth0.
 
-export const PASSWORD_MIN_LENGTH = 8
+export { PASSWORD_MIN_LENGTH } from "./password-policy.ts"
+export type { PasswordPolicyResult } from "./password-policy.ts"
+import type { PasswordPolicyResult } from "./password-policy.ts"
 
-export interface PasswordPolicyResult {
-  ok: boolean
-  failures: string[]
-}
-
-/**
- * Validate a candidate new password. EU/FR/DE (default): the baseline below.
- * UK: the UK connection policy (8 characters, 3 of 4 classes, no email
- * fragment) from lib/password-policy, so resets and profile changes match
- * signup and Auth0.
- */
+/** Validate a candidate new password. Same rule on every market. */
 export function validateNewPassword(
   password: string,
   market?: string,
   emails: string[] = [],
 ): PasswordPolicyResult {
-  if (market === "uk") return validateRegistrationPassword(password, emails, "uk")
-  // FR/DE: exactly the sbd-emea-temp1 connection policy (CIAM-16).
-  if (market === "fr" || market === "de") return validateRegistrationPassword(password, emails, market)
-  const failures: string[] = []
-  if (password.length < PASSWORD_MIN_LENGTH) {
-    failures.push(`At least ${PASSWORD_MIN_LENGTH} characters`)
-  }
-  if (!/[a-z]/.test(password)) failures.push("A lowercase letter")
-  if (!/[A-Z]/.test(password)) failures.push("An uppercase letter")
-  if (!/[0-9]/.test(password)) failures.push("A number")
-  return { ok: failures.length === 0, failures }
+  return validateRegistrationPassword(password, emails, market)
 }
 
 /**

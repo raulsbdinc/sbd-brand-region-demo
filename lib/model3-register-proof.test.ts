@@ -115,7 +115,7 @@ test("single email: correct code is consumed, then exactly one account is create
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
       boundEmails: boundFrom(mint({ primaryEmail: "a@example.com" })),
-      identities: [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" }],
+      identities: [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" }],
       codes: { "a@example.com": "111111" },
     },
     { ...deps, verifyPasscode: v.verifyPasscode },
@@ -134,8 +134,8 @@ test("two emails: both codes consumed, two users created + linked + bound", asyn
       connectionName: "sbd-demo-per-email",
       boundEmails: boundFrom(mint({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" })),
       identities: [
-        { email: "a@example.com", password: "Str0ngPassword01", role: "primary" },
-        { email: "b@example.com", password: "Str0ngPassword02", role: "secondary" },
+        { email: "a@example.com", password: "Str0ng!Password01", role: "primary" },
+        { email: "b@example.com", password: "Str0ng!Password02", role: "secondary" },
       ],
       codes: { "a@example.com": "111111", "b@example.com": "222222" },
     },
@@ -153,16 +153,16 @@ test("two emails: both codes consumed, two users created + linked + bound", asyn
 // minting an orphan passwordless stub. The pre-consumption gate must fail
 // closed with 400 and ZERO consumption / ZERO mutation.
 
-test("policy-violating password (email user-info token) → 400 and ZERO codes consumed", async () => {
+test("policy-violating password (no special character) → 400 and ZERO codes consumed", async () => {
   const { deps, calls } = makeMgmt()
-  const email = "sbdciam-uk1-2309@example.com" // local part tokenises to include "uk1"
+  const email = "sbdciam-uk1-2309@example.com"
   const v = makeVerifier({ [email]: "111111" })
   const out = await registerModel3WithProof(
     {
       connectionKey: "per-email",
       connectionName: "sbd-demo-per-email",
       boundEmails: boundFrom(mint({ primaryEmail: email })),
-      identities: [{ email, password: "Ciam!2026UK1Alpha", role: "primary" }], // contains "uk1"
+      identities: [{ email, password: "Ciam2026UK1Alpha", role: "primary" }], // no special character
       codes: { [email]: "111111" },
     },
     { ...deps, verifyPasscode: v.verifyPasscode },
@@ -220,7 +220,7 @@ async function expectNoMutation(
 test("no cookie → null binding → 403, no create and no code consumed", async () => {
   const { out, attempts } = await expectNoMutation(
     boundFrom(undefined),
-    [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" }],
+    [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" }],
     { "a@example.com": "111111" },
     { "a@example.com": "111111" },
   )
@@ -238,7 +238,7 @@ test("tampered payload (add an email) → bad signature → null binding → no 
 
   const { attempts } = await expectNoMutation(
     boundFrom(forged),
-    [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" }],
+    [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" }],
     { "a@example.com": "111111" },
     { "a@example.com": "111111" },
   )
@@ -250,7 +250,7 @@ test("expired binding → null → no create and no code consumed", async () => 
   const cookie = mint({ primaryEmail: "a@example.com" }, mintedAt)
   const { attempts } = await expectNoMutation(
     boundFrom(cookie, mintedAt + TTL + 1),
-    [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" }],
+    [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" }],
     { "a@example.com": "111111" },
     { "a@example.com": "111111" },
   )
@@ -261,7 +261,7 @@ test("binding minted for a DIFFERENT purpose → null → no create", async () =
   const other = signHandoff("model3-complete", { primaryEmail: "a@example.com" }, SECRET)
   await expectNoMutation(
     boundFrom(other),
-    [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" }],
+    [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" }],
     { "a@example.com": "111111" },
     { "a@example.com": "111111" },
   )
@@ -271,7 +271,7 @@ test("binding signed with the WRONG secret → null → no create", async () => 
   const bad = signHandoff(PURPOSE, { primaryEmail: "a@example.com" }, "attacker-secret")
   await expectNoMutation(
     boundFrom(bad),
-    [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" }],
+    [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" }],
     { "a@example.com": "111111" },
     { "a@example.com": "111111" },
   )
@@ -283,8 +283,8 @@ test("bound a@+b@ but identities a@+evil@ (swap) → mismatch, no create, no con
   const { out, attempts } = await expectNoMutation(
     boundFrom(mint({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" })),
     [
-      { email: "a@example.com", password: "Str0ngPassword01", role: "primary" },
-      { email: "evil@example.com", password: "Str0ngPassword02", role: "secondary" },
+      { email: "a@example.com", password: "Str0ng!Password01", role: "primary" },
+      { email: "evil@example.com", password: "Str0ng!Password02", role: "secondary" },
     ],
     { "a@example.com": "111111", "evil@example.com": "222222" },
     { "a@example.com": "111111", "b@example.com": "222222" },
@@ -299,8 +299,8 @@ test("pair with the second code missing → 400, ZERO codes consumed, no create"
   const { out, attempts } = await expectNoMutation(
     boundFrom(mint({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" })),
     [
-      { email: "a@example.com", password: "Str0ngPassword01", role: "primary" },
-      { email: "b@example.com", password: "Str0ngPassword02", role: "secondary" },
+      { email: "a@example.com", password: "Str0ng!Password01", role: "primary" },
+      { email: "b@example.com", password: "Str0ng!Password02", role: "secondary" },
     ],
     { "a@example.com": "111111" }, // b@ code omitted
     { "a@example.com": "111111", "b@example.com": "222222" },
@@ -323,8 +323,8 @@ test("pair with a wrong second code → 401 needResend, no create/link/bind", as
       connectionName: "sbd-demo-per-email",
       boundEmails: boundFrom(mint({ primaryEmail: "a@example.com", secondaryEmail: "b@example.com" })),
       identities: [
-        { email: "a@example.com", password: "Str0ngPassword01", role: "primary" },
-        { email: "b@example.com", password: "Str0ngPassword02", role: "secondary" },
+        { email: "a@example.com", password: "Str0ng!Password01", role: "primary" },
+        { email: "b@example.com", password: "Str0ng!Password02", role: "secondary" },
       ],
       codes: { "a@example.com": "111111", "b@example.com": "000000" }, // wrong b@
     },
@@ -353,7 +353,7 @@ test("replaying the same consumed code creates nothing the second time", async (
     connectionKey: "per-email" as const,
     connectionName: "sbd-demo-per-email",
     boundEmails: boundFrom(cookie),
-    identities: [{ email: "a@example.com", password: "Str0ngPassword01", role: "primary" as const }],
+    identities: [{ email: "a@example.com", password: "Str0ng!Password01", role: "primary" as const }],
     codes: { "a@example.com": "111111" },
   }
   const depsWithProof = { ...deps, verifyPasscode: v.verifyPasscode }

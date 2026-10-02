@@ -1,73 +1,82 @@
-// SHARED REGISTRATION PASSWORD POLICY (pure, framework-free)
-// ==========================================================
-// Mirrors the UK custom DB connections' password policy so the browser and the
-// server agree EXACTLY on what will be accepted — and a customer is never told
-// "choose a stronger password" only AFTER we've already consumed their one-time
-// code at the IdP (which mints a passwordless proof stub). Two rules a naive
-// "length only" check misses, both enforced by the connection:
+// SHARED PASSWORD POLICY (pure, framework-free)
+// =============================================
+// ONE rule for every storefront (DeWalt FR, DeWalt DE, Stanley FR, DeWalt UK,
+// Stanley UK) and every password-creating or password-changing path (signup,
+// second-brand enrollment, recovery/reset, account-page change):
 //
-//   * strength ("good") — at least 8 characters AND at least 3 of the 4
-//     character classes (lowercase, uppercase, digit, special).
-//   * user-info — the password must not contain a recognisable part of the
-//     email address (Auth0's PasswordNoUserInfoError). This is what rejected
-//     "Ciam!2026UK1A" for sbdciam-uk1-2309@… : the email's local part contains
-//     the token "uk1", which appears in the password. "good" strength alone
-//     never predicts it, so the form couldn't warn — hence this shared check.
+//   * at least 8 characters
+//   * at least one lowercase letter (a-z)
+//   * at least one uppercase letter (A-Z)
+//   * at least one special character (ASCII punctuation or space)
+//   * numbers are optional
+//   * at most 72 bytes (Auth0's bcrypt input limit; rejected, never truncated)
 //
-// Kept import-free so lib/model-registration (unit-tested under node:test) and
-// the client registration form both validate identically.
+// Nothing else: no email/name/personal-content rule, no dictionary, no
+// three-of-four classes, no sequential/identical-character rule, no trimming.
+//
+// The four Auth0 brand connections carry the SAME rule natively through the
+// Flexible Password Policy (password_options.complexity: min_length 8,
+// character_types [lowercase, uppercase, special], character_type_rule "all",
+// max_length_exceeded "error"; profile_data and dictionary inactive), set by
+// scripts/auth0-migration/set-password-policy.mjs. The app validates first so
+// the form and every API route refuse a bad password before any one-time code
+// is consumed; Auth0 is the second, independent enforcement layer.
+//
+// Character sets match Auth0's password-sheriff definitions so the app never
+// accepts something the provider would refuse. Other characters (accents,
+// emoji, digits) are always allowed; they just don't count as a required class.
+//
+// Login never calls this module: existing customers keep signing in with the
+// passwords they already have.
 
-// Model 4 POC minimum length is 8 on ALL five storefronts (EU and UK). The
-// Auth0 brand connections must carry the same min_length (sbd-emea-dewalt /
-// sbd-emea-stanley on sbd-emea-temp1, sbd-demo-dewalt / sbd-demo-stanley on
-// sbd-uk-temp1); otherwise a password the form accepts is rejected by Auth0
-// after a one-time code has already been used.
-// UK: the 3-of-4 character-class and no-email-fragment rules stay as app-side
-// safeguards on top of the length rule.
 export const PASSWORD_MIN_LENGTH = 8
-export const UK_PASSWORD_MIN_LENGTH = 8
-export const PASSWORD_MAX_LENGTH = 128
+export const PASSWORD_MAX_BYTES = 72
 
-// EU (FR/DE, CIAM-16): no required character classes; the only rules are a
-// minimum length and at most 72 bytes (Auth0's bcrypt input limit, rejected
-// rather than truncated). Guidance and validation must say exactly that.
-export const EU_PASSWORD_MIN_LENGTH = 8
-export const EU_PASSWORD_MAX_BYTES = 72
+// Kept as aliases so existing imports keep compiling; the rule is identical.
+export const UK_PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH
+export const EU_PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH
+export const EU_PASSWORD_MAX_BYTES = PASSWORD_MAX_BYTES
 
-/** Whether this market runs the EU (sbd-emea-temp1) connection policy. */
-export function isEuPolicyMarket(market?: string): boolean {
-  return market === "fr" || market === "de"
-}
+const LOWERCASE = /[a-z]/
+const UPPERCASE = /[A-Z]/
+const SPECIAL = /[ !"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/
 
-/** Minimum password length for a market's database connections. */
-export function passwordMinLength(market?: string): number {
-  if (isEuPolicyMarket(market)) return EU_PASSWORD_MIN_LENGTH
-  return market === "uk" ? UK_PASSWORD_MIN_LENGTH : PASSWORD_MIN_LENGTH
+export interface PasswordRule {
+  id: "length" | "lowercase" | "uppercase" | "special" | "max-bytes"
+  /** Customer-safe description of the rule. */
+  text: string
+  test: (password: string) => boolean
 }
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).length
 }
 
-/** Human-readable policy for a market, shown as helper text and in errors. */
-export function passwordRequirementsText(market?: string): string {
-  if (isEuPolicyMarket(market)) {
-    return `At least ${EU_PASSWORD_MIN_LENGTH} characters. Any mix of letters, numbers, spaces and symbols is fine.`
-  }
-  return `At least ${passwordMinLength(market)} characters, including at least 3 of: lowercase, uppercase, numbers, and special characters. Don't include part of your email address.`
+export const PASSWORD_RULES: readonly PasswordRule[] = [
+  { id: "length", text: `At least ${PASSWORD_MIN_LENGTH} characters`, test: (p) => p.length >= PASSWORD_MIN_LENGTH },
+  { id: "lowercase", text: "At least one lowercase letter", test: (p) => LOWERCASE.test(p) },
+  { id: "uppercase", text: "At least one uppercase letter", test: (p) => UPPERCASE.test(p) },
+  { id: "special", text: "At least one special character, such as ! @ # ? or %", test: (p) => SPECIAL.test(p) },
+  {
+    id: "max-bytes",
+    text: `No longer than ${PASSWORD_MAX_BYTES} bytes`,
+    test: (p) => utf8ByteLength(p) <= PASSWORD_MAX_BYTES,
+  },
+]
+
+/** The same text everywhere, shown as helper text and in errors. */
+export const PASSWORD_REQUIREMENTS_TEXT = `At least ${PASSWORD_MIN_LENGTH} characters, with at least one uppercase letter, one lowercase letter and one special character (such as ! @ # ? or %). Numbers are optional.`
+export const UK_PASSWORD_REQUIREMENTS_TEXT = PASSWORD_REQUIREMENTS_TEXT
+
+/** Minimum length. The market argument is accepted for compatibility only. */
+export function passwordMinLength(_market?: string): number {
+  return PASSWORD_MIN_LENGTH
 }
 
-function euPasswordFailures(pw: string): string[] {
-  const failures: string[] = []
-  if (pw.length < EU_PASSWORD_MIN_LENGTH) failures.push(`At least ${EU_PASSWORD_MIN_LENGTH} characters`)
-  if (utf8ByteLength(pw) > EU_PASSWORD_MAX_BYTES) failures.push("Too long — use a shorter password")
-  return failures
+/** Requirements text. Identical on every market. */
+export function passwordRequirementsText(_market?: string): string {
+  return PASSWORD_REQUIREMENTS_TEXT
 }
-
-/** Default (EU/FR/DE) policy text. */
-export const PASSWORD_REQUIREMENTS_TEXT = passwordRequirementsText()
-/** UK policy text. */
-export const UK_PASSWORD_REQUIREMENTS_TEXT = passwordRequirementsText("uk")
 
 export interface PasswordPolicyResult {
   ok: boolean
@@ -75,107 +84,43 @@ export interface PasswordPolicyResult {
   failures: string[]
 }
 
-/**
- * Recognisable parts of an email that a password must not contain — the whole
- * local part plus its delimiter-split tokens, lowercased, each at least 3
- * characters. The domain is intentionally excluded to avoid false positives on
- * common providers (e.g. a password containing "gmail").
- */
-export function emailUserInfoTokens(email: string): string[] {
-  const e = typeof email === "string" ? email.trim().toLowerCase() : ""
-  if (!e) return []
-  const at = e.indexOf("@")
-  const local = at >= 0 ? e.slice(0, at) : e
-  const tokens = new Set<string>()
-  const add = (s: string) => {
-    if (s.length >= 3) tokens.add(s)
-  }
-  add(local)
-  for (const part of local.split(/[^a-z0-9]+/)) add(part)
-  return [...tokens]
-}
-
-/** Count how many of the four character classes are present. */
-function characterClasses(pw: string): number {
-  return (
-    (/[a-z]/.test(pw) ? 1 : 0) +
-    (/[A-Z]/.test(pw) ? 1 : 0) +
-    (/[0-9]/.test(pw) ? 1 : 0) +
-    (/[^a-zA-Z0-9]/.test(pw) ? 1 : 0)
-  )
-}
-
-/**
- * Validate a candidate registration password against the connection policy,
- * additionally rejecting any password that embeds a user-info token from one of
- * `emails`. Pure: the same call decides the form's submit-enable state, the
- * form's inline error, and the server's pre-consumption gate.
- */
-export function validateRegistrationPassword(
-  password: unknown,
-  emails: string[] = [],
-  market?: string,
-): PasswordPolicyResult {
+/** Validate a new password against the single shared rule. */
+export function validatePassword(password: unknown): PasswordPolicyResult {
   const pw = typeof password === "string" ? password : ""
-  if (isEuPolicyMarket(market)) {
-    const failures = euPasswordFailures(pw)
-    return { ok: failures.length === 0, failures }
-  }
-  const failures: string[] = []
-  const min = passwordMinLength(market)
-  if (pw.length < min) failures.push(`At least ${min} characters`)
-  if (pw.length > PASSWORD_MAX_LENGTH) failures.push(`No more than ${PASSWORD_MAX_LENGTH} characters`)
-  if (characterClasses(pw) < 3) {
-    failures.push("At least 3 of: lowercase, uppercase, numbers, special characters")
-  }
-  if (pw) {
-    const lower = pw.toLowerCase()
-    const tokens = emails.flatMap(emailUserInfoTokens)
-    if (tokens.some((t) => lower.includes(t))) {
-      failures.push("Must not contain part of your email address")
-    }
-  }
+  const failures = PASSWORD_RULES.filter((r) => !r.test(pw)).map((r) => r.text)
   return { ok: failures.length === 0, failures }
 }
 
 /**
- * UK checklist rows for new-password forms (profile change, set brand
- * password, set second-email password) — the same rules as
- * validateRegistrationPassword(pw, emails, "uk"), one row per rule.
+ * Compatibility entry point used by registration, enrollment and account
+ * routes. Emails and market are ignored on purpose: the rule is the same
+ * everywhere and never blocks email or name substrings.
  */
-export function ukPasswordChecklist(
-  password: string,
-  emails: string[] = [],
-): { ok: boolean; text: string }[] {
-  const pw = typeof password === "string" ? password : ""
-  const lower = pw.toLowerCase()
-  const tokens = emails.flatMap(emailUserInfoTokens)
-  return [
-    { ok: pw.length >= UK_PASSWORD_MIN_LENGTH, text: `At least ${UK_PASSWORD_MIN_LENGTH} characters` },
-    { ok: characterClasses(pw) >= 3, text: "At least 3 of: lowercase, uppercase, numbers, special characters" },
-    { ok: pw.length > 0 && !tokens.some((t) => lower.includes(t)), text: "Doesn't include part of your email address" },
-  ]
+export function validateRegistrationPassword(
+  password: unknown,
+  _emails: string[] = [],
+  _market?: string,
+): PasswordPolicyResult {
+  return validatePassword(password)
 }
 
 /**
- * Checklist rows for a new-password form on this market: the UK connection
- * rules on UK, and the unchanged EU/FR/DE baseline everywhere else.
+ * Checklist rows for a new-password field. The byte-limit row only appears
+ * once it is actually exceeded, so normal guidance stays to four rows.
  */
 export function newPasswordChecklist(
   password: string,
-  market?: string,
-  emails: string[] = [],
+  _market?: string,
+  _emails: string[] = [],
 ): { ok: boolean; text: string }[] {
-  if (market === "uk") return ukPasswordChecklist(password, emails)
   const pw = typeof password === "string" ? password : ""
-  if (isEuPolicyMarket(market)) {
-    const rows = [{ ok: pw.length >= EU_PASSWORD_MIN_LENGTH, text: `At least ${EU_PASSWORD_MIN_LENGTH} characters` }]
-    if (utf8ByteLength(pw) > EU_PASSWORD_MAX_BYTES) rows.push({ ok: false, text: "Too long — use a shorter password" })
-    return rows
-  }
-  return [
-    { ok: pw.length >= PASSWORD_MIN_LENGTH, text: `At least ${PASSWORD_MIN_LENGTH} characters` },
-    { ok: /[a-z]/.test(pw) && /[A-Z]/.test(pw), text: "Upper and lowercase letters" },
-    { ok: /[0-9]/.test(pw), text: "At least one number" },
-  ]
+  return PASSWORD_RULES.filter((r) => r.id !== "max-bytes" || !r.test(pw)).map((r) => ({
+    ok: pw.length > 0 && r.test(pw),
+    text: r.text,
+  }))
+}
+
+/** Alias kept for existing UK callers; same rows as newPasswordChecklist. */
+export function ukPasswordChecklist(password: string, emails: string[] = []): { ok: boolean; text: string }[] {
+  return newPasswordChecklist(password, "uk", emails)
 }

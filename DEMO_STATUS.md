@@ -58,8 +58,8 @@ not the UK tenant.
 | `sbd-emea-dewalt` (DeWalt Europe) | `con_vUYiMvZKqQcj8RS6` | DeWalt FR `L9LW9i6o…`, DeWalt DE `jXsDL8Kc…`, runtime Management app `H2HvXE…` |
 | `sbd-emea-stanley` (Stanley Europe) | `con_63h8fslyRhfnebma` | Stanley FR `pqKEUgMu…`, runtime Management app `H2HvXE…` |
 
-Both brand connections use a minimum of 8 characters (Model 4 POC policy;
-the Auth0 `min_length` must match), no required character classes in Auth0, and `disable_signup: true`. All
+Both brand connections use the single demo password rule (see "Password policy"
+below) in Auth0's flexible password options, and `disable_signup: true`. All
 accounts are created server-side through Management, so nobody can sign up for a
 brand from Auth0's own pages.
 
@@ -69,12 +69,30 @@ brand from Auth0's own pages.
 `AUTH0_STANLEY_CONNECTION=sbd-emea-stanley`,
 `AUTH0_STANLEY_CONNECTION_ID=con_63h8fslyRhfnebma`.
 
-**Password guidance (CIAM-16).** FR/DE show the rule Auth0 enforces: at least
-8 characters, any mix of characters (no class rule), at most 72 bytes. UK requires
-at least 8 characters plus the app-side 3-of-4 class and no-email-fragment
-safeguards. The form and the server check the password before any code is
-emailed. The boundary is tested on every market: 7 characters is rejected and 8
-passes (8 lowercase on FR/DE; 8 with 3 of 4 classes on UK).
+**Password policy (all five storefronts, EU and UK).** One rule, defined once in
+`lib/password-policy.ts`:
+- At least 8 characters.
+- At least one lowercase letter, one uppercase letter and one special character.
+- Numbers are optional. This is not a three-of-four rule.
+- Longer passwords and any extra characters are accepted, up to Auth0's
+  72-byte technical limit. Passwords are never trimmed.
+- No email, name, personal-content or dictionary checks.
+
+Enforcement layers:
+- **App (authoritative for the exact rule):** every password-creating or
+  -changing route calls the shared validator server-side before any Auth0 write
+  or code consumption: `/api/signup`, `/api/registration/brand` (first and second
+  brand), the brand proof/link routes, recovery reset, and account password
+  change. The forms use the same validator and show the same guidance.
+- **Auth0 (aligned, defense in depth):** the four brand connections
+  (`sbd-emea-dewalt`, `sbd-emea-stanley`, `sbd-demo-dewalt`, `sbd-demo-stanley`)
+  use flexible `password_options.complexity` with `min_length: 8`,
+  `character_types: [lowercase, uppercase, special]`, `character_type_rule: all`,
+  profile-data and dictionary checks off, and over-long passwords rejected
+  rather than truncated. Applied by `scripts/auth0-migration/set-password-policy.mjs`,
+  which preserves every other connection option and verifies readback.
+- **Login is not affected:** existing passwords keep authenticating. The rule
+  applies only when a password is created or changed.
 
 **Behaviour.**
 - **DeWalt across markets:** an account created on DeWalt FR can sign in on DeWalt
@@ -129,7 +147,7 @@ passes (8 lowercase on FR/DE; 8 with 3 of 4 classes on UK).
   shared-account line. Checked live on 1 October on DeWalt FR, DeWalt DE and
   Stanley FR. The old unmounted `components/recovery-center.tsx` ("Recover your SBD
   account") was deleted so it can't be remounted by mistake. Password policy
-  is now 8 characters minimum on all five storefronts (UK adds the 3-of-4 safeguard). The
+  is the single uniform rule described above on all five storefronts. The
   legacy carve-out above is also unchanged: a legacy `sbd-emea` customer resets
   the shared password, and a brand-only customer resets only that brand's password.
 
