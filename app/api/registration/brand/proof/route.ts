@@ -45,6 +45,8 @@ import {
   PasswordlessError,
 } from "@/lib/auth0-passwordless"
 
+import { preflightBrandProof } from "@/lib/brand-password-preflight"
+
 export const runtime = "nodejs"
 
 interface M4Handoff extends Record<string, unknown> {
@@ -106,18 +108,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "That request isn't valid." }, { status: 400 })
   }
 
-  const method = body.method === "email-code" ? "email-code" : "password"
-  const newPassword = typeof body.newPassword === "string" ? body.newPassword : ""
-  const existingPassword =
-    typeof body.existingPassword === "string" ? body.existingPassword : ""
-  const code = typeof body.code === "string" ? body.code.trim() : ""
-
-  if (!newPassword) {
-    return NextResponse.json(
-      { error: "Choose a password for this brand." },
-      { status: 400 },
-    )
+  // Validate the new brand password (and proof-input presence) before any
+  // lookup, password grant or code verification. A weak password must never
+  // spend the single-use email code or count against the existing credential.
+  const preflight = preflightBrandProof(body)
+  if (!preflight.ok) {
+    return NextResponse.json({ error: preflight.error }, { status: preflight.status })
   }
+  const { method, newPassword, existingPassword, code } = preflight
 
   if (!isManagementConfigured()) {
     return NextResponse.json({ configured: false, reason: "management-not-configured" }, { status: 200 })
