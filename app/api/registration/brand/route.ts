@@ -40,6 +40,8 @@ import {
   mintJourneyToken,
 } from "@/lib/journey-handoff"
 
+import { preflightBrandEntry } from "@/lib/brand-password-preflight"
+
 export const runtime = "nodejs"
 
 function planRejection(reason: Model4RejectReason): NextResponse {
@@ -63,11 +65,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "That request isn't valid." }, { status: 400 })
   }
 
-  const email = typeof body.email === "string" ? body.email.trim() : ""
-  const password = typeof body.password === "string" ? body.password : ""
-  if (!email || !password) {
-    return NextResponse.json({ error: "Enter an email and password." }, { status: 400 })
+  // The proposed brand password is validated before any lookup, so a weak one
+  // is refused for a brand-new email AND for an email with a pending
+  // cross-brand proof, without minting or refreshing that proof's handoff.
+  const preflight = preflightBrandEntry(body)
+  if (!preflight.ok) {
+    return NextResponse.json({ error: preflight.error }, { status: preflight.status })
   }
+  const { email, password } = preflight
 
   // Plan PURELY: validate email, gate to UK, resolve this brand's connection.
   const plan = planModel4Registration(
