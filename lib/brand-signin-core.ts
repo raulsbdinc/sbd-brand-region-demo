@@ -3,6 +3,7 @@
 // Auth0-shaped records in unit tests. The server bridge only gathers records.
 
 import {
+  CONNECTION_KEY_META,
   configuredConnectionKeys,
   connectionKeyForName,
   normalizeEmail,
@@ -16,6 +17,7 @@ import {
   type LinkedDbIdentity,
 } from "./credential-model.ts"
 import { signinFailureResponse, type PasswordGrantOutcome } from "./password-grant-core.ts"
+import { bareUserId, toManagementUserId } from "./password-change.ts"
 import type { BrandId } from "./types"
 
 /** The subset of an Auth0 Management user record this core reads. */
@@ -188,6 +190,112 @@ export function resolveSigninFromUsers(params: {
     binding,
     loginEmail,
     accountId: owner.user_id,
+  }
+}
+
+/** The exact database identity an unauthenticated recovery reset rewrites. */
+export interface RecoveryTargetCore {
+  connectionKey: ConnectionKey
+  connectionName: string
+  connectionId?: string
+  /** Provider-less user_id of the database identity to rewrite. */
+  auth0UserId: string
+  /** The canonical account to PATCH (a linked secondary is reached via `connection`). */
+  managementUserId: string
+  isLinkedSecondary: boolean
+  /** The username that identity actually holds. */
+  email: string
+  label: string
+  brand?: BrandId
+}
+
+/**
+ * Decide which ONE password an unauthenticated "forgot password" may reset for
+ * a mailbox-proven `email` on `siteBrand`. Uses the same candidate facts as
+ * sign-in — including each record's verified login emails — so a verified
+ * address of the canonical customer resets that customer's THIS-brand password
+ * even when the brand was enrolled with their other address. Returns null on
+ * ambiguity (distinct customers claim the email), no backed binding for this
+ * brand, or an unconfigured realm; never another brand, never a fallback.
+ */
+export function resolveRecoveryFromUsers(params: {
+  email: string
+  siteBrand: BrandId
+  users: SigninUserRecord[]
+  names: ConnectionNames
+  ids: Record<ConnectionKey, string | undefined>
+}): RecoveryTargetCore | null {
+  const { names, ids, users } = params
+  const email = normalizeEmail(params.email)
+  if (!email) return null
+
+  const shared = sharedMatchAccountIds(users, email, names.shared)
+  const configuredKeys = configuredConnectionKeys(names)
+  const candidates: CandidateAccount[] = users.map((user) => ({
+    accountId: user.user_id ?? "",
+    bindings: readUserBindings(user),
+    identities: dbIdentitiesOf(user, names),
+    sharedMatch: user.user_id ? shared.has(user.user_id) : false,
+    verifiedLoginEmails: verifiedLoginEmailsOfUser(user),
+  }))
+  const resolution = resolveCredentialFromCandidates({
+    email,
+    siteBrand: params.siteBrand,
+    candidates,
+    configuredKeys,
+  })
+  if (!resolution.ok) return null
+
+  if (resolution.kind === "shared-default") {
+    // Legacy shared reset (unchanged): exactly one owner holding one shared identity.
+    if (!configuredKeys.has("shared") || shared.size !== 1) return null
+    const [ownerId] = [...shared]
+    const owner = users.find((u) => u.user_id === ownerId)
+    if (!owner?.user_id || !names.shared) return null
+    const sharedIds = dbIdentitiesOf(owner, names).filter(
+      (i) => i.connectionKey === "shared" && Boolean(i.userId),
+    )
+    if (sharedIds.length !== 1) return null
+    return {
+      connectionKey: "shared",
+      connectionName: names.shared,
+      connectionId: ids.shared,
+      auth0UserId: sharedIds[0].userId,
+      managementUserId: toManagementUserId(owner.user_id),
+      isLinkedSecondary: bareUserId(sharedIds[0].userId) !== bareUserId(owner.user_id),
+      email: normalizeEmail(owner.email) || email,
+      label: CONNECTION_KEY_META.shared.label,
+    }
+  }
+
+  const { binding, connectionKey } = resolution
+  if (!binding?.auth0UserId) return null
+  const connectionName = names[connectionKey]
+  if (!connectionName) return null
+
+  // The owner is the account that holds THIS binding's identity on THIS realm.
+  const owner = users.find((u) =>
+    dbIdentitiesOf(u, names).some(
+      (i) => i.connectionKey === connectionKey && i.userId === binding.auth0UserId,
+    ),
+  )
+  if (!owner?.user_id) return null
+  const loginEmail = brandIdentityLoginEmail(owner, binding, names)
+  if (!loginEmail) return null
+
+  return {
+    connectionKey,
+    connectionName,
+    connectionId: ids[connectionKey],
+    auth0UserId: binding.auth0UserId,
+    managementUserId: toManagementUserId(owner.user_id),
+    isLinkedSecondary: bareUserId(binding.auth0UserId) !== bareUserId(owner.user_id),
+    email: loginEmail,
+    label: CONNECTION_KEY_META[connectionKey].label,
+    brand:
+      connectionKey === "dewalt" || connectionKey === "stanley"
+        ? (connectionKey as BrandId)
+        : binding.brand,
   }
 }
 
