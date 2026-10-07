@@ -166,7 +166,7 @@ test("unenforced markets stamp nothing and are never gated", () => {
 
 test("wiring: every session minter stamps only after a THIS-brand check", () => {
   const pw = readFileSync(new URL("../app/api/signin/password/route.ts", import.meta.url), "utf8")
-  assert.match(pw, /resolution\.connectionKey === SITE_BRAND\s*\?\s*brandVerifiedUser\(/)
+  assert.match(pw, /outcome\.connectionKey === SITE_BRAND\s*\?\s*brandVerifiedUser\(/)
   const pv = readFileSync(new URL("../app/api/signin/passcode/verify/route.ts", import.meta.url), "utf8")
   assert.match(pv, /handoff\.flow === "database"\s*\?\s*brandVerifiedUser\(/)
   const ps = readFileSync(new URL("../app/api/signin/passcode/start/route.ts", import.meta.url), "utf8")

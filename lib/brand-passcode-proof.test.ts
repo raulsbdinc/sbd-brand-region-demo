@@ -95,17 +95,24 @@ const start = readFileSync(new URL("../app/api/signin/passcode/start/route.ts", 
 const verify = readFileSync(new URL("../app/api/signin/passcode/verify/route.ts", import.meta.url), "utf8")
 
 test("start: brand-resolved EU passcode is sent via the email connection, not /otp/challenge", () => {
-  assert.match(start, /brandProof\s*=[\s\S]*brandScoped[\s\S]*resolution\.kind === "resolved"/)
-  assert.match(start, /if \(brandProof\) \{\s*await startEmailPasscode\(creds, email\)/)
-  assert.match(start, /flow: "brand-proof", email, iat, brand: SITE_BRAND, preExistingPasswordlessSubs/)
+  // Brand storefronts (FR/DE/UK) delegate to the core; the send is the
+  // passwordless email connection, never startDatabaseChallenge.
+  const core = readFileSync(new URL("./passcode-start-core.ts", import.meta.url), "utf8")
+  const brandBranch = start.slice(start.indexOf("export async function POST"), start.indexOf("async function legacyPasscodeStart"))
+  assert.match(brandBranch, /brandAccessEnforced\(SITE_MARKET\) && brandPasscodeUsesMailboxProof\(SITE_MARKET\)/)
+  assert.match(brandBranch, /runBrandPasscodeStart\(/)
+  assert.match(brandBranch, /send: \(email, opts\) => startEmailPasscode\(creds!, email, opts\)/)
+  assert.doesNotMatch(brandBranch, /startDatabaseChallenge/)
+  assert.match(core, /handoff: \{ flow: "brand-proof", email, iat, brand: input\.siteBrand, preExistingPasswordlessSubs \}/)
   // Resend within a valid same-email/brand handoff keeps the ORIGINAL snapshot + iat.
-  assert.match(start, /carryForwardProofSnapshot\(\{[\s\S]*flow: "brand-proof"[\s\S]*brand: SITE_BRAND/)
-  assert.match(start, /carried\?\.preExistingPasswordlessSubs \?\? \(await snapshotPasswordlessSubsFor\(email\)\)/)
+  assert.match(brandBranch, /carryForwardProofSnapshot\(\{[\s\S]*flow: "brand-proof"[\s\S]*brand: SITE_BRAND/)
+  assert.match(core, /const iat = carried\?\.iat \?\? startedAt/)
+  assert.ok(core.indexOf("deps.snapshot(") < core.indexOf("deps.send("))
 })
 
 test("start: passwordless snapshot is taken BEFORE the challenge is sent", () => {
   const iSnap = start.indexOf("snapshotPasswordlessSubsFor(email)")
-  const iSend = start.indexOf("if (brandProof) {")
+  const iSend = start.indexOf("await startEmailPasscode(")
   assert.ok(iSnap > 0 && iSend > iSnap)
 })
 

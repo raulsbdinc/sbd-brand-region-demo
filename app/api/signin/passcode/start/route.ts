@@ -1,14 +1,16 @@
 // POST /api/signin/passcode/start  { email }
 // ===========================================
-// Server-side entry point for passcode sign-in. It resolves — entirely on the
-// server — whether the address is a DATABASE user or takes the PASSWORDLESS
-// flow, sends the code the matching way, and stashes the decision + address +
-// any auth_session in a short-lived httpOnly handoff cookie.
-//
-// The response body is IDENTICAL in every case ({ ok: true }), and stays 200
-// even when sending fails. Nothing about which flow ran, or whether the address
-// exists, is ever returned — otherwise the endpoint would be an email
-// enumeration oracle. All the drawer learns is "a code was sent, go enter it".
+// Brand storefronts (FR, DE, UK: brand access enforced, mailbox proof) run
+// runBrandPasscodeStart (lib/passcode-start-core.ts), which decides BEFORE any
+// send under ONE interactive deadline and reports the outcome truthfully:
+//   200 {ok:true}                              code sent; handoff cookie set
+//   400 {code:"invalid-email"}                 missing or malformed email
+//   404 {code:"not-registered"}                no account for this brand
+//   409 {code:"conflict"}                      distinct customers claim it
+//   429 {code:"throttled"}                     the provider throttled the send
+//   503 {code:"provider-unavailable"}          lookup, snapshot or send failed
+// Only the 200 sends mail and sets a handoff. Other storefronts keep the
+// original non-revealing behavior below, unchanged.
 
 import { NextResponse, type NextRequest } from "next/server"
 import { resolvePasswordlessCreds, startEmailPasscode } from "@/lib/auth0-passwordless"
@@ -30,6 +32,7 @@ import {
   handoffKey,
 } from "@/lib/passcode-handoff"
 import { carryForwardProofSnapshot } from "@/lib/ownership-otp-proof"
+import { runBrandPasscodeStart } from "@/lib/passcode-start-core"
 
 export const runtime = "nodejs"
 
@@ -39,6 +42,53 @@ function generic(): NextResponse {
 }
 
 export async function POST(request: NextRequest) {
+  if (!(brandAccessEnforced(SITE_MARKET) && brandPasscodeUsesMailboxProof(SITE_MARKET))) {
+    return legacyPasscodeStart(request)
+  }
+
+  let body: unknown = null
+  try {
+    body = await request.json()
+  } catch {
+    body = null
+  }
+  const creds = resolvePasswordlessCreds(request.headers.get("cookie"))
+  const priorRaw = request.cookies.get(HANDOFF_COOKIE_NAME)?.value
+
+  const result = await runBrandPasscodeStart(
+    { body, siteBrand: SITE_BRAND, hasCreds: !!creds, handoffTtlSeconds: HANDOFF_TTL_SECONDS },
+    {
+      now: Date.now,
+      resolve: (email, opts) => resolveSigninCredential(email, SITE_BRAND, opts),
+      carryForward: (email, now) =>
+        carryForwardProofSnapshot({
+          priorRaw,
+          key: handoffKey(),
+          flow: "brand-proof",
+          email,
+          brand: SITE_BRAND,
+          now,
+        }),
+      snapshot: (email, opts) => snapshotPasswordlessSubsFor(email, opts),
+      send: (email, opts) => startEmailPasscode(creds!, email, opts),
+    },
+  )
+
+  if (result.status !== 200) {
+    return NextResponse.json(result.body, { status: result.status })
+  }
+  const response = NextResponse.json(result.body)
+  response.cookies.set(HANDOFF_COOKIE_NAME, encodeHandoff(result.handoff), {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: result.maxAgeSeconds,
+  })
+  return response
+}
+
+async function legacyPasscodeStart(request: NextRequest): Promise<NextResponse> {
   let email = ""
   try {
     const body = await request.json()

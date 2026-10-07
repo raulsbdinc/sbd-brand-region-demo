@@ -447,6 +447,69 @@ export interface CandidateAccount {
   bindings: CredentialBinding[]
   identities: LinkedDbIdentity[]
   sharedMatch?: boolean
+  /**
+   * CIAM-21: emails this record PROVABLY owns as login identifiers, built by
+   * {@link verifiedLoginEmailsFor}. A verified alias may sign in to a brand
+   * this same account is already enrolled in. Omitted means "exact binding
+   * email only" (the previous behavior).
+   */
+  verifiedLoginEmails?: string[]
+}
+
+/** One linked identity as seen by {@link verifiedLoginEmailsFor}. */
+export interface LoginEmailIdentity {
+  provider: string
+  profileEmail?: unknown
+  profileEmailVerified?: unknown
+}
+
+/**
+ * The emails one Auth0 record proves it owns, for alias sign-in (CIAM-21):
+ *   - the root email, only when `email_verified` is true;
+ *   - each LINKED identity's own profile email, when that identity marks it
+ *     verified, or when it is a passwordless `email` identity (a consumed code
+ *     is mailbox proof).
+ * `app_metadata.login_alias_emails` is deliberately NOT a source: it is a
+ * search index only, so an alias whose identity was removed stops resolving
+ * even if the best-effort metadata cleanup did not run. A standalone
+ * passwordless stub (only email/sms identities, no bindings) owns nothing.
+ */
+export function verifiedLoginEmailsFor(params: {
+  rootEmail: unknown
+  rootEmailVerified: unknown
+  identities: LoginEmailIdentity[]
+  bindingCount: number
+}): string[] {
+  const providers = params.identities.map((i) => i.provider)
+  if (isPasswordlessOnlyRecord({ identityProviders: providers, bindingCount: params.bindingCount })) {
+    return []
+  }
+  const out = new Set<string>()
+  const root = normalizeEmail(params.rootEmail)
+  if (root && params.rootEmailVerified === true) out.add(root)
+  for (const id of params.identities) {
+    const email = normalizeEmail(id.profileEmail)
+    if (!email) continue
+    if (linkedIdentityProvesEmail(id)) out.add(email)
+  }
+  return [...out]
+}
+
+/**
+ * A linked identity proves its email only when it is a passwordless `email`
+ * identity (a consumed code), or a database (`auth0`) or explicitly linked
+ * Google identity that marks the email verified. Any other social provider,
+ * and any unverified email, proves nothing.
+ */
+function linkedIdentityProvesEmail(id: LoginEmailIdentity): boolean {
+  if (id.provider === "email") return true
+  if (id.provider !== "auth0" && id.provider !== "google-oauth2") return false
+  return id.profileEmailVerified === true || id.profileEmailVerified === "true"
+}
+
+/** Brand (Model 4) keys: the only credentials a verified alias may use. */
+function isBrandKey(key: ConnectionKey): boolean {
+  return key === "dewalt" || key === "stanley"
 }
 
 /**
@@ -669,6 +732,18 @@ export function resolveCredentialFromCandidates(
 ): CredentialResolution {
   const email = normalizeEmail(params.email)
 
+  // CROSS-OWNER CHECK FIRST (CIAM-21). Every distinct account that proves it
+  // owns the typed email as a verified login email is a claimant. Two or more
+  // claimants is a conflict even when one of them also holds an exact binding:
+  // it is checked BEFORE exact matching and again against the exact-match
+  // owner below. Passwordless stubs own no emails, so they never count.
+  const verifiedClaimants = new Set(
+    params.candidates
+      .filter((a) => !!a.accountId && (a.verifiedLoginEmails ?? []).map(normalizeEmail).includes(email))
+      .map((a) => a.accountId),
+  )
+  if (verifiedClaimants.size > 1) return { ok: false, reason: "ambiguous" }
+
   const matches: { binding: CredentialBinding; accountId: string }[] = []
   const seen = new Set<string>()
   const sharedAccountIds = new Set<string>()
@@ -720,6 +795,38 @@ export function resolveCredentialFromCandidates(
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
       matches.push({ binding: b, accountId: account.accountId })
+    }
+  }
+
+  // An exact binding on account X while a DIFFERENT account Y verifiably owns
+  // the same email is a cross-customer conflict, not X's sign-in.
+  for (const m of matches) {
+    for (const claimant of verifiedClaimants) {
+      if (claimant !== m.accountId) return { ok: false, reason: "ambiguous" }
+    }
+  }
+
+  // CIAM-21 VERIFIED-ALIAS PASS. Only when NO binding matched the typed email
+  // exactly. A brand credential then resolves for a typed email that its OWN
+  // account provably owns as a verified login email (primary or secondary).
+  // Brand keys only (a per-email credential is bound to its one email by
+  // definition). At most one claimant exists here (checked above).
+  if (matches.length === 0) {
+    const owner = params.candidates.find((a) => verifiedClaimants.has(a.accountId))
+    if (owner) {
+      for (const b of owner.bindings) {
+        if (!isConnectionKey(b.connectionKey) || !isBrandKey(b.connectionKey)) continue
+        if (!params.configuredKeys.has(b.connectionKey)) continue
+        if (!isBrandAllowed(b.connectionKey, params.siteBrand)) continue
+        const backed = owner.identities.some(
+          (i) => i.connectionKey === b.connectionKey && i.userId === b.auth0UserId,
+        )
+        if (!backed) continue
+        const dedupeKey = `${b.connectionKey}|${b.auth0UserId}`
+        if (seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+        matches.push({ binding: b, accountId: owner.accountId })
+      }
     }
   }
 

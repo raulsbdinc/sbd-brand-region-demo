@@ -105,8 +105,10 @@ function decodeJwtClaims(idToken: string): Record<string, unknown> {
 export async function startEmailPasscode(
   creds: PasswordlessCreds,
   email: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const res = await fetch(`https://${creds.domain}/passwordless/start`, {
+    signal: options.signal,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

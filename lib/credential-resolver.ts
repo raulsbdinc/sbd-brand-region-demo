@@ -24,6 +24,7 @@ import {
   isPasswordlessOnlyRecord,
   resolveResetBinding,
   sanitizeCredentialBindings,
+  verifiedLoginEmailsFor,
   type EmailOwnershipCandidate,
   type CandidateAccount,
   type ConnectionKey,
@@ -77,7 +78,10 @@ import {
   toManagementUserId,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
-import { selectBrandPasscodeAccount } from "@/lib/brand-passcode-proof"
+import {
+  resolveSigninFromUsers,
+  type SigninCredentialResolution,
+} from "@/lib/brand-signin-core"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import type { BrandId, CountryId } from "@/lib/types"
 
@@ -184,41 +188,18 @@ function computeSharedMatchAccountIds(
   return ids
 }
 
-// Discriminated sign-in resolution so callers can distinguish a resolved
-// non-shared realm, a shared-default attempt, an ambiguous email, and an
-// unavailable lookup — the last two BOTH fail closed with no realm attempt.
-export type SigninCredentialResolution =
-  | {
-      kind: "resolved"
-      connectionKey: ConnectionKey
-      connectionName: string
-      binding: CredentialBinding | null
-    }
-  | { kind: "shared-default" }
-  | { kind: "ambiguous" }
-  | { kind: "unavailable" }
+export type { SigninCredentialResolution } from "@/lib/brand-signin-core"
 
 /**
  * Resolve the database connection to authenticate a submitted email against on
- * THIS storefront, as a DISCRIMINATED result:
- *   • "resolved"       → attempt ONLY the returned non-shared realm.
- *   • "shared-default" → NO Model 4 credential matched. Model 4 only: there is
- *                        no shared/legacy attempt any more, so callers MUST
- *                        fail closed (signinResolutionPermitsRealmOperation is
- *                        false). The kind name is kept for plumbing stability.
- *   • "ambiguous"      → the email collides across credentials; the caller MUST
- *                        fail closed and attempt NO realm.
- *   • "unavailable"    → a Management lookup failed while Management is
- *                        configured, so the candidate set is incomplete and
- *                        absence of a collision cannot be proven; the caller
- *                        MUST fail closed and attempt NO realm.
- * Management-not-configured collapses to "unavailable" (fail closed): a
- * Model 4 credential can only be proven through Management. `siteBrand`
- * defaults to this deployment's brand and is overridable only for tests.
- *
- * ACCOUNT OWNERSHIP: candidate records are passed to the pure resolver WITHOUT
- * flattening, so a binding on one account can only be validated by an identity
- * on that SAME account.
+ * THIS storefront. Gathers the candidate records (fails closed to
+ * "unavailable" on any failed lookup or missing Management config), then
+ * defers every decision to the pure {@link resolveSigninFromUsers}:
+ *   - "resolved"  only for a bound, identity-backed credential of `siteBrand`
+ *     (exact binding email, or a verified email of that same canonical owner),
+ *     carrying that brand identity's own username and the owner's user_id;
+ *   - "ambiguous" when distinct customers claim the email;
+ *   - "shared-default" otherwise (Model 4 only: permits no realm operation).
  */
 export async function resolveSigninCredential(
   email: string,
@@ -226,57 +207,14 @@ export async function resolveSigninCredential(
   opts?: ManagementCallOptions,
 ): Promise<SigninCredentialResolution> {
   if (!isManagementConfigured()) return { kind: "unavailable" }
-
-  const normalized = normalizeEmail(email)
   const { candidates: users, ok } = await gatherCandidates(email, opts)
-
-  // Incomplete candidate set (a lookup failed while Management is configured):
-  // we cannot prove a case-3/4 credential or collision is absent → fail closed.
   if (!ok) return { kind: "unavailable" }
-
-  const names = resolveConnectionNames()
-  const configuredKeys = configuredConnectionKeys(names)
-  const sharedMatchIds = computeSharedMatchAccountIds(users, normalized, names.shared)
-
-  // Preserve per-account ownership: each Auth0 record's bindings are paired ONLY
-  // with that same record's identities — never cross-matched. `accountId` +
-  // per-account `sharedMatch` let the pure resolver tell a same-account scoped
-  // override (the normal Model 1/2 → scoped transition) apart from a real
-  // cross-account collision.
-  const candidates: CandidateAccount[] = users.map((user) => ({
-    accountId: user.user_id ?? "",
-    bindings: readBindings(user),
-    identities: mapIdentities(user),
-    sharedMatch: user.user_id ? sharedMatchIds.has(user.user_id) : false,
-  }))
-
-  const resolution = resolveCredentialFromCandidates({
+  return resolveSigninFromUsers({
     email,
     siteBrand,
-    candidates,
-    configuredKeys,
+    users,
+    names: resolveConnectionNames(),
   })
-
-  // Fail CLOSED on ambiguity — never attempt any realm. Any other non-ok
-  // (not-configured) safely degrades to the ordinary shared attempt.
-  if (!resolution.ok) {
-    return resolution.reason === "ambiguous"
-      ? { kind: "ambiguous" }
-      : { kind: "shared-default" }
-  }
-  if (resolution.kind === "shared-default") return { kind: "shared-default" }
-
-  const connectionName = names[resolution.connectionKey]
-  if (!connectionName || resolution.connectionKey === "shared") {
-    return { kind: "shared-default" }
-  }
-
-  return {
-    kind: "resolved",
-    connectionKey: resolution.connectionKey,
-    connectionName,
-    binding: resolution.binding,
-  }
 }
 
 /**
@@ -295,17 +233,9 @@ export async function resolveBrandPasscodeAccount(
   if (!resolution || resolution.kind !== "resolved" || resolution.connectionKey !== siteBrand) {
     return null
   }
-  const { candidates: users, ok } = await gatherCandidates(email)
-  if (!ok) return null
-  return selectBrandPasscodeAccount({
-    email,
-    brandKey: siteBrand,
-    candidates: users.map((user) => ({
-      accountId: user.user_id ?? "",
-      bindings: readBindings(user),
-      identities: mapIdentities(user),
-    })),
-  })
+  // The same alias-aware resolution the password route uses picks the one
+  // canonical account; an alias never resolves to another customer.
+  return resolution.accountId || null
 }
 
 /**
@@ -313,12 +243,15 @@ export async function resolveBrandPasscodeAccount(
  * Called before a brand passcode challenge is sent; null when the lookup fails
  * (verify then cannot prove any stub new and fails closed). Read-only.
  */
-export async function snapshotPasswordlessSubsFor(email: string): Promise<string[] | null> {
+export async function snapshotPasswordlessSubsFor(
+  email: string,
+  opts?: ManagementCallOptions,
+): Promise<string[] | null> {
   if (!isManagementConfigured()) return null
   const normalized = normalizeEmail(email)
   if (!normalized) return null
   try {
-    const users = await getUsersByEmail(normalized)
+    const users = await getUsersByEmail(normalized, opts)
     return snapshotPasswordlessSubs(
       users.map((u) => ({
         userId: u.user_id ?? "",
