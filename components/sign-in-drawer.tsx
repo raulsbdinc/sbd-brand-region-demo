@@ -34,6 +34,7 @@ class PasscodeStartError extends Error {
 function passcodeStartErrorMessage(code: string): string {
   if (code === "throttled") return PASSCODE_THROTTLED_MESSAGE
   if (code === "conflict") return PASSCODE_CONFLICT_MESSAGE
+  if (code === "invalid-email") return "Enter a valid email address first."
   return PASSCODE_UNAVAILABLE_MESSAGE
 }
 import { accountExistsNotice, brandRegionNotice } from "@/lib/brand-region-notice"
