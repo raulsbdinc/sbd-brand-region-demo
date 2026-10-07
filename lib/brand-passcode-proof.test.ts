@@ -96,7 +96,10 @@ const verify = readFileSync(new URL("../app/api/signin/passcode/verify/route.ts"
 
 test("start: brand-resolved EU passcode is sent via the email connection, not /otp/challenge", () => {
   assert.match(start, /brandProof\s*=[\s\S]*brandScoped[\s\S]*resolution\.kind === "resolved"/)
-  assert.match(start, /if \(brandProof\) \{\s*await startEmailPasscode\(creds, email\)/)
+  assert.match(
+    start,
+    /if \(brandProof \|\| flow !== "database"\) \{\s*await startEmailPasscode\(creds, email, \{\s*signal: AbortSignal\.timeout\(PASSCODE_SEND_TIMEOUT_MS\)/,
+  )
   assert.match(start, /flow: "brand-proof", email, iat, brand: SITE_BRAND, preExistingPasswordlessSubs/)
   // Resend within a valid same-email/brand handoff keeps the ORIGINAL snapshot + iat.
   assert.match(start, /carryForwardProofSnapshot\(\{[\s\S]*flow: "brand-proof"[\s\S]*brand: SITE_BRAND/)
@@ -105,7 +108,7 @@ test("start: brand-resolved EU passcode is sent via the email connection, not /o
 
 test("start: passwordless snapshot is taken BEFORE the challenge is sent", () => {
   const iSnap = start.indexOf("snapshotPasswordlessSubsFor(email)")
-  const iSend = start.indexOf("if (brandProof) {")
+  const iSend = start.indexOf("await startEmailPasscode(")
   assert.ok(iSnap > 0 && iSend > iSnap)
 })
 

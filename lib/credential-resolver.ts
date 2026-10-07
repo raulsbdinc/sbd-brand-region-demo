@@ -24,6 +24,7 @@ import {
   isPasswordlessOnlyRecord,
   resolveResetBinding,
   sanitizeCredentialBindings,
+  verifiedLoginEmailsFor,
   type EmailOwnershipCandidate,
   type CandidateAccount,
   type ConnectionKey,
@@ -77,7 +78,6 @@ import {
   toManagementUserId,
   type PasswordChangeSelector,
 } from "@/lib/password-change"
-import { selectBrandPasscodeAccount } from "@/lib/brand-passcode-proof"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import type { BrandId, CountryId } from "@/lib/types"
 
@@ -193,6 +193,11 @@ export type SigninCredentialResolution =
       connectionKey: ConnectionKey
       connectionName: string
       binding: CredentialBinding | null
+      /** The brand identity's own username (its enrollment email), lowercased.
+       *  Differs from the typed email when a verified alias signs in. */
+      loginEmail: string
+      /** The canonical account (Auth0 user_id) that owns the credential. */
+      accountId: string
     }
   | { kind: "shared-default" }
   | { kind: "ambiguous" }
@@ -248,6 +253,7 @@ export async function resolveSigninCredential(
     bindings: readBindings(user),
     identities: mapIdentities(user),
     sharedMatch: user.user_id ? sharedMatchIds.has(user.user_id) : false,
+    verifiedLoginEmails: loginEmailsOf(user),
   }))
 
   const resolution = resolveCredentialFromCandidates({
@@ -271,12 +277,37 @@ export async function resolveSigninCredential(
     return { kind: "shared-default" }
   }
 
+  const binding = resolution.binding
+  const owner = candidates.find((c) =>
+    c.identities.some(
+      (i) => i.connectionKey === binding.connectionKey && i.userId === binding.auth0UserId,
+    ),
+  )
+  const loginEmail = normalizeEmail(binding.email)
+  if (!owner?.accountId || !loginEmail) return { kind: "shared-default" }
+
   return {
     kind: "resolved",
     connectionKey: resolution.connectionKey,
     connectionName,
-    binding: resolution.binding,
+    binding,
+    loginEmail,
+    accountId: owner.accountId,
   }
+}
+
+/** Server adapter for the pure {@link verifiedLoginEmailsFor}. */
+function loginEmailsOf(user: Auth0User): string[] {
+  return verifiedLoginEmailsFor({
+    rootEmail: user.email,
+    rootEmailVerified: user.email_verified,
+    bindingCount: readBindings(user).length,
+    identities: (user.identities ?? []).map((id) => ({
+      provider: id.provider,
+      profileEmail: id.profileData?.email,
+      profileEmailVerified: id.profileData?.email_verified,
+    })),
+  })
 }
 
 /**
@@ -295,17 +326,9 @@ export async function resolveBrandPasscodeAccount(
   if (!resolution || resolution.kind !== "resolved" || resolution.connectionKey !== siteBrand) {
     return null
   }
-  const { candidates: users, ok } = await gatherCandidates(email)
-  if (!ok) return null
-  return selectBrandPasscodeAccount({
-    email,
-    brandKey: siteBrand,
-    candidates: users.map((user) => ({
-      accountId: user.user_id ?? "",
-      bindings: readBindings(user),
-      identities: mapIdentities(user),
-    })),
-  })
+  // The same alias-aware resolution the password route uses picks the one
+  // canonical account; an alias never resolves to another customer.
+  return resolution.accountId || null
 }
 
 /**

@@ -19,6 +19,23 @@ import {
   recoverySuccessMessage,
 } from "@/lib/recovery-drawer"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
+import {
+  PASSCODE_CONFLICT_MESSAGE,
+  PASSCODE_THROTTLED_MESSAGE,
+  PASSCODE_UNAVAILABLE_MESSAGE,
+} from "@/lib/passcode-start-outcome"
+
+class PasscodeStartError extends Error {
+  constructor(readonly code: string) {
+    super(`passcode start refused: ${code}`)
+  }
+}
+
+function passcodeStartErrorMessage(code: string): string {
+  if (code === "throttled") return PASSCODE_THROTTLED_MESSAGE
+  if (code === "conflict") return PASSCODE_CONFLICT_MESSAGE
+  return PASSCODE_UNAVAILABLE_MESSAGE
+}
 import { accountExistsNotice, brandRegionNotice } from "@/lib/brand-region-notice"
 import { perEmailAccountsEnabled } from "@/lib/uk-feature-flags"
 import {
@@ -152,6 +169,7 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
   const perEmailOn = perEmailAccountsEnabled(SITE_MARKET)
   // Error shown on the password step when requesting a code (e.g. bad email).
   const [requestError, setRequestError] = useState<string | null>(null)
+  const [passcodeNotRegistered, setPasscodeNotRegistered] = useState(false)
   const [sending, setSending] = useState(false)
   // Passcode-step state. The opaque challenge handle is no longer held in the
   // client at all — the server keeps which flow ran, the address and any
@@ -383,7 +401,10 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email }),
     })
-    if (!res.ok) throw new Error("start failed")
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { code?: unknown } | null
+      throw new PasscodeStartError(typeof body?.code === "string" ? body.code : "unknown")
+    }
   }
 
   async function handleRequestCode() {
@@ -392,14 +413,20 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
       return
     }
     setRequestError(null)
+    setPasscodeNotRegistered(false)
     setSending(true)
     try {
       await sendChallenge()
       setOtp("")
       setOtpError(null)
       setStep("passcode")
-    } catch {
-      setRequestError("We couldn't send a passcode. Please try again.")
+    } catch (error) {
+      const code = error instanceof PasscodeStartError ? error.code : "unknown"
+      if (code === "not-registered") {
+        setPasscodeNotRegistered(true)
+      } else {
+        setRequestError(passcodeStartErrorMessage(code))
+      }
     } finally {
       setSending(false)
     }
@@ -1057,6 +1084,25 @@ export function SignInDrawer({ open, initialMode = "sign-in", onClose }: SignInD
           <p role="alert" className={alertClass}>
             {passwordError ?? requestError}
           </p>
+        )}
+
+        {passcodeNotRegistered && (
+          <div role="alert" className="mt-4">
+            <p className="font-sans text-[12px] font-[400] leading-[17px] [color:var(--brand-description-color)]">
+              {`There's no ${brand.name} account for this email yet. Create an account to sign in with a code.`}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setPasscodeNotRegistered(false)
+                setPassword("")
+                goToCreate()
+              }}
+              className={`mt-4 ${PRIMARY_BUTTON_CLASS}`}
+            >
+              Create an account with this email
+            </button>
+          </div>
         )}
 
         <button

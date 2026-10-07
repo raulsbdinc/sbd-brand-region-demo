@@ -62,7 +62,9 @@ test("every brand-enforced market delivers the code via the mailbox proof bridge
 test("start route sends the passwordless email (not a native DB challenge) for brand proof", () => {
   const src = readFileSync(new URL("../app/api/signin/passcode/start/route.ts", import.meta.url), "utf8")
   assert.match(src, /brandPasscodeUsesMailboxProof\(SITE_MARKET\)/)
-  assert.match(src, /if \(brandProof\) \{\s*await startEmailPasscode\(creds, email\)/)
+  assert.match(src, /if \(brandProof \|\| flow !== "database"\) \{\s*await startEmailPasscode\(creds, email,/)
+  // CIAM-20: the not-registered gate runs before any send.
+  assert.ok(src.indexOf('refusal(404, "not-registered"') < src.indexOf("await startEmailPasscode("))
 })
 
 for (const brand of BRANDS) {

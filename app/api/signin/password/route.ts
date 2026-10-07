@@ -104,13 +104,16 @@ export async function POST(request: NextRequest) {
   if (resolution.kind !== "resolved") {
     return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 })
   }
-  // Sent once, never retried, and bounded by the shared deadline.
+  // Sent once, never retried, and bounded by the shared deadline. The username
+  // is the brand identity's OWN login email: identical to the typed email for
+  // an exact match, or the enrollment email when a verified alias of the same
+  // canonical customer signs in (CIAM-21). Still only this brand's one realm.
   const grant = await passwordRealmGrant({
     domain,
     clientId,
     clientSecret,
     firstHop,
-    username: email,
+    username: resolution.loginEmail,
     password,
     connectionKey: resolution.connectionKey,
     deadlineAt,

@@ -1,14 +1,20 @@
 // POST /api/signin/passcode/start  { email }
 // ===========================================
-// Server-side entry point for passcode sign-in. It resolves — entirely on the
-// server — whether the address is a DATABASE user or takes the PASSWORDLESS
-// flow, sends the code the matching way, and stashes the decision + address +
-// any auth_session in a short-lived httpOnly handoff cookie.
+// Server-side entry point for passcode sign-in. It resolves, entirely on the
+// server, whether the address may receive a code on this storefront, sends it
+// the matching way, and stashes the decision in a short-lived httpOnly handoff
+// cookie.
 //
-// The response body is IDENTICAL in every case ({ ok: true }), and stays 200
-// even when sending fails. Nothing about which flow ran, or whether the address
-// exists, is ever returned — otherwise the endpoint would be an email
-// enumeration oracle. All the drawer learns is "a code was sent, go enter it".
+// Brand-scoped storefronts (CIAM-20) stop BEFORE any code is sent and before
+// any handoff is minted when the email has no account for this brand, and
+// report a failed lookup or send truthfully:
+//   200 {ok:true}                         code sent, go enter it
+//   404 {code:"not-registered", error}    no account for this brand: sign up
+//   409 {code:"conflict", error}          more than one customer claims it
+//   429 {code:"throttled", error}         the provider throttled the send
+//   503 {code:"provider-unavailable", error}  lookup or send failed or timed out
+// Only the 200 sets a handoff cookie. No other response sends mail, creates a
+// session, or enrolls anything.
 
 import { NextResponse, type NextRequest } from "next/server"
 import { resolvePasswordlessCreds, startEmailPasscode } from "@/lib/auth0-passwordless"
@@ -21,6 +27,16 @@ import {
   snapshotPasswordlessSubsFor,
 } from "@/lib/credential-resolver"
 import { planPasscodeStart } from "@/lib/passcode-start-plan"
+import {
+  PASSCODE_CONFLICT_MESSAGE,
+  PASSCODE_NOT_REGISTERED_MESSAGE,
+  PASSCODE_SEND_TIMEOUT_MS,
+  PASSCODE_THROTTLED_MESSAGE,
+  PASSCODE_UNAVAILABLE_MESSAGE,
+  gateBrandPasscodeStart,
+  passcodeSendFailure,
+} from "@/lib/passcode-start-outcome"
+import { INTERACTIVE_LOOKUP_BUDGET_MS } from "@/lib/password-grant-core"
 import { brandAccessEnforced, brandPasscodeUsesMailboxProof } from "@/lib/brand-access"
 import { SITE_BRAND, SITE_MARKET } from "@/lib/site"
 import {
@@ -33,9 +49,16 @@ import { carryForwardProofSnapshot } from "@/lib/ownership-otp-proof"
 
 export const runtime = "nodejs"
 
-// Always the same to the caller: a code was (attempted to be) sent.
 function generic(): NextResponse {
   return NextResponse.json({ ok: true })
+}
+
+function refusal(status: number, code: string, error: string): NextResponse {
+  return NextResponse.json({ code, error }, { status })
+}
+
+function unavailable(): NextResponse {
+  return refusal(503, "provider-unavailable", PASSCODE_UNAVAILABLE_MESSAGE)
 }
 
 export async function POST(request: NextRequest) {
@@ -48,61 +71,62 @@ export async function POST(request: NextRequest) {
   }
   if (!email) return generic()
 
-  const creds = resolvePasswordlessCreds(request.headers.get("cookie"))
-  if (!creds) return generic()
-
-  // Decide the flow on the server. This is the ONLY place the decision is made
-  // and it never leaves the server.
-  //
-  // First ask the credential resolver whether this email + SITE_BRAND maps to a
-  // per-email (case 3) or per-brand (case 4) database connection, is ambiguous,
-  // is unavailable, or should take the ordinary shared path. A "resolved"
-  // non-shared credential makes the passcode a DATABASE challenge on THAT
-  // connection; "shared-default" falls back to the original resolver (shared
-  // database vs passwordless) so cases 1 & 2 are completely unchanged.
-  const resolution = await resolveSigninCredential(email).catch(
-    () => ({ kind: "unavailable" }) as const,
-  )
-
-  // Resolve the base flow via the DIRECT users-by-email lookup, then let the
-  // pure planner decide the final flow/connection. A per-email (case 3) /
-  // per-brand (case 4) binding only REFINES an already-database challenge — it
-  // must NEVER promote a passwordless resolution (a linked ALTERNATE email that
-  // lives on the passwordless "email" connection) into a database challenge the
-  // address can't satisfy. Doing so sent nothing and the failure was swallowed
-  // for anti-enumeration, so the customer never received a code.
-  const baseFlow = await resolvePasscodeFlow(email)
   const brandScoped = brandAccessEnforced(SITE_MARKET)
-  // On an enforced storefront only THIS brand's realm counts as enrollment.
+  const creds = resolvePasswordlessCreds(request.headers.get("cookie"))
+  if (!creds) return brandScoped ? unavailable() : generic()
+
+  const resolution = await resolveSigninCredential(email, SITE_BRAND, {
+    deadlineAt: Date.now() + INTERACTIVE_LOOKUP_BUDGET_MS,
+  }).catch(() => ({ kind: "unavailable" }) as const)
+
+  // CIAM-20: decide before ANY send. Another brand's enrollment, the wrong
+  // region (a different tenant finds nothing) and a never-registered email all
+  // stop here. A failed lookup is reported as unavailable, never as
+  // "not registered" and never as "code sent".
+  if (brandScoped) {
+    const gate = gateBrandPasscodeStart({
+      resolutionKind: resolution.kind,
+      resolvedConnectionKey: resolution.kind === "resolved" ? resolution.connectionKey : undefined,
+      siteBrand: SITE_BRAND,
+    })
+    if (gate === "unavailable") return unavailable()
+    if (gate === "conflict") return refusal(409, "conflict", PASSCODE_CONFLICT_MESSAGE)
+    if (gate === "not-registered") {
+      return refusal(404, "not-registered", PASSCODE_NOT_REGISTERED_MESSAGE)
+    }
+  }
+
+  // A per-brand binding only REFINES an already-database challenge; it never
+  // promotes a passwordless resolution into a database challenge the address
+  // can't satisfy.
+  const baseFlow = await resolvePasscodeFlow(email)
   const ownsSiteBrand =
     resolution.kind === "resolved" &&
     (!brandScoped || resolution.connectionKey === SITE_BRAND)
   const { flow, dbConnectionName, permitsChallenge } = planPasscodeStart({
     baseFlow,
-    // Another brand's realm is not enrollment here: treat it as unbound.
     resolutionKind: ownsSiteBrand ? "resolved" : resolution.kind === "resolved" ? "shared-default" : resolution.kind,
     resolvedConnectionName:
       ownsSiteBrand && resolution.kind === "resolved" ? resolution.connectionName : undefined,
     brandScoped,
   })
 
-  // Neither the EU nor the UK tenant supports native database OTP on the brand
-  // connections, so a brand-enrolled (Model 4) customer's code goes out on the
-  // passwordless email connection as mailbox proof. Verify consumes it and then
-  // re-resolves the brand-enrolled canonical; no session comes from the code.
+  // Neither tenant delivers native database OTP on the brand connections, so a
+  // brand-enrolled customer's code goes out on the passwordless email
+  // connection, to the email actually entered, as mailbox proof. Verify
+  // consumes it and re-resolves the one brand-enrolled canonical (exact email
+  // or verified alias of that same customer).
   const brandProof =
     brandPasscodeUsesMailboxProof(SITE_MARKET) &&
     brandScoped &&
-    permitsChallenge &&
-    flow === "database" &&
-    !!dbConnectionName &&
+    ownsSiteBrand &&
     resolution.kind === "resolved"
+
+  if (brandScoped && !brandProof && !permitsChallenge) return unavailable()
 
   // Recorded BEFORE the challenge is sent, so verify can tell a stub minted by
   // THIS challenge from any pre-existing email-only account (never touched).
-  // A resend within a still-valid signed brand-proof handoff for the same
-  // email + brand keeps the ORIGINAL snapshot and expiry anchor, so a stub the
-  // first send may have minted is never misread as pre-existing.
+  // A resend within a still-valid handoff keeps the original snapshot.
   const now = Date.now()
   const carried = brandProof
     ? carryForwardProofSnapshot({
@@ -120,24 +144,26 @@ export async function POST(request: NextRequest) {
     : undefined
 
   let authSession: string | undefined
-  // AMBIGUOUS or UNAVAILABLE — fail CLOSED: issue NO challenge on ANY realm. We
-  // still set the handoff (with no auth_session) below so the verify step fails
-  // with the same generic message, keeping the response shape identical and
-  // non-revealing.
-  if (permitsChallenge) {
+  if (brandProof || permitsChallenge) {
     try {
-      if (brandProof) {
-        await startEmailPasscode(creds, email)
-      } else if (flow === "database") {
-        authSession = await startDatabaseChallenge(creds, email, dbConnectionName)
+      if (brandProof || flow !== "database") {
+        await startEmailPasscode(creds, email, {
+          signal: AbortSignal.timeout(PASSCODE_SEND_TIMEOUT_MS),
+        })
       } else {
-        await startEmailPasscode(creds, email)
+        authSession = await startDatabaseChallenge(creds, email, dbConnectionName)
       }
-    } catch {
-      // Sending failed (unknown address on the DB challenge, throttling, etc.).
-      // Still return the generic shape — and still set a handoff so the verify
-      // step fails with the same generic message rather than revealing anything
-      // by its absence.
+    } catch (error) {
+      if (brandScoped) {
+        // The send did not happen: say so, and mint no handoff.
+        const failure = passcodeSendFailure(error)
+        return refusal(
+          failure.status,
+          failure.code,
+          failure.code === "throttled" ? PASSCODE_THROTTLED_MESSAGE : PASSCODE_UNAVAILABLE_MESSAGE,
+        )
+      }
+      // Unscoped storefronts keep the original non-revealing shape.
     }
   }
 
