@@ -239,8 +239,8 @@ export interface Auth0OrganizationMembership {
 }
 
 /** GET /users/{id} — the full user record. */
-export function getUser(userId: string): Promise<Auth0User> {
-  return mgmtFetch<Auth0User>(`/users/${encodeURIComponent(userId)}`)
+export function getUser(userId: string, opts?: ManagementCallOptions): Promise<Auth0User> {
+  return mgmtFetch<Auth0User>(`/users/${encodeURIComponent(userId)}`, undefined, opts)
 }
 
 /**

@@ -545,6 +545,53 @@ export function aggregateCandidateLookups<T extends { user_id?: string }>(
   return { candidates, ok }
 }
 
+/**
+ * Merge the two candidate lookups so no decision reads a stale record.
+ * `byEmail` (GET /users-by-email) is immediately consistent and used as-is.
+ * `search` (GET /users, search_engine v3) is eventually consistent, so every
+ * hit it adds is re-read through `readById` (GET /users/{id}, immediately
+ * consistent). A null read means the record no longer exists, for example the
+ * standalone brand user Auth0 deletes when it is linked under a canonical
+ * account, and it is dropped. Any failed lookup or re-read returns ok:false so
+ * the caller fails closed; there are no retries and no extra grants.
+ */
+export async function reconcileCandidateLookups<T extends { user_id?: string }>(params: {
+  byEmail: PromiseSettledResult<T[]>
+  search: PromiseSettledResult<T[]>
+  readById: (userId: string) => Promise<T | null>
+}): Promise<{ candidates: T[]; ok: boolean }> {
+  const { byEmail, search } = params
+  if (byEmail.status !== "fulfilled" || search.status !== "fulfilled") {
+    return aggregateCandidateLookups([byEmail, search])
+  }
+  const fresh = new Map<string, T>()
+  for (const u of byEmail.value) if (u?.user_id && !fresh.has(u.user_id)) fresh.set(u.user_id, u)
+  const indexOnly = Array.from(
+    new Set(
+      search.value
+        .map((u) => u?.user_id)
+        .filter((id): id is string => !!id && !fresh.has(id)),
+    ),
+  )
+  const reads = await Promise.allSettled(indexOnly.map((id) => params.readById(id)))
+  let ok = true
+  const candidates = Array.from(fresh.values())
+  reads.forEach((r, i) => {
+    if (r.status !== "fulfilled") {
+      ok = false
+      return
+    }
+    const record = r.value
+    if (!record) return
+    if (record.user_id !== indexOnly[i]) {
+      ok = false
+      return
+    }
+    candidates.push(record)
+  })
+  return { candidates, ok }
+}
+
 // --- Email-ownership resolution (who is the TARGET account for an email) ----
 
 /**

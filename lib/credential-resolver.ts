@@ -13,6 +13,7 @@
 import "server-only"
 import {
   aggregateCandidateLookups,
+  reconcileCandidateLookups,
   CONNECTION_KEY_META,
   configuredConnectionKeys,
   connectionKeyForName,
@@ -38,6 +39,7 @@ import {
   listUsersPage,
   isManagementConfigured,
   linkIdentity,
+  ManagementError,
   type Auth0User,
   type ManagementCallOptions,
 } from "@/lib/auth0-management"
@@ -135,11 +137,28 @@ async function gatherCandidates(
   const typed = email.toLowerCase()
   const q = luceneEscapePhrase(typed)
   const query = `app_metadata.login_alias_emails:"${q}" OR app_metadata.credential_bindings.email:"${q}" OR email:"${q}"`
-  const results = await Promise.allSettled([
+  const [byEmail, search] = await Promise.allSettled([
     getUsersByEmail(typed, opts),
     searchUsersStrict(query, opts),
   ])
-  return aggregateCandidateLookups(results)
+  return reconcileCandidateLookups({
+    byEmail,
+    search,
+    readById: (userId) => readUserByIdOrNull(userId, opts),
+  })
+}
+
+/** GET /users/{id}; null only on 404 (the record no longer exists). */
+async function readUserByIdOrNull(
+  userId: string,
+  opts?: ManagementCallOptions,
+): Promise<Auth0User | null> {
+  try {
+    return await getUser(userId, opts)
+  } catch (err) {
+    if (err instanceof ManagementError && err.status === 404) return null
+    throw err
+  }
 }
 
 /**
