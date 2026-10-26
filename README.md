@@ -23,6 +23,10 @@ France and Germany are both in the EU locality, so all three live in **one tenan
 
 The re-login prompt is a *session* fact and the single user record is a *directory* fact. They are independent, and conflating them is the confusion this demo exists to settle.
 
+## Architecture document
+
+[Auth0: Selected Model 4, Brand + Region Credentials and Current POC Architecture (PDF)](docs/auth0-model-4-brand-region-architecture.pdf)
+
 ## Provenance
 
 Seeded from `Customer-Engagement-Digital-Technology/sbd-sign-in-experience-v0` at commit `c36714d9f9c332b63ad50408e4af023d8f8d9631` (`main`, 14 July 2026), as a single initial commit with no inherited history.
